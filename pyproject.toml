@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video2notes"
+version = "0.1.0"
+description = "Evidence-first, high-precision video to notes pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "Pillow>=10.4,<13",
+]
+
+[project.scripts]
+video2notes = "video2notes.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

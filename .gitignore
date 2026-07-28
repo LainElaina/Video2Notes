@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+build/
+dist/
+
+# Runtime artifacts.
+artifacts/
+data/
+*.events.json
+
+# Secrets and local configuration.
+.env
+*.cookies.txt
+config/local/
+
+# The upstream project is kept as an explicitly read-only study copy.
+reference/BiliNote/backend/data/
+reference/BiliNote/backend/config/
+reference/BiliNote/backend/static/
+reference/BiliNote/backend/uploads/
+reference/BiliNote/backend/note_results/
+

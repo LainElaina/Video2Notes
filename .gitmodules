@@ -1,0 +1,3 @@
+[submodule "reference/BiliNote"]
+	path = reference/BiliNote
+	url = https://github.com/JefferyHcool/BiliNote.git

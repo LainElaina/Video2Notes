@@ -1,0 +1,183 @@
+schema_version: 1
+
+# This file is an architecture example.  It is intentionally not loaded by the
+# current prototype yet.  Secrets are references to an OS credential store,
+# never literal API keys or cookies.
+
+providers:
+  local:
+    kind: local
+    credential_ref: null
+    data_policy: stays_on_device
+
+  openai_compatible_example:
+    kind: openai_compatible
+    base_url: https://example.invalid/v1
+    credential_ref: oskeyring://video2notes/example
+    data_policy: provider_terms_apply
+
+models:
+  visual_change_v1:
+    provider: local
+    model_id: deterministic-adaptive-scan-v1
+    capabilities: [video_frame_metrics]
+    locality: local
+
+  ocr_mobile:
+    provider: local
+    model_id: paddleocr-mobile
+    capabilities: [ocr, boxes, confidence, multilingual]
+    locality: local
+
+  ocr_accurate:
+    provider: local
+    model_id: paddleocr-medium
+    capabilities: [ocr, boxes, confidence, multilingual]
+    locality: local
+
+  asr_fast:
+    provider: local
+    model_id: faster-whisper-small
+    capabilities: [asr, language_id, segment_timestamps, word_confidence]
+    locality: local
+
+  asr_accurate:
+    provider: local
+    model_id: faster-whisper-large-v3
+    capabilities: [asr, language_id, segment_timestamps, word_timestamps, word_confidence]
+    locality: local
+
+  text_reasoner_example:
+    provider: openai_compatible_example
+    model_id: configure-me
+    capabilities: [text, structured_output, long_context]
+    locality: cloud
+
+  vision_reasoner_example:
+    provider: openai_compatible_example
+    model_id: configure-me
+    capabilities: [text, vision, structured_output]
+    locality: cloud
+
+roles:
+  vision.change_detector:
+    primary: visual_change_v1
+    required_capabilities: [video_frame_metrics]
+
+  vision.text_detector:
+    primary: ocr_mobile
+    required_capabilities: [ocr, boxes]
+
+  vision.frame_explainer:
+    primary: vision_reasoner_example
+    required_capabilities: [vision, structured_output]
+    invoke_when: selected_keyframe_and_semantic_value_uncertain
+
+  ocr.primary:
+    primary: ocr_accurate
+    fallback: [ocr_mobile]
+    required_capabilities: [ocr, boxes, confidence]
+
+  asr.primary:
+    primary: asr_accurate
+    fallback: [asr_fast]
+    required_capabilities: [asr, segment_timestamps]
+
+  asr.secondary:
+    # A real deployment should choose a model/provider with a meaningfully
+    # different error distribution from the primary.
+    primary: null
+    invoke_when: low_confidence_or_cross_source_conflict
+
+  asr.adjudicator:
+    primary: text_reasoner_example
+    required_capabilities: [text, structured_output]
+    invoke_when: deterministic_alignment_cannot_resolve_conflict
+
+  notes.fact_extractor:
+    primary: text_reasoner_example
+    required_capabilities: [text, structured_output, long_context]
+
+  notes.drafter:
+    primary: text_reasoner_example
+    required_capabilities: [text, long_context]
+
+  notes.verifier:
+    primary: text_reasoner_example
+    required_capabilities: [text, structured_output]
+
+profiles:
+  eco_cpu:
+    description: CPU/iGPU laptop; use cloud selectively if permitted.
+    visual:
+      coarse_fps: 2
+      fine_fps: 8
+      analysis_width: 480
+      text_detector: ocr_mobile
+    asr:
+      primary: asr_fast
+      secondary_enabled: false
+      diarization: false
+    notes:
+      verification_passes: 1
+    screenshots:
+      enabled: false
+
+  balanced_5060_laptop:
+    description: 8 GB class laptop GPU; default product profile.
+    visual:
+      coarse_fps: 3
+      fine_fps: 12
+      analysis_width: 640
+      text_detector: ocr_mobile
+    asr:
+      primary: asr_accurate
+      compute_type: int8_float16
+      secondary_enabled: selective
+      diarization: on_demand
+    notes:
+      verification_passes: 1
+    screenshots:
+      enabled: experimental
+      max_per_section: 2
+
+  accurate_5070_desktop:
+    description: 12 GB class desktop GPU; higher OCR/ASR and denser refinement.
+    visual:
+      coarse_fps: 4
+      fine_fps: 16
+      analysis_width: 768
+      text_detector: ocr_accurate
+      motion_compensation: true
+    asr:
+      primary: asr_accurate
+      compute_type: float16
+      secondary_enabled: selective
+      diarization: on_demand
+    notes:
+      verification_passes: 2
+    screenshots:
+      enabled: experimental
+      max_per_section: 3
+
+  max_5090:
+    description: 24-32 GB class GPU; evaluation and maximum-accuracy profile.
+    visual:
+      coarse_fps: 6
+      fine_fps: 24
+      analysis_width: 960
+      text_detector: ocr_accurate
+      motion_compensation: true
+      learned_shot_detector: true
+    asr:
+      primary: asr_accurate
+      compute_type: float16
+      secondary_enabled: selective
+      diarization: true
+    notes:
+      verification_passes: 2
+      frame_explainer_budget: high
+    screenshots:
+      enabled: experimental
+      max_per_section: 4
+
