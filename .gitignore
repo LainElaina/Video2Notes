@@ -3,18 +3,39 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
+coverage.xml
+htmlcov/
 build/
 dist/
+
+# JavaScript / desktop build output.
+node_modules/
+apps/desktop/dist/
+apps/desktop/coverage/
+apps/desktop/playwright-report/
+apps/desktop/test-results/
+apps/desktop/src-tauri/target/
 
 # Runtime artifacts.
 artifacts/
 data/
 *.events.json
+*.part
+*.ytdl
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
 
 # Secrets and local configuration.
 .env
+.env.*
+!.env.example
 *.cookies.txt
+*.keyring.json
 config/local/
 
 # The upstream project is kept as an explicitly read-only study copy.
@@ -23,4 +44,3 @@ reference/BiliNote/backend/config/
 reference/BiliNote/backend/static/
 reference/BiliNote/backend/uploads/
 reference/BiliNote/backend/note_results/
-

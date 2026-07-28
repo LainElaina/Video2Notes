@@ -11,7 +11,6 @@ from video2notes.vision.adaptive_sampler import (
     synthetic_observations,
 )
 
-
 SIZE = (640, 360)
 FPS = 4.0
 
@@ -97,4 +96,3 @@ class StableStateDetectorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -18,13 +18,11 @@ import math
 import shutil
 import subprocess
 from collections.abc import Iterable, Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from statistics import median
-from typing import BinaryIO, Literal
+from typing import IO, Literal
 
 from PIL import Image, ImageChops, ImageFilter, ImageStat
-
 
 ChangeReason = Literal["initial", "hard_cut", "text_or_ui_change", "state_change"]
 
@@ -425,11 +423,7 @@ class StableStateDetector:
 
         persistence_count = max(
             2,
-            math.ceil(
-                self.config.min_persistence_ms
-                * self.config.coarse_fps
-                / 1000.0
-            ),
+            math.ceil(self.config.min_persistence_ms * self.config.coarse_fps / 1000.0),
         )
         tail = pending.observations[-persistence_count:]
         qualifying = [
@@ -445,9 +439,7 @@ class StableStateDetector:
             return None
 
         stable_items = [
-            item
-            for item in tail
-            if item[2].state_score <= self.config.stable_step_threshold
+            item for item in tail if item[2].state_score <= self.config.stable_step_threshold
         ]
         if not stable_items:
             return None
@@ -464,15 +456,18 @@ class StableStateDetector:
             return None
 
         reason = pending.reason
-        if reason == "hard_cut" and step_metrics.scene_score < self.config.hard_cut_threshold:
-            # The selected frame is stable, so its own step score will usually
-            # be low.  Preserve hard_cut only when the transition window
-            # actually contained a cut-sized step.
-            if not any(
+        # The selected frame is stable, so its own step score will usually be
+        # low. Preserve hard_cut only when the transition window actually
+        # contained a cut-sized step.
+        if (
+            reason == "hard_cut"
+            and step_metrics.scene_score < self.config.hard_cut_threshold
+            and not any(
                 metrics.scene_score >= self.config.hard_cut_threshold
                 for _, _, metrics in pending.observations
-            ):
-                reason = "state_change"
+            )
+        ):
+            reason = "state_change"
 
         event = ChangeEvent(
             transition_ms=pending.trigger_ms,
@@ -482,9 +477,7 @@ class StableStateDetector:
             state_score=state_metrics.state_score,
             scene_score=state_metrics.scene_score,
             text_score=state_metrics.text_score,
-            step_score=max(
-                item[2].state_score for item in pending.observations
-            ),
+            step_score=max(item[2].state_score for item in pending.observations),
             refined=False,
         )
         return event, observation
@@ -618,11 +611,7 @@ class AdaptiveVideoScanner:
             process.kill()
             raise RuntimeError("failed to open FFmpeg pipes")
 
-        frame_bytes = (
-            self.config.analysis_width
-            * self.config.analysis_height
-            * 3
-        )
+        frame_bytes = self.config.analysis_width * self.config.analysis_height * 3
         index = 0
         try:
             while True:
@@ -708,8 +697,7 @@ class AdaptiveVideoScanner:
             return coarse
 
         state_metrics = [
-            compare_frames(reference.image, frame.image, self.config)
-            for frame in frames
+            compare_frames(reference.image, frame.image, self.config) for frame in frames
         ]
         step_metrics = [
             FrameMetrics(0, 0, 0, 0, 0),
@@ -721,9 +709,7 @@ class AdaptiveVideoScanner:
 
         persistence_frames = max(
             2,
-            math.ceil(
-                self.config.min_persistence_ms * self.config.fine_fps / 1000.0
-            ),
+            math.ceil(self.config.min_persistence_ms * self.config.fine_fps / 1000.0),
         )
         crossing_index: int | None = None
         for index in range(0, len(frames) - persistence_frames + 1):
@@ -763,9 +749,7 @@ class AdaptiveVideoScanner:
         selected_state = state_metrics[selected_index]
         transition_step_peak = max(
             metric.state_score
-            for metric in step_metrics[
-                crossing_index : min(len(step_metrics), selected_index + 1)
-            ]
+            for metric in step_metrics[crossing_index : min(len(step_metrics), selected_index + 1)]
         )
         reason: ChangeReason
         if transition_step_peak >= self.config.hard_cut_threshold:
@@ -818,18 +802,14 @@ class AdaptiveVideoScanner:
                 str(preview_path),
             ]
             subprocess.run(command, check=True, capture_output=True)
-            payload = event.to_dict()
-            payload["preview_path"] = str(preview_path)
-            updated.append(ChangeEvent(**payload))
+            updated.append(replace(event, preview_path=str(preview_path)))
         return updated
 
 
 def _resolve_executable(name: str) -> str:
     resolved = shutil.which(name)
     if resolved is None:
-        raise FileNotFoundError(
-            f"required executable '{name}' was not found on PATH"
-        )
+        raise FileNotFoundError(f"required executable '{name}' was not found on PATH")
     return resolved
 
 
@@ -845,7 +825,7 @@ def _parse_frame_rate(value: object) -> float | None:
     return float(value)
 
 
-def _read_exact(stream: BinaryIO, size: int) -> bytes:
+def _read_exact(stream: IO[bytes], size: int) -> bytes:
     chunks: list[bytes] = []
     remaining = size
     while remaining:

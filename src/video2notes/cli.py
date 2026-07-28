@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Sequence
 
 from .vision.adaptive_sampler import AdaptiveScanConfig, AdaptiveVideoScanner
 
@@ -63,12 +63,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         scanner = AdaptiveVideoScanner(config)
         result = scanner.scan(args.video, preview_dir=args.preview_dir)
         output = result.write_json(args.output)
-        print(
-            f"Detected {len(result.events)} stable visual states; "
-            f"manifest: {output.resolve()}"
-        )
+        print(f"Detected {len(result.events)} stable visual states; manifest: {output.resolve()}")
         return 0
 
     parser.error(f"unknown command: {args.command}")
     return 2
-
