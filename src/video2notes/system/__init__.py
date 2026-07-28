@@ -1,5 +1,6 @@
 """Hardware discovery and independent performance/quality planning."""
 
+from .estimate import ProcessingEstimate, estimate_processing_time
 from .hardware import (
     GpuDevice,
     HardwareSnapshot,
@@ -19,9 +20,11 @@ __all__ = [
     "GpuDevice",
     "HardwareSnapshot",
     "HardwareTier",
+    "ProcessingEstimate",
     "QualityMode",
     "SecondaryAsrPolicy",
     "build_execution_plan",
     "detect_hardware",
+    "estimate_processing_time",
     "recommend_hardware_tier",
 ]

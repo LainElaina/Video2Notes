@@ -12,6 +12,7 @@ from video2notes.system import (
     SecondaryAsrPolicy,
     build_execution_plan,
     detect_hardware,
+    estimate_processing_time,
     recommend_hardware_tier,
 )
 
@@ -114,3 +115,29 @@ class ExecutionProfileTests(unittest.TestCase):
         )
         self.assertEqual(result.decode_backend, "software")
         self.assertTrue(any("hardware decoder" in note for note in result.notes))
+
+    def test_estimate_is_a_range_and_keeps_quality_separate(self) -> None:
+        machine = snapshot(vram_gib=24)
+        fast = estimate_processing_time(3600, machine, QualityMode.FAST)
+        accurate = estimate_processing_time(3600, machine, QualityMode.ACCURATE)
+
+        self.assertEqual(fast.hardware_tier, HardwareTier.GPU_24GB_PLUS)
+        self.assertLess(fast.upper_seconds, accurate.upper_seconds)
+        self.assertLess(fast.lower_seconds, fast.upper_seconds)
+        self.assertIn("快速", fast.precision_intent)
+        self.assertIn("高精度", accurate.precision_intent)
+
+    def test_estimate_expands_for_4k_high_framerate_video(self) -> None:
+        machine = snapshot(vram_gib=8)
+        baseline = estimate_processing_time(600, machine, QualityMode.BALANCED)
+        difficult = estimate_processing_time(
+            600,
+            machine,
+            QualityMode.BALANCED,
+            source_height=2160,
+            source_fps=60,
+        )
+
+        self.assertGreater(difficult.upper_seconds, baseline.upper_seconds)
+        self.assertTrue(any("4K" in note for note in difficult.notes))
+        self.assertTrue(any("高帧率" in note for note in difficult.notes))
