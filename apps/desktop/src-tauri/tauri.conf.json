@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Video2Notes",
+  "version": "0.1.0",
+  "identifier": "com.lainelaina.video2notes",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Video2Notes",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1180,
+        "minHeight": 720,
+        "resizable": true,
+        "decorations": true,
+        "backgroundColor": "#EEF1EF"
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/runs/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "resources/backend/": "backend/",
+      "../../../samples/evidence-demo.mp4": "demo/evidence-demo.mp4"
+    },
+    "shortDescription": "Evidence-first local video note workstation"
+  }
+}
