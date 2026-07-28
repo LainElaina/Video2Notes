@@ -5,6 +5,7 @@ from .asr import (
     ASRDependencyError,
     FasterWhisperBackend,
     FasterWhisperConfig,
+    MultilingualASRBackend,
     transcribe_to_evidence,
 )
 from .extract import (
@@ -47,6 +48,7 @@ __all__ = [
     "AudioExtractionResult",
     "FasterWhisperBackend",
     "FasterWhisperConfig",
+    "MultilingualASRBackend",
     "SecondaryASRDecision",
     "SecondaryASRPolicy",
     "SecondaryASRReason",

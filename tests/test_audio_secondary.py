@@ -19,7 +19,12 @@ def evidence(
     end_us: int,
     text: str,
     confidence: float | None = None,
+    language: str | None = None,
+    language_probability: float | None = None,
 ) -> EvidenceSpan:
+    provenance = (
+        {"language_probability": language_probability} if language_probability is not None else {}
+    )
     return EvidenceSpan(
         id=identifier,
         run_id="run",
@@ -29,6 +34,8 @@ def evidence(
         raw_text=text,
         normalized_text=text,
         confidence=confidence,
+        language=language,
+        provenance=provenance,
     )
 
 
@@ -193,6 +200,59 @@ class SecondaryASRTests(unittest.TestCase):
             SecondaryASRReason.CAPTION_CONFLICT,
             decisions[1].reasons,
         )
+
+    def test_low_language_probability_has_an_explicit_secondary_reason(self) -> None:
+        decision = evaluate_secondary_asr_window(
+            window_start_us=0,
+            window_end_us=1_000_000,
+            primary_asr=[
+                evidence(
+                    identifier="uncertain-language",
+                    modality=EvidenceModality.ASR,
+                    start_us=0,
+                    end_us=1_000_000,
+                    text="hello",
+                    confidence=0.95,
+                    language="en",
+                    language_probability=0.41,
+                )
+            ],
+            platform_captions=[],
+            language_hints=["en", "es"],
+        )
+
+        self.assertTrue(decision.requires_secondary)
+        self.assertIn(
+            SecondaryASRReason.LANGUAGE_UNCERTAIN,
+            decision.reasons,
+        )
+        self.assertEqual(decision.lowest_language_confidence, 0.41)
+        self.assertEqual(decision.language_conflict_count, 0)
+
+    def test_language_outside_hints_is_recorded_as_conflict(self) -> None:
+        decisions = build_secondary_asr_decisions(
+            primary_asr=[
+                evidence(
+                    identifier="unexpected-language",
+                    modality=EvidenceModality.ASR,
+                    start_us=0,
+                    end_us=1_000_000,
+                    text="bonjour",
+                    confidence=0.95,
+                    language="fr",
+                    language_probability=0.92,
+                )
+            ],
+            platform_captions=[],
+            language_hints=["en-US", "es"],
+        )
+        decision = decisions[0]
+
+        self.assertIn(
+            SecondaryASRReason.LANGUAGE_CONFLICT,
+            decision.reasons,
+        )
+        self.assertEqual(decision.language_conflict_count, 1)
 
 
 if __name__ == "__main__":

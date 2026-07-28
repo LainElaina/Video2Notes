@@ -92,6 +92,8 @@ class ASRSegment(AudioModel):
     text: str
     words: list[ASRWord] = Field(default_factory=list)
     language: str | None = None
+    language_probability: float | None = Field(default=None, ge=0, le=1)
+    language_detection_method: str | None = None
     speaker: str | None = None
     raw_confidence: float | None = None
     calibrated_confidence: float | None = Field(default=None, ge=0, le=1)
