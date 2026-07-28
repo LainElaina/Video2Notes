@@ -1,5 +1,11 @@
 """Canonical note document and deterministic output renderers."""
 
+from .composer import (
+    EvidenceNoteComposer,
+    InvocationSummary,
+    NoteCompositionResult,
+    build_deterministic_note,
+)
 from .models import (
     FactCard,
     NoteDocument,
@@ -18,11 +24,15 @@ from .render import (
 
 __all__ = [
     "FactCard",
+    "EvidenceNoteComposer",
+    "InvocationSummary",
     "NoteDocument",
+    "NoteCompositionResult",
     "NoteMetadata",
     "NoteScreenshot",
     "NoteSection",
     "format_timestamp",
+    "build_deterministic_note",
     "render_html",
     "render_markdown",
     "render_pdf_from_html",
