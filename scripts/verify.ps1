@@ -14,6 +14,8 @@ $DesktopRoot = Join-Path $RepoRoot "apps\desktop"
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $PlaywrightHarness = Join-Path $PSScriptRoot "playwright_harness.py"
 $PlaywrightSmoke = Join-Path $PSScriptRoot "playwright_smoke.py"
+$PlaywrightRealSmoke = Join-Path $PSScriptRoot "playwright_real_smoke.py"
+$DemoMedia = Join-Path $RepoRoot "samples\evidence-demo.mp4"
 
 function Assert-LastExitCode {
     param([string]$Step)
@@ -102,6 +104,12 @@ try {
         elseif (-not (Test-Path -LiteralPath $PlaywrightSmoke)) {
             Skip-OrThrow "Playwright smoke script is missing at '$PlaywrightSmoke'."
         }
+        elseif (-not (Test-Path -LiteralPath $PlaywrightRealSmoke)) {
+            Skip-OrThrow "Real-API Playwright smoke script is missing at '$PlaywrightRealSmoke'."
+        }
+        elseif (-not (Test-Path -LiteralPath $DemoMedia -PathType Leaf)) {
+            Skip-OrThrow "Redistributable demo media is missing at '$DemoMedia'."
+        }
         elseif (-not (Test-PythonModule "playwright")) {
             Skip-OrThrow "Python Playwright is not installed. Run .\scripts\bootstrap.ps1 -WithPlaywright."
         }
@@ -113,6 +121,8 @@ try {
                 --desktop-root $DesktopRoot `
                 --python $VenvPython `
                 --smoke-script $PlaywrightSmoke `
+                --real-smoke-script $PlaywrightRealSmoke `
+                --real-source $DemoMedia `
                 --base-url "http://127.0.0.1:1420"
             Assert-LastExitCode "Playwright primary-path smoke test"
         }
