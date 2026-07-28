@@ -51,6 +51,28 @@ def stop_process_tree(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
 
 
+def remove_temporary_directory(path: Path) -> None:
+    temporary_base = Path(tempfile.gettempdir()).resolve()
+    resolved = path.resolve()
+    if (
+        resolved.parent != temporary_base
+        or not resolved.name.startswith("video2notes-vite-")
+    ):
+        raise RuntimeError(f"Refusing to remove unsafe temporary path: {resolved}")
+
+    last_error: OSError | None = None
+    for _ in range(20):
+        try:
+            shutil.rmtree(resolved)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            last_error = error
+            time.sleep(0.25)
+    raise RuntimeError(f"Could not clean temporary Vite directory: {last_error}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--desktop-root", required=True, type=Path)
@@ -64,24 +86,20 @@ def main() -> int:
     desktop_root = args.desktop_root.resolve(strict=True)
     python_executable = args.python.resolve(strict=True)
     smoke_script = args.smoke_script.resolve(strict=True)
-    pnpm = shutil.which("pnpm")
-    if pnpm is None:
-        raise SystemExit("pnpm is unavailable. Run .\\scripts\\bootstrap.ps1 first.")
-
-    server_command = [pnpm, "dev"]
-    if os.name == "nt" and Path(pnpm).suffix.casefold() in {".bat", ".cmd"}:
-        server_command = [
-            os.environ.get("COMSPEC", "cmd.exe"),
-            "/d",
-            "/c",
-            pnpm,
-            "dev",
-        ]
+    node = shutil.which("node")
+    vite_entry = desktop_root / "node_modules" / "vite" / "bin" / "vite.js"
+    if node is None or not vite_entry.is_file():
+        raise SystemExit(
+            "Node or the locked Vite dependency is unavailable. "
+            "Run .\\scripts\\bootstrap.ps1 first."
+        )
+    server_command = [node, str(vite_entry)]
     creation_flags = (
         subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     )
-    with tempfile.TemporaryDirectory(prefix="video2notes-vite-") as temporary:
-        log_path = Path(temporary) / "vite.log"
+    temporary_path = Path(tempfile.mkdtemp(prefix="video2notes-vite-"))
+    try:
+        log_path = temporary_path / "vite.log"
         with log_path.open("wb") as log:
             server = subprocess.Popen(
                 server_command,
@@ -117,6 +135,8 @@ def main() -> int:
                 raise SystemExit(str(error)) from error
             finally:
                 stop_process_tree(server)
+    finally:
+        remove_temporary_directory(temporary_path)
 
     print("Managed Playwright smoke completed.")
     return 0
