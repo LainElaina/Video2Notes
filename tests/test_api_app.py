@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -145,6 +146,30 @@ class ApiAppTests(unittest.TestCase):
         result = self.client.get("/api/providers", headers=self.headers)
         self.assertEqual(result.status_code, 200)
         self.assertNotIn("private-value", result.text)
+
+    def test_provider_connection_test_is_real_and_protected(self) -> None:
+        self.assertEqual(self.client.post("/api/providers/local/test").status_code, 401)
+        local = self.client.post(
+            "/api/providers/local/test",
+            headers=self.headers,
+        )
+        self.assertEqual(local.status_code, 200)
+        self.assertEqual(local.json()["status"], "connected")
+
+        response = MagicMock()
+        response.__enter__.return_value.status = 200
+        with patch(
+            "video2notes.api.app.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen:
+            cloud = self.client.post(
+                "/api/providers/cloud/test",
+                headers=self.headers,
+            )
+        self.assertEqual(cloud.status_code, 200)
+        self.assertEqual(cloud.json()["status"], "connected")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://example.test/v1/models")
 
     def test_unknown_local_probe_is_a_safe_validation_error(self) -> None:
         missing = Path(self.temporary.name) / "missing.mp4"

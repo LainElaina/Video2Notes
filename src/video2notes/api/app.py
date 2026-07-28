@@ -7,6 +7,8 @@ import re
 import secrets
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
@@ -114,6 +116,12 @@ class ProcessingEstimateRequest(ApiModel):
 class RuntimeStatus(ApiModel):
     injected: bool
     warnings: list[str] = Field(default_factory=list)
+
+
+class ProviderConnectionResult(ApiModel):
+    provider_id: str
+    status: str
+    detail: str
 
 
 class ProcessingRunResponse(ApiModel):
@@ -422,6 +430,65 @@ def create_app(
             "status": SecretStatus.NOT_CONFIGURED.value,
         }
 
+    @app.post(
+        "/api/providers/{provider_id}/test",
+        response_model=ProviderConnectionResult,
+        dependencies=protected,
+    )
+    def test_provider(provider_id: str) -> ProviderConnectionResult:
+        provider = _require_provider(context, provider_id)
+        if not provider.enabled:
+            return ProviderConnectionResult(
+                provider_id=provider_id,
+                status="disconnected",
+                detail="Provider 已禁用；请先在本机注册表中启用。",
+            )
+        if provider.base_url is None:
+            return ProviderConnectionResult(
+                provider_id=provider_id,
+                status="connected",
+                detail="本地执行器配置可用；具体模型会在任务首次调用时延迟加载。",
+            )
+        endpoint = _provider_models_endpoint(provider.base_url)
+        api_key = (
+            context.secret_store.get(provider_id) if provider.credential_ref is not None else None
+        )
+        if provider.credential_ref is not None and api_key is None:
+            return ProviderConnectionResult(
+                provider_id=provider_id,
+                status="disconnected",
+                detail="Provider 需要凭据，但 Windows 凭据库中没有可用密钥。",
+            )
+        headers = {"Accept": "application/json"}
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
+        request = urllib.request.Request(endpoint, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=min(provider.request_timeout_seconds, 15),
+            ) as response:
+                status_code = int(response.status)
+        except urllib.error.HTTPError as error:
+            status_code = int(error.code)
+        except (OSError, TimeoutError, urllib.error.URLError):
+            return ProviderConnectionResult(
+                provider_id=provider_id,
+                status="disconnected",
+                detail="Provider endpoint 未在 15 秒内返回可用响应。",
+            )
+        if 200 <= status_code < 300:
+            return ProviderConnectionResult(
+                provider_id=provider_id,
+                status="connected",
+                detail="Provider endpoint 与模型目录接口连接正常。",
+            )
+        return ProviderConnectionResult(
+            provider_id=provider_id,
+            status="disconnected",
+            detail=f"Provider endpoint 返回 HTTP {status_code}；请检查地址或本机凭据。",
+        )
+
     @app.get(
         "/api/runs",
         response_model=list[ArtifactManifest],
@@ -596,6 +663,16 @@ def _require_provider(context: ApiContext, provider_id: str) -> ProviderSpec:
     if provider is None:
         raise HTTPException(status_code=404, detail="provider not found")
     return provider
+
+
+def _provider_models_endpoint(base_url: str) -> str:
+    parts = urlsplit(base_url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise HTTPException(status_code=422, detail="provider base URL is invalid")
+    path = parts.path.rstrip("/")
+    if not path.endswith("/models"):
+        path = f"{path}/models"
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
 def _safe_manifest(manifest: ArtifactManifest) -> ArtifactManifest:
