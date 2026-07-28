@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video2Notes · UI 方向探索</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+        background: #0d0e10;
+        color: #f3f2ee;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background:
+          radial-gradient(circle at 50% -10%, #23262c 0, transparent 32rem),
+          #0d0e10;
+      }
+
+      header {
+        position: sticky;
+        z-index: 2;
+        top: 0;
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 2rem;
+        padding: 1.25rem clamp(1rem, 3vw, 3rem);
+        border-bottom: 1px solid #292b30;
+        background: rgb(13 14 16 / 88%);
+        backdrop-filter: blur(18px);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.15rem, 2vw, 1.75rem);
+        letter-spacing: -0.035em;
+      }
+
+      header p {
+        max-width: 48rem;
+        margin: 0.35rem 0 0;
+        color: #999ca3;
+        font-size: 0.875rem;
+        line-height: 1.45;
+      }
+
+      .counter {
+        flex: none;
+        color: #9ee7d8;
+        font: 600 0.75rem/1 ui-monospace, monospace;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(1rem, 2vw, 2rem);
+        width: min(1880px, 100%);
+        margin: 0 auto;
+        padding: clamp(1rem, 3vw, 3rem);
+      }
+
+      figure {
+        overflow: hidden;
+        margin: 0;
+        border: 1px solid #2a2c31;
+        border-radius: 1rem;
+        background: #15171a;
+        transition:
+          border-color 180ms ease,
+          transform 180ms ease;
+      }
+
+      figure:hover {
+        transform: translateY(-2px);
+        border-color: #555962;
+      }
+
+      figure button {
+        display: block;
+        width: 100%;
+        padding: 0;
+        border: 0;
+        background: #090a0b;
+        cursor: zoom-in;
+      }
+
+      figure img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 99 / 64;
+        object-fit: cover;
+      }
+
+      figcaption {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.9rem 1rem 1rem;
+      }
+
+      .title {
+        font-weight: 650;
+        letter-spacing: -0.018em;
+      }
+
+      .number {
+        margin-right: 0.55rem;
+        color: #9ee7d8;
+        font: 600 0.72rem/1 ui-monospace, monospace;
+      }
+
+      .tag {
+        color: #858991;
+        font-size: 0.72rem;
+      }
+
+      dialog {
+        width: min(96vw, 1800px);
+        max-width: none;
+        padding: 0;
+        border: 1px solid #3a3d44;
+        border-radius: 1rem;
+        background: #090a0b;
+        color: inherit;
+        box-shadow: 0 2rem 7rem #000b;
+      }
+
+      dialog::backdrop {
+        background: #050607e8;
+        backdrop-filter: blur(8px);
+      }
+
+      dialog img {
+        display: block;
+        width: 100%;
+        max-height: 88vh;
+        object-fit: contain;
+      }
+
+      .viewer-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.8rem 1rem;
+        border-top: 1px solid #25272c;
+      }
+
+      .viewer-bar div {
+        color: #aeb1b8;
+        font-size: 0.85rem;
+      }
+
+      .viewer-actions {
+        display: flex;
+        gap: 0.4rem;
+      }
+
+      .viewer-actions button {
+        min-width: 2.4rem;
+        padding: 0.5rem 0.75rem;
+        border: 1px solid #393c43;
+        border-radius: 0.5rem;
+        background: #17191d;
+        color: #f3f2ee;
+        cursor: pointer;
+      }
+
+      @media (max-width: 900px) {
+        header {
+          align-items: start;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Video2Notes · UI 方向探索</h1>
+        <p>
+          点击任意图片全屏查看；使用 ← / → 切换，Esc 退出。可以混合选择：例如“14
+          的布局、03 的字体、01 的颜色”。
+        </p>
+      </div>
+      <div class="counter">14 directions · 16:10</div>
+    </header>
+
+    <main id="gallery"></main>
+
+    <dialog id="viewer">
+      <img id="viewer-image" alt="" />
+      <div class="viewer-bar">
+        <div id="viewer-title"></div>
+        <div class="viewer-actions">
+          <button id="previous" type="button" aria-label="上一张">←</button>
+          <button id="next" type="button" aria-label="下一张">→</button>
+          <button id="close" type="button">关闭</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script>
+      const concepts = [
+        ["01", "Pearl Glass", "01-pearl-glass.png", "light · glass"],
+        ["02", "Obsidian Cinema", "02-obsidian-cinema.png", "dark · video"],
+        ["03", "Precision Monochrome", "03-precision-monochrome.png", "mono · precise"],
+        ["04", "Warm Editorial", "04-warm-editorial.png", "warm · editorial"],
+        ["05", "Spatial Command", "05-spatial-command.png", "dark · spatial"],
+        ["06", "Fluent Mica", "06-fluent-mica.png", "native · Windows"],
+        ["07", "Swiss Signal", "07-swiss-signal.png", "type · grid"],
+        ["08", "Soft Brutalist", "08-soft-brutalist.png", "bold · asymmetric"],
+        ["09", "Calm Bento", "09-calm-bento.png", "calm · bento"],
+        ["10", "Data Studio", "10-data-studio.png", "dense · expert"],
+        ["11", "Aurora Luminous", "11-aurora-luminous.png", "dark · luminous"],
+        ["12", "Japanese Quiet", "12-japanese-quiet.png", "quiet · editorial"],
+        ["13", "Material Expressive", "13-material-expressive.png", "warm · expressive"],
+        ["14", "Immersive Timeline", "14-immersive-timeline.png", "dark · timeline"],
+      ];
+
+      const gallery = document.querySelector("#gallery");
+      const viewer = document.querySelector("#viewer");
+      const viewerImage = document.querySelector("#viewer-image");
+      const viewerTitle = document.querySelector("#viewer-title");
+      let activeIndex = 0;
+
+      concepts.forEach(([number, title, file, tag], index) => {
+        const figure = document.createElement("figure");
+        figure.innerHTML = `
+          <button type="button" aria-label="放大 ${number} ${title}">
+            <img src="${file}" alt="${number} ${title}" loading="lazy" />
+          </button>
+          <figcaption>
+            <span class="title"><span class="number">${number}</span>${title}</span>
+            <span class="tag">${tag}</span>
+          </figcaption>
+        `;
+        figure.querySelector("button").addEventListener("click", () => open(index));
+        gallery.append(figure);
+      });
+
+      function open(index) {
+        activeIndex = (index + concepts.length) % concepts.length;
+        const [number, title, file] = concepts[activeIndex];
+        viewerImage.src = file;
+        viewerImage.alt = `${number} ${title}`;
+        viewerTitle.textContent = `${number} · ${title}`;
+        if (!viewer.open) viewer.showModal();
+      }
+
+      document.querySelector("#previous").addEventListener("click", () => open(activeIndex - 1));
+      document.querySelector("#next").addEventListener("click", () => open(activeIndex + 1));
+      document.querySelector("#close").addEventListener("click", () => viewer.close());
+      viewer.addEventListener("click", (event) => {
+        if (event.target === viewer) viewer.close();
+      });
+      window.addEventListener("keydown", (event) => {
+        if (!viewer.open) return;
+        if (event.key === "ArrowLeft") open(activeIndex - 1);
+        if (event.key === "ArrowRight") open(activeIndex + 1);
+      });
+    </script>
+  </body>
+</html>
