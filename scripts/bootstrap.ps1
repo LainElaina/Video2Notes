@@ -58,6 +58,14 @@ if (-not $Offline) {
     Assert-LastExitCode "Upgrading pip"
 }
 
+# Python 3.12+ venvs do not necessarily include setuptools. Because the local
+# editable install deliberately disables build isolation, install its declared
+# build backend before asking pip to inspect project metadata.
+$BuildBackendArguments = @("-m", "pip", "install", "setuptools>=75")
+if ($Offline) { $BuildBackendArguments += "--no-index" }
+& $VenvPython @BuildBackendArguments
+Assert-LastExitCode "Installing the local build backend"
+
 $Extras = @("api", "dev", "render", "secrets")
 if ($WithAsr) { $Extras += "asr" }
 if ($WithOcr) { $Extras += "ocr" }
