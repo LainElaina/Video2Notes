@@ -251,7 +251,7 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 构建脚本会从 FFmpeg 二进制目录或其父目录一并查找许可证；若目录布局不同，使用 `-FfmpegLicensePath` 显式指定。发行包还包含项目 MIT 许可证、第三方 notices、完整 `ffmpeg -version` 输出和对应源码引用。
 
-构建产物位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。本机最终验证的含样例 MSI 为 **154,042,761 B**，NSIS 为 **112,509,531 B**；安装后不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。sidecar 原始资源约 355.4 MiB，主要体积来自两个静态 FFmpeg 工具。
+构建产物位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。本机最终验证的含样例 MSI 为 **154,059,279 B**（SHA-256 `2D2BCCE4BD5B5B91069007EEE0D14A1DEC305B25688DDF8A69F84E83CF98007F`），NSIS 为 **112,515,353 B**（SHA-256 `61733C7F16CD518CB32A8A87D4EAC2C3F80DDFE3A48A876D48E5678BD3A954EE`）；安装后不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。sidecar 原始资源约 355.4 MiB，主要体积来自两个静态 FFmpeg 工具。两种本地构建产物都未做 Authenticode 签名，因此首次运行时 Windows SmartScreen 可能提示未知发布者。
 
 ## 测试与构建
 
