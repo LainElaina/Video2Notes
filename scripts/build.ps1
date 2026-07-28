@@ -4,7 +4,8 @@ param(
     [switch]$SkipDesktop,
     [switch]$Tauri,
     [switch]$SkipSidecarSmoke,
-    [string]$FfmpegDirectory = ""
+    [string]$FfmpegDirectory = "",
+    [string]$FfmpegLicensePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +38,7 @@ try {
                 $SidecarArguments = @()
                 if ($SkipSidecarSmoke) { $SidecarArguments += "-SkipSmoke" }
                 if ($FfmpegDirectory) { $SidecarArguments += @("-FfmpegDirectory", $FfmpegDirectory) }
+                if ($FfmpegLicensePath) { $SidecarArguments += @("-FfmpegLicensePath", $FfmpegLicensePath) }
                 & (Join-Path $PSScriptRoot "build_sidecar.ps1") @SidecarArguments
                 Assert-LastExitCode "Building and smoke-testing the self-contained backend sidecar"
                 pnpm tauri build

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipSmoke,
-    [string]$FfmpegDirectory = ""
+    [string]$FfmpegDirectory = "",
+    [string]$FfmpegLicensePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,6 +76,29 @@ function Get-ToolDirectory {
     return $directory
 }
 
+function Get-FfmpegLicenseFile {
+    param([string]$ToolDirectory, [string]$RequestedPath)
+    if ($RequestedPath) {
+        $candidate = [IO.Path]::GetFullPath($RequestedPath)
+        Require-File $candidate "FFmpeg license"
+        return $candidate
+    }
+
+    $parent = Split-Path -Parent $ToolDirectory
+    $candidates = @(
+        (Join-Path $ToolDirectory "LICENSE"),
+        (Join-Path $ToolDirectory "COPYING.GPLv3"),
+        (Join-Path $parent "LICENSE"),
+        (Join-Path $parent "COPYING.GPLv3")
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [IO.Path]::GetFullPath($candidate)
+        }
+    }
+    throw "The FFmpeg distribution license was not found beside '$ToolDirectory'. Pass -FfmpegLicensePath so the installer includes it."
+}
+
 if (-not (Test-Path -LiteralPath $VenvPython)) {
     throw "Python environment is missing. Run .\scripts\bootstrap.ps1 first."
 }
@@ -82,6 +106,7 @@ Require-File (Join-Path $DesktopTauriRoot "tauri.conf.json") "Tauri configuratio
 & $VenvPython -c "import PyInstaller"
 Assert-LastExitCode "Checking the pinned PyInstaller build dependency"
 $FfmpegSource = Get-ToolDirectory $FfmpegDirectory
+$FfmpegLicenseSource = Get-FfmpegLicenseFile $FfmpegSource $FfmpegLicensePath
 
 # The destination is build output, ignored by Git. Model directories, cookies,
 # videos, and user data are never copied into it or passed to PyInstaller.
@@ -131,6 +156,37 @@ New-Item -ItemType Directory -Force -Path $ResourceRoot, $ToolRoot | Out-Null
 Get-ChildItem -LiteralPath $BuiltSidecarDirectory -Force | Copy-Item -Destination $ResourceRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffmpeg.exe") -Destination (Join-Path $ToolRoot "ffmpeg.exe") -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffprobe.exe") -Destination (Join-Path $ToolRoot "ffprobe.exe") -Force
+Copy-Item -LiteralPath $FfmpegLicenseSource -Destination (Join-Path $ToolRoot "FFMPEG_LICENSE.txt") -Force
+
+$FfmpegVersionOutput = (& (Join-Path $FfmpegSource "ffmpeg.exe") -version 2>&1 | Out-String).Trim()
+Assert-LastExitCode "Reading bundled FFmpeg build information"
+$FfmpegSourceReference = "https://ffmpeg.org/download.html#get-sources"
+if ($FfmpegVersionOutput -match "git-([0-9a-fA-F]{7,40})") {
+    $FfmpegSourceReference = "https://github.com/FFmpeg/FFmpeg/commit/$($Matches[1])"
+}
+@"
+Video2Notes bundles the ffmpeg.exe and ffprobe.exe supplied by the release build host.
+The adjacent FFMPEG_LICENSE.txt is copied from that same binary distribution.
+Corresponding upstream source reference: $FfmpegSourceReference
+Windows build provider and archive index: https://www.gyan.dev/ffmpeg/builds/
+
+Exact bundled build identification:
+$FfmpegVersionOutput
+"@ | Set-Content -LiteralPath (Join-Path $ToolRoot "FFMPEG_BUILD_INFO.txt") -Encoding utf8
+
+$AllowedToolEntries = @(
+    "ffmpeg.exe",
+    "ffprobe.exe",
+    "FFMPEG_LICENSE.txt",
+    "FFMPEG_BUILD_INFO.txt"
+)
+$UnexpectedToolEntries = @(
+    Get-ChildItem -LiteralPath $ToolRoot -Force |
+        Where-Object { $_.Name -notin $AllowedToolEntries }
+)
+if ($UnexpectedToolEntries.Count -gt 0) {
+    throw "The backend tool output contains unexpected entries: $($UnexpectedToolEntries.Name -join ', ')"
+}
 
 $AllowedTopLevelEntries = @("_internal", "tools", "video2notes.exe")
 $UnexpectedTopLevelEntries = @(

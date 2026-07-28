@@ -37,7 +37,9 @@
     "icon": ["icons/icon.ico"],
     "resources": {
       "resources/backend/": "backend/",
-      "../../../samples/evidence-demo.mp4": "demo/evidence-demo.mp4"
+      "../../../samples/evidence-demo.mp4": "demo/evidence-demo.mp4",
+      "../../../LICENSE": "licenses/VIDEO2NOTES_LICENSE.txt",
+      "../../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md"
     },
     "shortDescription": "Evidence-first local video note workstation"
   }
