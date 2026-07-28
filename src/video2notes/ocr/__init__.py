@@ -1,0 +1,88 @@
+"""PTS-aware OCR evidence extraction."""
+
+from .backend import (
+    OcrBackend,
+    detect_script,
+    image_readability,
+    normalize_ocr_text,
+    tokenize_ocr_text,
+)
+from .models import (
+    BackendOcrLine,
+    BackendOcrOutput,
+    FrameCoverageScore,
+    OcrAbstention,
+    OcrAbstentionScope,
+    OcrBox,
+    OcrEvidenceBundle,
+    OcrFrameStatus,
+    OcrLine,
+    OcrLineAssignment,
+    OcrLineDecision,
+    OcrLineMatch,
+    OcrModelInvocation,
+    OcrResult,
+    OcrStateDelta,
+    OcrTrackingResult,
+    ScrollFrameSelection,
+)
+from .paddle import (
+    OcrConfigurationError,
+    OcrDependencyError,
+    OcrInferenceError,
+    PaddleOcrBackend,
+    PaddleOcrConfig,
+)
+from .pipeline import (
+    FilesystemArtifactImageLoader,
+    OcrArtifactError,
+    OcrPipelineConfig,
+    extract_ocr_evidence,
+)
+from .selection import ScrollSelectionConfig, select_scroll_keyframes
+from .tracking import (
+    OcrTrackingConfig,
+    box_iou,
+    normalized_edit_similarity,
+    track_ocr_lines,
+)
+
+__all__ = [
+    "BackendOcrLine",
+    "BackendOcrOutput",
+    "FilesystemArtifactImageLoader",
+    "FrameCoverageScore",
+    "OcrAbstention",
+    "OcrAbstentionScope",
+    "OcrArtifactError",
+    "OcrBackend",
+    "OcrBox",
+    "OcrConfigurationError",
+    "OcrDependencyError",
+    "OcrEvidenceBundle",
+    "OcrFrameStatus",
+    "OcrInferenceError",
+    "OcrLine",
+    "OcrLineAssignment",
+    "OcrLineDecision",
+    "OcrLineMatch",
+    "OcrModelInvocation",
+    "OcrPipelineConfig",
+    "OcrResult",
+    "OcrStateDelta",
+    "OcrTrackingConfig",
+    "OcrTrackingResult",
+    "PaddleOcrBackend",
+    "PaddleOcrConfig",
+    "ScrollFrameSelection",
+    "ScrollSelectionConfig",
+    "box_iou",
+    "detect_script",
+    "extract_ocr_evidence",
+    "image_readability",
+    "normalize_ocr_text",
+    "normalized_edit_similarity",
+    "select_scroll_keyframes",
+    "tokenize_ocr_text",
+    "track_ocr_lines",
+]
