@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -153,11 +154,11 @@ class Video2NotesPipeline:
         "vision.scan": "3",
         "audio.extract": "2",
         "captions.parse": "2",
-        "audio.asr": "3",
+        "audio.asr": "4",
         "ocr.extract": "2",
         "evidence.fuse": "2",
-        "notes.compose": "2",
-        "render.outputs": "3",
+        "notes.compose": "3",
+        "render.outputs": "5",
     }
 
     def __init__(
@@ -652,12 +653,14 @@ class Video2NotesPipeline:
                             self.runtime.asr_backend,
                             run_id=workspace.manifest.run_id,
                             language=language,
+                            language_hints=request.language_hints,
                         )
                         evidence = result.evidence
 
                     decisions = build_secondary_asr_decisions(
                         primary_asr=evidence,
                         platform_captions=captions,
+                        language_hints=request.language_hints,
                     )
                     eligible = [
                         item
@@ -710,6 +713,7 @@ class Video2NotesPipeline:
                                 self.runtime.secondary_asr_backend,
                                 run_id=workspace.manifest.run_id,
                                 language=language,
+                                language_hints=request.language_hints,
                             )
                             enriched = [
                                 _mark_secondary_evidence(item, decision)
@@ -932,7 +936,7 @@ class Video2NotesPipeline:
                     quality_warnings=list(dict.fromkeys(warnings)),
                 )
                 screenshots = (
-                    _screenshots_for_windows(fusion, ocr_bundle)
+                    _screenshots_for_windows(workspace, fusion, ocr_bundle)
                     if request.include_screenshots
                     else {}
                 )
@@ -954,6 +958,12 @@ class Video2NotesPipeline:
                 )
                 stage.add_output(document_path, kind=ArtifactKind.NOTE)
                 stage.add_output(composition_path, kind=ArtifactKind.NOTE)
+                for window_screenshots in screenshots.values():
+                    for screenshot in window_screenshots:
+                        stage.add_output(
+                            workspace.root / screenshot.relative_path,
+                            kind=ArtifactKind.VISUAL,
+                        )
                 for warning in composition.warnings:
                     stage.add_warning(warning)
                 emit("notes.compose", progress=1.0, message="规范笔记文档已生成")
@@ -1158,7 +1168,14 @@ def _secondary_is_enabled(
     if quality_mode is QualityMode.FAST:
         return False
     if quality_mode is QualityMode.BALANCED:
-        return SecondaryASRReason.CAPTION_CONFLICT in reasons
+        return any(
+            item
+            in {
+                SecondaryASRReason.CAPTION_CONFLICT,
+                SecondaryASRReason.LANGUAGE_CONFLICT,
+            }
+            for item in reasons
+        )
     return bool(reasons)
 
 
@@ -1191,29 +1208,36 @@ def _mark_secondary_evidence(
 
 
 def _screenshots_for_windows(
+    workspace: RunWorkspace,
     fusion: FusionResult,
     ocr: OcrEvidenceBundle | None,
 ) -> dict[str, list[NoteScreenshot]]:
-    if ocr is None:
-        return {}
     state_time = {state.id: state.stable_keyframe_us for state in fusion.visual_states}
     evidence_by_state: dict[str, list[str]] = {}
     text_by_state: dict[str, list[str]] = {}
-    for evidence in ocr.evidence:
-        visual_state_id = evidence.provenance.get("visual_state_id")
-        if not isinstance(visual_state_id, str):
-            continue
-        evidence_by_state.setdefault(visual_state_id, []).append(evidence.id)
-        text = evidence.normalized_text or evidence.raw_text
-        if text:
-            text_by_state.setdefault(visual_state_id, []).append(text)
+    if ocr is not None:
+        for evidence in ocr.evidence:
+            visual_state_id = evidence.provenance.get("visual_state_id")
+            if not isinstance(visual_state_id, str):
+                continue
+            evidence_by_state.setdefault(visual_state_id, []).append(evidence.id)
+            text = evidence.normalized_text or evidence.raw_text
+            if text:
+                text_by_state.setdefault(visual_state_id, []).append(text)
 
     result: dict[str, list[NoteScreenshot]] = {}
-    for selected in ocr.scroll_selection.selected_frames:
-        artifact = selected.keyframe_artifact
-        timestamp_us = state_time.get(selected.visual_state_id)
+    selected_states: set[str] = set()
+
+    def add_screenshot(
+        *,
+        visual_state_id: str,
+        artifact: ArtifactRef | None,
+        caption: str,
+        evidence_ids: list[str],
+    ) -> None:
+        timestamp_us = state_time.get(visual_state_id)
         if artifact is None or timestamp_us is None:
-            continue
+            return
         window = next(
             (
                 item
@@ -1224,16 +1248,73 @@ def _screenshots_for_windows(
             None,
         )
         if window is None:
-            continue
-        visible_text = " / ".join(text_by_state.get(selected.visual_state_id, [])[:3])
-        caption = f"关键画面文字：{visible_text}" if visible_text else "覆盖独特屏幕文字的关键画面"
+            return
+        source = workspace.root / artifact.relative_path
+        if not source.is_file():
+            return
+        suffix = source.suffix.lower() or ".jpg"
+        asset_relative = Path("notes", "assets", f"{visual_state_id}{suffix}").as_posix()
+        destination = workspace.root / asset_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.resolve() != destination.resolve():
+            shutil.copy2(source, destination)
         result.setdefault(window.id, []).append(
             NoteScreenshot(
-                relative_path=artifact.relative_path,
+                relative_path=asset_relative,
                 timestamp_us=timestamp_us,
                 caption=caption,
                 alt_text=caption,
+                evidence_ids=evidence_ids,
+            )
+        )
+        selected_states.add(visual_state_id)
+
+    if ocr is not None:
+        for selected in ocr.scroll_selection.selected_frames:
+            visible_text = " / ".join(text_by_state.get(selected.visual_state_id, [])[:3])
+            caption = (
+                f"关键画面文字：{visible_text}" if visible_text else "覆盖独特屏幕文字的关键画面"
+            )
+            add_screenshot(
+                visual_state_id=selected.visual_state_id,
+                artifact=selected.keyframe_artifact,
+                caption=caption,
                 evidence_ids=evidence_by_state.get(selected.visual_state_id, []),
             )
+
+    # OCR may correctly abstain on a photograph or low-resolution frame. Keep one
+    # content-adaptive representative per evidence window so the note still carries
+    # visual context; this never falls back to fixed-N-second sampling.
+    for window in fusion.windows:
+        if result.get(window.id):
+            continue
+        candidates = [
+            state
+            for state in fusion.visual_states
+            if state.id not in selected_states
+            and state.keyframe_artifact is not None
+            and window.start_us <= state.stable_keyframe_us <= window.end_us
+        ]
+        if not candidates:
+            continue
+
+        def state_score(state: VisualState) -> float:
+            raw = state.quality.get("state_score", 0.0)
+            return float(raw) if isinstance(raw, (int, float)) else 0.0
+
+        representative = max(
+            candidates,
+            key=lambda state: (state_score(state), -state.stable_keyframe_us),
+        )
+        contextual_evidence = [
+            identifier
+            for identifier in window.evidence_ids
+            if identifier in {item.id for item in fusion.evidence}
+        ][:3]
+        add_screenshot(
+            visual_state_id=representative.id,
+            artifact=representative.keyframe_artifact,
+            caption="内容自适应扫描选出的稳定代表画面",
+            evidence_ids=contextual_evidence,
         )
     return result

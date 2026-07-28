@@ -114,9 +114,15 @@ def _render_markdown_section(note: NoteDocument, section: NoteSection) -> list[s
     if section.body_markdown.strip():
         lines.extend([section.body_markdown.strip(), ""])
     for screenshot in section.screenshots:
+        run_relative_path = screenshot.relative_path.replace(" ", "%20")
+        markdown_path = (
+            run_relative_path.removeprefix("notes/")
+            if run_relative_path.startswith("notes/")
+            else "../" + run_relative_path
+        )
         lines.extend(
             [
-                f"![{screenshot.alt_text}]({screenshot.relative_path.replace(' ', '%20')})",
+                f"![{screenshot.alt_text}]({markdown_path})",
                 "",
                 f"*[{format_timestamp(screenshot.timestamp_us)}]"
                 f"({_seek_uri(note, screenshot.timestamp_us)}) · {screenshot.caption}*",

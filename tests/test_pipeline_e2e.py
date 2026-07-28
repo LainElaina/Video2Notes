@@ -13,7 +13,7 @@ from video2notes.audio import (
     ASRWord,
     TranscriptTimeline,
 )
-from video2notes.notes import EvidenceNoteComposer
+from video2notes.notes import EvidenceNoteComposer, NoteDocument
 from video2notes.ocr import (
     BackendOcrLine,
     BackendOcrOutput,
@@ -177,6 +177,45 @@ def fixture_hardware() -> HardwareSnapshot:
 
 
 class PipelineEndToEndTests(unittest.TestCase):
+    def test_visual_scan_keeps_a_representative_when_ocr_abstains(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=FakeAsr(),
+                ocr_backend=None,
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.FAST,
+                include_screenshots=True,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(request, run_id="visual-fallback")
+
+            pipeline.run(workspace, request)
+
+            note = NoteDocument.model_validate_json(
+                (workspace.root / "notes" / "document.json").read_text(encoding="utf-8")
+            )
+            screenshots = [
+                screenshot
+                for section in note.sections
+                for screenshot in section.screenshots
+            ]
+            self.assertEqual(len(screenshots), 1)
+            self.assertEqual(
+                screenshots[0].caption,
+                "内容自适应扫描选出的稳定代表画面",
+            )
+            self.assertTrue((workspace.root / screenshots[0].relative_path).is_file())
+
     def test_local_video_runs_to_markdown_html_and_reuses_every_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -212,6 +251,12 @@ class PipelineEndToEndTests(unittest.TestCase):
             self.assertIn("证据优先", markdown)
             self.assertIn("Evidence First", markdown)
             self.assertIn("video2notes://seek/", markdown)
+            document = (workspace.root / "notes" / "document.json").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn('"relative_path": "notes/assets/', document)
+            self.assertIn("](assets/", markdown)
+            self.assertTrue(any((workspace.root / "notes" / "assets").iterdir()))
             self.assertIn("data:image/jpeg;base64,", html_path.read_text(encoding="utf-8"))
             self.assertGreater(first.evidence_count, 1)
             self.assertGreaterEqual(first.visual_state_count, 1)
