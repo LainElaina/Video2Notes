@@ -160,6 +160,28 @@ class RunWorkspace:
             and sha256_file(path) == artifact.sha256
         )
 
+    def set_status(self, status: RunStatus) -> None:
+        self.manifest.status = status
+        self._save()
+
+    def add_warning(self, message: str) -> None:
+        if message not in self.manifest.warnings:
+            self.manifest.warnings.append(message)
+            self._save()
+
+    def mark_cancelled(self, *, stage_name: str | None = None) -> None:
+        self.manifest.status = RunStatus.CANCELLED
+        if stage_name is not None:
+            stage = self.manifest.stages.get(stage_name)
+            if stage is not None and stage.status in {
+                StageStatus.PENDING,
+                StageStatus.RUNNING,
+                StageStatus.FAILED,
+            }:
+                stage.status = StageStatus.CANCELLED
+                stage.error = None
+        self._save()
+
     def _save(self) -> None:
         self.manifest.updated_at = datetime.now(UTC)
         _atomic_write_json(

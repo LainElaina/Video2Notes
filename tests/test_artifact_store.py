@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 
 from video2notes.artifacts import RunWorkspace
-from video2notes.domain import ArtifactKind, SourceDescriptor, StageStatus
+from video2notes.domain import (
+    ArtifactKind,
+    RunStatus,
+    SourceDescriptor,
+    StageStatus,
+)
 
 
 class RunWorkspaceTests(unittest.TestCase):
@@ -71,6 +76,29 @@ class RunWorkspaceTests(unittest.TestCase):
             with failed.stage("vision.scan", stage_version="1") as retry:
                 self.assertFalse(retry.cached)
                 self.assertEqual(retry.record.attempt if retry.record else 0, 2)
+
+    def test_cancelled_stage_and_warning_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = self.create_workspace(Path(temporary))
+            with (
+                self.assertRaisesRegex(RuntimeError, "stop"),
+                workspace.stage(
+                    "audio.asr",
+                    stage_version="1",
+                ),
+            ):
+                raise RuntimeError("stop")
+            workspace.add_warning("ASR was cancelled")
+            workspace.add_warning("ASR was cancelled")
+            workspace.mark_cancelled(stage_name="audio.asr")
+
+            loaded = RunWorkspace(workspace.root)
+            self.assertEqual(loaded.manifest.status, RunStatus.CANCELLED)
+            self.assertEqual(
+                loaded.manifest.stages["audio.asr"].status,
+                StageStatus.CANCELLED,
+            )
+            self.assertEqual(loaded.manifest.warnings, ["ASR was cancelled"])
 
     def test_run_directories_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
