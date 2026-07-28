@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipLint
+    [switch]$SkipLint,
+    [switch]$NoCoverage
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,17 +22,25 @@ if (-not (Test-Path -LiteralPath $VenvPython)) {
 Push-Location $RepoRoot
 try {
     if (-not $SkipLint) {
-        & $VenvPython -m ruff check src tests
-        Assert-LastExitCode "Ruff"
+        & $VenvPython -m ruff check src tests scripts
+        Assert-LastExitCode "Python Ruff lint"
         & $VenvPython -m mypy
-        Assert-LastExitCode "Mypy"
+        Assert-LastExitCode "Python mypy typecheck"
     }
-    & $VenvPython -m compileall -q src tests
-    Assert-LastExitCode "Compileall"
-    & $VenvPython -m coverage run -m unittest discover -s tests -v
-    Assert-LastExitCode "Unit tests"
-    & $VenvPython -m coverage report
-    Assert-LastExitCode "Coverage report"
+
+    & $VenvPython -m compileall -q src tests scripts
+    Assert-LastExitCode "Python compileall"
+
+    if ($NoCoverage) {
+        & $VenvPython -m unittest discover -s tests -v
+        Assert-LastExitCode "Python unit tests"
+    }
+    else {
+        & $VenvPython -m coverage run -m unittest discover -s tests -v
+        Assert-LastExitCode "Python unit tests"
+        & $VenvPython -m coverage report
+        Assert-LastExitCode "Python coverage report"
+    }
 }
 finally {
     Pop-Location
