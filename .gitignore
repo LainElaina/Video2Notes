@@ -20,8 +20,8 @@ apps/desktop/test-results/
 apps/desktop/src-tauri/target/
 
 # Runtime artifacts.
-artifacts/
-data/
+/artifacts/
+/data/
 *.events.json
 *.part
 *.ytdl
