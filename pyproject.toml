@@ -31,6 +31,7 @@ asr = [
   "faster-whisper>=1.1,<2",
 ]
 ocr = [
+  "paddlepaddle>=3.3,<4; platform_system == 'Windows'",
   "paddleocr>=3.1,<4",
 ]
 render = [

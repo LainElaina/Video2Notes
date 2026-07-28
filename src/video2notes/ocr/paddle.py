@@ -42,6 +42,7 @@ class PaddleOcrConfig(OcrModel):
     recognition_model_dir: str = Field(min_length=1)
     language: str = Field(default="ch", min_length=1)
     device: str = Field(default="cpu", min_length=1)
+    enable_mkldnn: bool = False
     api_family: Literal["auto", "v2", "v3"] = "auto"
 
 
@@ -165,7 +166,14 @@ class PaddleOcrBackend:
                 "use_textline_orientation": False,
                 "lang": self._config.language,
                 "device": self._config.device,
+                "enable_mkldnn": self._config.enable_mkldnn,
             }
+            detection_name = _local_model_name(detection_dir)
+            recognition_name = _local_model_name(recognition_dir)
+            if detection_name is not None:
+                v3_arguments["text_detection_model_name"] = detection_name
+            if recognition_name is not None:
+                v3_arguments["text_recognition_model_name"] = recognition_name
             try:
                 self._engine = factory(v3_arguments)
                 self._active_api_family = "v3"
@@ -211,6 +219,23 @@ def _validate_local_model_dir(value: str, *, label: str) -> Path:
             f"local PaddleOCR {label} model directory contains no model files: {path}"
         )
     return path
+
+
+def _local_model_name(model_dir: Path) -> str | None:
+    """Read the model identity required by PaddleOCR 3.7 without network access."""
+
+    inference_config = model_dir / "inference.yml"
+    if inference_config.is_file():
+        for raw_line in inference_config.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line.startswith("model_name:"):
+                value = line.partition(":")[2].strip().strip("\"'")
+                if value:
+                    return value
+    directory_name = model_dir.name
+    if directory_name.endswith("_infer"):
+        return directory_name.removesuffix("_infer")
+    return None
 
 
 def _parse_v2_payload(payload: object, *, language: str) -> list[BackendOcrLine]:

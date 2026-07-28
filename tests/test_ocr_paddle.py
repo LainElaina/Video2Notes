@@ -151,6 +151,43 @@ class PaddleOcrBackendTests(unittest.TestCase):
             self.assertEqual(output.lines[0].box.height, 30)
             self.assertEqual(output.invocation.backend, "paddleocr-v3")
 
+    def test_v3_passes_explicit_identity_from_local_model_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            detector, recognizer = _model_dirs(Path(temporary))
+            (detector / "inference.yml").write_text(
+                "Global:\n  model_name: PP-OCRv5_mobile_det\n",
+                encoding="utf-8",
+            )
+            (recognizer / "inference.yml").write_text(
+                "Global:\n  model_name: PP-OCRv5_mobile_rec\n",
+                encoding="utf-8",
+            )
+            arguments: dict[str, object] = {}
+
+            def factory(values: Mapping[str, object]) -> object:
+                arguments.update(values)
+                return _FakeV3Engine()
+
+            backend = PaddleOcrBackend(
+                PaddleOcrConfig(
+                    detection_model_dir=str(detector),
+                    recognition_model_dir=str(recognizer),
+                    api_family="v3",
+                ),
+                engine_factory=factory,
+            )
+            with patch.object(PaddleOcrBackend, "_image_array", return_value=object()):
+                backend.recognize(Image.new("RGB", (160, 80)))
+
+            self.assertEqual(
+                arguments["text_detection_model_name"],
+                "PP-OCRv5_mobile_det",
+            )
+            self.assertEqual(
+                arguments["text_recognition_model_name"],
+                "PP-OCRv5_mobile_rec",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
