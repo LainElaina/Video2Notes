@@ -1,0 +1,358 @@
+import type { ReactNode } from 'react'
+import {
+  Activity,
+  BookOpenText,
+  Bot,
+  Check,
+  ChevronRight,
+  CircleDot,
+  Clock3,
+  Cpu,
+  Library,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react'
+import type { ViewId } from '../domain'
+import { formatTime, platformLabel, statusLabel } from '../domain'
+import { useStudioStore } from '../store'
+
+const navItems: Array<{
+  view: ViewId
+  label: string
+  icon: typeof Plus
+}> = [
+  { view: 'create', label: '新建任务', icon: Plus },
+  { view: 'tasks', label: '任务运行', icon: Activity },
+  { view: 'reader', label: '笔记阅读', icon: BookOpenText },
+  { view: 'models', label: '模型设置', icon: Bot },
+]
+
+function BrandMark() {
+  return (
+    <div className="brand-mark" aria-hidden="true">
+      <span className="brand-frame brand-frame-back" />
+      <span className="brand-frame brand-frame-front" />
+      <span className="brand-playhead" />
+    </div>
+  )
+}
+
+function NavRail() {
+  const view = useStudioStore(state => state.view)
+  const navigate = useStudioStore(state => state.navigate)
+
+  return (
+    <nav className="nav-rail" aria-label="主导航">
+      <button
+        className="brand-button"
+        type="button"
+        onClick={() => navigate('create')}
+        aria-label="返回新建任务"
+      >
+        <BrandMark />
+      </button>
+      <div className="nav-rail-items">
+        {navItems.map(item => {
+          const Icon = item.icon
+          const selected = view === item.view
+          return (
+            <button
+              className="nav-rail-button"
+              type="button"
+              key={item.view}
+              aria-current={selected ? 'page' : undefined}
+              aria-label={item.label}
+              title={item.label}
+              onClick={() => navigate(item.view)}
+            >
+              <Icon aria-hidden="true" size={19} />
+              <span>{item.label}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="nav-rail-footer" title="全部内容保存在本机">
+        <Library aria-hidden="true" size={17} />
+        <span>LOCAL</span>
+      </div>
+    </nav>
+  )
+}
+
+function TaskList() {
+  const tasks = useStudioStore(state => state.tasks)
+  const activeTaskId = useStudioStore(state => state.activeTaskId)
+  const taskSearch = useStudioStore(state => state.taskSearch)
+  const setTaskSearch = useStudioStore(state => state.setTaskSearch)
+  const selectTask = useStudioStore(state => state.selectTask)
+
+  const visibleTasks = tasks.filter(task =>
+    `${task.source.title} ${task.source.author}`.toLowerCase().includes(taskSearch.toLowerCase()),
+  )
+
+  return (
+    <>
+      <label className="context-search">
+        <Search size={15} aria-hidden="true" />
+        <span className="sr-only">搜索任务</span>
+        <input
+          value={taskSearch}
+          onChange={event => setTaskSearch(event.target.value)}
+          placeholder="搜索标题或作者"
+        />
+      </label>
+      <div className="context-task-list" aria-label="任务列表">
+        {visibleTasks.map(task => (
+          <article
+            className={`context-task ${task.id === activeTaskId ? 'is-active' : ''}`}
+            key={task.id}
+          >
+            <button
+              type="button"
+              className="context-task-main"
+              onClick={() => selectTask(task.id, task.status === 'completed' ? 'reader' : 'tasks')}
+            >
+              <span className={`source-monogram source-${task.source.platform}`}>
+                {platformLabel[task.source.platform].slice(0, 1)}
+              </span>
+              <span className="context-task-copy">
+                <strong>{task.source.title}</strong>
+                <span>
+                  {statusLabel[task.status]} ·{' '}
+                  {task.mode === 'fast'
+                    ? 'Fast'
+                    : task.mode === 'balanced'
+                      ? 'Balanced'
+                      : 'Accurate'}
+                </span>
+              </span>
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+            <div className="context-task-meta">
+              <span>{task.createdAt}</span>
+              <span>{Math.round(task.progress)}%</span>
+            </div>
+          </article>
+        ))}
+        {visibleTasks.length === 0 && (
+          <div className="context-empty">
+            <Search size={18} aria-hidden="true" />
+            <p>没有匹配的任务</p>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function ReaderContents() {
+  const tasks = useStudioStore(state => state.tasks)
+  const activeTaskId = useStudioStore(state => state.activeTaskId)
+  const setCurrentTime = useStudioStore(state => state.setCurrentTime)
+  const task = tasks.find(item => item.id === activeTaskId)
+  const completedTask = task?.note ? task : tasks.find(item => item.note)
+  const note = completedTask?.note
+
+  if (!note) return <p className="context-helper">完成一个任务后，这里会显示笔记目录。</p>
+
+  return (
+    <div className="contents-list">
+      <button
+        type="button"
+        onClick={() => document.getElementById('note-overview')?.scrollIntoView({ behavior: 'smooth' })}
+      >
+        <span>摘要</span>
+        <span>00:00</span>
+      </button>
+      {note.sections.map((section, index) => {
+        const time = section.startSeconds ?? section.claims[0]?.timeSeconds ?? 0
+        return (
+          <button
+            type="button"
+            key={section.id}
+            onClick={() => {
+              setCurrentTime(time)
+              document.getElementById(section.id)?.scrollIntoView({ behavior: 'smooth' })
+            }}
+          >
+            <span>
+              <small>{(index + 1).toString().padStart(2, '0')}</small>
+              {section.title}
+            </span>
+            <span>{formatTime(time)}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function ProviderList() {
+  const providers = useStudioStore(state => state.providers)
+  const selectedProviderId = useStudioStore(state => state.selectedProviderId)
+  const selectProvider = useStudioStore(state => state.selectProvider)
+
+  return (
+    <div className="provider-context-list">
+      {providers.map(provider => (
+        <button
+          type="button"
+          key={provider.id}
+          className={provider.id === selectedProviderId ? 'is-active' : ''}
+          onClick={() => selectProvider(provider.id)}
+        >
+          <span className={`provider-dot status-${provider.status}`} aria-hidden="true" />
+          <span>
+            <strong>{provider.name}</strong>
+            <small>{provider.endpoint}</small>
+          </span>
+          {provider.id === selectedProviderId && <Check size={14} aria-hidden="true" />}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function ContextPanel() {
+  const view = useStudioStore(state => state.view)
+  const tasks = useStudioStore(state => state.tasks)
+  const toggleContext = useStudioStore(state => state.toggleContext)
+
+  const metadata: Record<ViewId, { eyebrow: string; title: string; description: string }> = {
+    create: {
+      eyebrow: 'WORKBENCH',
+      title: '最近任务',
+      description: '来源、模式与上次运行结果',
+    },
+    tasks: {
+      eyebrow: 'RUN QUEUE',
+      title: '任务队列',
+      description: `${tasks.filter(task => task.status === 'running').length} 个任务正在运行`,
+    },
+    reader: {
+      eyebrow: 'CONTENTS',
+      title: '笔记目录',
+      description: '点击章节同步证据时间',
+    },
+    models: {
+      eyebrow: 'PROVIDERS',
+      title: '模型供应商',
+      description: '密钥不会出现在此界面',
+    },
+  }
+
+  return (
+    <aside className="context-panel">
+      <header className="context-header">
+        <div>
+          <span className="eyebrow">{metadata[view].eyebrow}</span>
+          <h2>{metadata[view].title}</h2>
+          <p>{metadata[view].description}</p>
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={toggleContext}
+          aria-label="收起上下文栏"
+          title="收起上下文栏"
+        >
+          <PanelLeftClose size={18} aria-hidden="true" />
+        </button>
+      </header>
+      <div className="context-body">
+        {(view === 'create' || view === 'tasks') && <TaskList />}
+        {view === 'reader' && <ReaderContents />}
+        {view === 'models' && <ProviderList />}
+      </div>
+      {view !== 'models' && (
+        <footer className="context-footer">
+          <Clock3 size={14} aria-hidden="true" />
+          <span>所有 artifact 仅保存在本机</span>
+        </footer>
+      )}
+    </aside>
+  )
+}
+
+function WorkspaceHeader() {
+  const machine = useStudioStore(state => state.machine)
+  const backend = useStudioStore(state => state.backend)
+  const view = useStudioStore(state => state.view)
+  const tasks = useStudioStore(state => state.tasks)
+  const activeTaskId = useStudioStore(state => state.activeTaskId)
+  const activeTask = tasks.find(task => task.id === activeTaskId)
+
+  const viewTitle: Record<ViewId, string> = {
+    create: '新建任务',
+    tasks: activeTask?.source.title ?? '任务运行',
+    reader: activeTask?.note?.title ?? tasks.find(task => task.note)?.note?.title ?? '笔记阅读',
+    models: '模型与角色路由',
+  }
+
+  return (
+    <header className="workspace-header">
+      <div className="workspace-title">
+        <span className="eyebrow">VIDEO2NOTES / {view.toUpperCase()}</span>
+        <h1>{viewTitle[view]}</h1>
+      </div>
+      <div className="machine-status" aria-label="本机运行状态">
+        <Cpu size={16} aria-hidden="true" />
+        <span>
+          <strong>{machine.gpu}</strong>
+          <small>{machine.cpu}</small>
+        </span>
+        <span className={machine.backend === 'ready' ? 'backend-ready' : 'backend-offline'}>
+          <CircleDot size={13} aria-hidden="true" />
+          {backend.mode === 'real'
+            ? `后端 ${backend.version ?? '正常'}`
+            : backend.mode === 'demo'
+              ? '演示模式'
+              : backend.mode === 'connecting'
+                ? '正在连接'
+                : '后端离线'}
+        </span>
+      </div>
+    </header>
+  )
+}
+
+export function AppShell({ children }: { children: ReactNode }) {
+  const contextCollapsed = useStudioStore(state => state.contextCollapsed)
+  const toggleContext = useStudioStore(state => state.toggleContext)
+  const notice = useStudioStore(state => state.notice)
+  const clearNotice = useStudioStore(state => state.clearNotice)
+
+  return (
+    <div className={`app-shell ${contextCollapsed ? 'context-is-collapsed' : ''}`}>
+      <NavRail />
+      {!contextCollapsed && <ContextPanel />}
+      <section className="workspace">
+        <WorkspaceHeader />
+        {contextCollapsed && (
+          <button
+            type="button"
+            className="context-expand"
+            onClick={toggleContext}
+            aria-label="展开上下文栏"
+          >
+            <PanelLeftOpen size={17} aria-hidden="true" />
+            展开侧栏
+          </button>
+        )}
+        {notice && (
+          <div className="notice-bar" role="status">
+            <CircleDot size={14} aria-hidden="true" />
+            <span>{notice}</span>
+            <button type="button" onClick={clearNotice} aria-label="关闭提示">
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        <main className="workspace-main">{children}</main>
+      </section>
+    </div>
+  )
+}

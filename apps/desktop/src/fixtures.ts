@@ -1,0 +1,471 @@
+import type {
+  EvidenceItem,
+  MachineProfile,
+  ModelDefinition,
+  NoteDocument,
+  ProcessingTask,
+  ProviderDefinition,
+  RoleBinding,
+  SourceManifest,
+  TaskStage,
+} from './domain'
+
+export const machineFixture: MachineProfile = {
+  cpu: 'Ryzen 9 9950X3D',
+  gpu: 'RTX 5090 D · 24 GB',
+  memory: '64 GB RAM',
+  backend: 'ready',
+}
+
+export const completedSourceFixture: SourceManifest = {
+  id: 'source-evidence-timeline',
+  platform: 'bilibili',
+  title: '从视频到可追溯知识：统一证据时间轴',
+  author: 'Lain Lab',
+  durationSeconds: 1518,
+  quality: '1080p · 60 fps',
+  codec: 'AVC / yuv420p',
+  audio: 'AAC · 48 kHz',
+  subtitle: '中文平台字幕',
+  authLabel: 'Edge · Profile 2',
+  sourceLabel: 'BV1EvidenceDemo',
+}
+
+export const runningSourceFixture: SourceManifest = {
+  id: 'source-visual-changes',
+  platform: 'youtube',
+  title: 'Adaptive frame sampling for technical lectures',
+  author: 'Visual Systems Lab',
+  durationSeconds: 2142,
+  quality: '1440p · 30 fps',
+  codec: 'VP9 / yuv420p',
+  audio: 'Opus · 48 kHz',
+  subtitle: 'English auto captions',
+  authLabel: '游客模式',
+  sourceLabel: 'youtube.com/watch?v=adaptive-demo',
+}
+
+const stageBlueprint = [
+  ['acquire', '获取', '校验来源、字幕与最佳音视频格式'],
+  ['normalize', '规范化', '保存 stream time base 与真实 PTS'],
+  ['speech', '语音', 'VAD、语言识别与词级时间戳'],
+  ['vision', '视觉', '变化粗扫、精扫、关键帧与 OCR'],
+  ['fusion', '融合', '按时间交叠生成 EvidenceSpan'],
+  ['draft', '写作', '证据块、事实卡与章节草稿'],
+  ['verify', '验证', '检查 claim 支持度与内容覆盖'],
+  ['render', '导出', '渲染 Markdown、HTML 与 PDF'],
+] as const
+
+export const makeStages = (progress: number): TaskStage[] => {
+  const activeIndex = Math.min(stageBlueprint.length - 1, Math.floor(progress / 12.5))
+  return stageBlueprint.map(([id, label, detail], index) => {
+    const completed = progress >= 100 || index < activeIndex
+    const running = progress < 100 && index === activeIndex
+    const localProgress = completed
+      ? 100
+      : running
+        ? Math.min(96, Math.round(((progress % 12.5) / 12.5) * 100))
+        : 0
+    return {
+      id,
+      label,
+      detail,
+      status: completed ? 'completed' : running ? 'running' : 'pending',
+      progress: localProgress,
+      durationSeconds: completed ? 7 + index * 5 : undefined,
+      artifactCount: completed ? 2 + index * 3 : running ? index + 1 : 0,
+      metric:
+        id === 'speech'
+          ? '4.8× realtime'
+          : id === 'vision'
+            ? '138 fps coarse'
+            : id === 'render'
+              ? '3 formats'
+              : undefined,
+    }
+  })
+}
+
+export const evidenceFixture: EvidenceItem[] = [
+  {
+    id: 'ASR-041',
+    kind: 'asr',
+    startSeconds: 32,
+    endSeconds: 81,
+    label: '语音：为什么不能按固定秒数抽帧',
+    rawText: '固定间隔抽帧无法表达视频内容发生变化的真实节奏。',
+    confidence: 0.96,
+    provider: 'faster-whisper-large-v3',
+  },
+  {
+    id: 'OCR-018',
+    kind: 'ocr',
+    startSeconds: 68,
+    endSeconds: 112,
+    label: '屏幕文字：Presentation timestamp',
+    rawText: 'PTS × time_base = presentation time',
+    confidence: 0.93,
+    provider: 'PaddleOCR PP-OCRv5',
+  },
+  {
+    id: 'FRAME-011',
+    kind: 'visual',
+    startSeconds: 92,
+    endSeconds: 93,
+    label: '关键帧：统一物理时间轴示意',
+    rawText: '检测到稳定的新幻灯片状态，清晰度 0.92。',
+    confidence: 0.92,
+    provider: 'adaptive-visual-v1',
+  },
+  {
+    id: 'CHAPTER-01',
+    kind: 'chapter',
+    startSeconds: 0,
+    endSeconds: 278,
+    label: '章节：证据优先',
+    rawText: '平台字幕、ASR、OCR 和视觉状态进入同一物理时间轴。',
+    confidence: 1,
+    provider: 'note-boundary-v1',
+  },
+  {
+    id: 'ASR-084',
+    kind: 'asr',
+    startSeconds: 338,
+    endSeconds: 412,
+    label: '语音：选择性二次识别',
+    rawText: '只有低置信、语言不确定或跨来源冲突的片段才需要第二识别器。',
+    confidence: 0.88,
+    provider: 'faster-whisper-large-v3',
+  },
+  {
+    id: 'OCR-043',
+    kind: 'ocr',
+    startSeconds: 385,
+    endSeconds: 427,
+    label: '屏幕文字：selective escalation',
+    rawText: 'low confidence → secondary ASR → aligned adjudication',
+    confidence: 0.9,
+    provider: 'PaddleOCR PP-OCRv5',
+  },
+  {
+    id: 'FRAME-027',
+    kind: 'visual',
+    startSeconds: 421,
+    endSeconds: 422,
+    label: '关键帧：多候选对齐',
+    rawText: '新增流程图在 00:07:01 稳定。',
+    confidence: 0.95,
+    provider: 'adaptive-visual-v1',
+  },
+  {
+    id: 'CHAPTER-02',
+    kind: 'chapter',
+    startSeconds: 278,
+    endSeconds: 711,
+    label: '章节：多模态融合',
+    rawText: '对齐、校准、仲裁，再生成事实卡。',
+    confidence: 1,
+    provider: 'note-boundary-v1',
+  },
+  {
+    id: 'ASR-126',
+    kind: 'asr',
+    startSeconds: 812,
+    endSeconds: 903,
+    label: '语音：证据约束写作',
+    rawText: '重要数字、术语、代码和步骤必须回溯到原始证据。',
+    confidence: 0.97,
+    provider: 'faster-whisper-large-v3',
+  },
+  {
+    id: 'FRAME-051',
+    kind: 'visual',
+    startSeconds: 865,
+    endSeconds: 866,
+    label: '关键帧：事实卡结构',
+    rawText: '事实卡包含 claim、时间区间和 evidence refs。',
+    confidence: 0.94,
+    provider: 'adaptive-visual-v1',
+  },
+  {
+    id: 'CHAPTER-03',
+    kind: 'chapter',
+    startSeconds: 711,
+    endSeconds: 1189,
+    label: '章节：笔记生成与验证',
+    rawText: '事实卡、章节草稿、claim 验证、Canonical NoteDocument。',
+    confidence: 1,
+    provider: 'note-boundary-v1',
+  },
+  {
+    id: 'ASR-181',
+    kind: 'asr',
+    startSeconds: 1236,
+    endSeconds: 1312,
+    label: '语音：确定性导出',
+    rawText: 'Markdown、HTML 和 PDF 必须来自同一份内容树。',
+    confidence: 0.95,
+    provider: 'faster-whisper-large-v3',
+  },
+  {
+    id: 'CHAPTER-04',
+    kind: 'chapter',
+    startSeconds: 1189,
+    endSeconds: 1518,
+    label: '章节：可携带输出',
+    rawText: 'Canonical NoteDocument 渲染为多个一致的离线产物。',
+    confidence: 1,
+    provider: 'note-boundary-v1',
+  },
+]
+
+export const noteFixture: NoteDocument = {
+  title: '从视频到可追溯知识：统一证据时间轴',
+  overview:
+    '高质量视频笔记的关键不是更快地总结字幕，而是让语音、屏幕文字、画面变化与最终陈述共享同一条可以核验的时间线。',
+  sourceSummary: 'Bilibili · 25:18 · 1080p · Accurate · 13 条主要证据',
+  generatedAt: '2026-07-28 14:32',
+  sections: [
+    {
+      id: 'evidence-first',
+      title: '证据优先，而不是摘要优先',
+      summary:
+        '平台字幕、ASR、OCR 与视觉状态先形成独立证据，再按真实 PTS 对齐；模型只能在证据允许的边界内写作。',
+      screenshotAt: 92,
+      claims: [
+        {
+          id: 'claim-01',
+          text: '容器的 presentation timestamp 是音频、画面、字幕和 OCR 的共同物理时间真值。',
+          timeSeconds: 92,
+          evidenceIds: ['ASR-041', 'OCR-018', 'FRAME-011'],
+          emphasis: true,
+        },
+        {
+          id: 'claim-02',
+          text: '固定每 N 秒抽帧会漏掉 PPT 逐项出现、代码滚动和短时间内的关键状态变化。',
+          timeSeconds: 68,
+          evidenceIds: ['ASR-041', 'OCR-018'],
+        },
+      ],
+    },
+    {
+      id: 'selective-ensemble',
+      title: '只在值得的片段上增加精度',
+      summary:
+        'Fast 模式保持单路识别和较少候选；Accurate 模式也不会盲目多跑全片，而是把算力集中在低置信或冲突窗口。',
+      screenshotAt: 421,
+      claims: [
+        {
+          id: 'claim-03',
+          text: '第二 ASR 的触发条件应是低置信、语言不确定、强噪声或平台字幕冲突。',
+          timeSeconds: 385,
+          evidenceIds: ['ASR-084', 'OCR-043'],
+          emphasis: true,
+        },
+        {
+          id: 'claim-04',
+          text: '候选必须先按时间约束对齐并校准置信度，自动规则仍无法决定时才升级到仲裁模型。',
+          timeSeconds: 421,
+          evidenceIds: ['ASR-084', 'FRAME-027'],
+        },
+      ],
+    },
+    {
+      id: 'note-generation',
+      title: '从证据块生成可验证的章节',
+      summary:
+        '生成链依次产出证据块、事实卡、章节草稿和 claim 验证结果，最终形成唯一的 Canonical NoteDocument。',
+      screenshotAt: 865,
+      claims: [
+        {
+          id: 'claim-05',
+          text: '重要数字、术语、代码和操作步骤都应保存 evidence reference，无法支持的内容不进入最终笔记。',
+          timeSeconds: 865,
+          evidenceIds: ['ASR-126', 'FRAME-051'],
+          emphasis: true,
+        },
+      ],
+    },
+    {
+      id: 'portable-output',
+      title: '一次写作，多种确定性输出',
+      summary:
+        'Markdown 是第一产物，HTML 与 PDF 从相同内容树渲染，因而不会出现三个导出版本相互矛盾。',
+      claims: [
+        {
+          id: 'claim-06',
+          text: 'Markdown、离线 HTML 与 PDF 共享正文、截图、时间戳和证据引用。',
+          timeSeconds: 1236,
+          evidenceIds: ['ASR-181'],
+        },
+      ],
+    },
+  ],
+}
+
+export const makeTaskFixtures = (): ProcessingTask[] => [
+  {
+    id: 'task-running',
+    source: runningSourceFixture,
+    mode: 'accurate',
+    status: 'running',
+    progress: 36,
+    etaSeconds: 1062,
+    createdAt: '今天 15:08',
+    stages: makeStages(36),
+    evidence: evidenceFixture.slice(0, 7),
+  },
+  {
+    id: 'task-complete',
+    source: completedSourceFixture,
+    mode: 'accurate',
+    status: 'completed',
+    progress: 100,
+    etaSeconds: 0,
+    createdAt: '今天 14:07',
+    stages: makeStages(100),
+    evidence: evidenceFixture,
+    note: noteFixture,
+  },
+]
+
+export const providerFixtures: ProviderDefinition[] = [
+  {
+    id: 'provider-local',
+    name: 'Local Engine',
+    kind: 'local',
+    endpoint: '本机 worker',
+    status: 'connected',
+    credentialState: 'not-needed',
+    lastChecked: '刚刚',
+  },
+  {
+    id: 'provider-ollama',
+    name: 'Ollama',
+    kind: 'ollama',
+    endpoint: 'http://127.0.0.1:11434',
+    status: 'connected',
+    credentialState: 'not-needed',
+    lastChecked: '2 分钟前',
+  },
+  {
+    id: 'provider-openai',
+    name: 'OpenAI compatible',
+    kind: 'openai-compatible',
+    endpoint: 'https://api.example.invalid/v1',
+    status: 'disconnected',
+    credentialState: 'stored-locally',
+  },
+]
+
+export const modelFixtures: ModelDefinition[] = [
+  {
+    id: 'model-whisper',
+    providerId: 'provider-local',
+    label: 'Whisper large-v3',
+    modelId: 'faster-whisper-large-v3',
+    locality: 'local',
+    capabilities: ['asr', 'timestamps'],
+  },
+  {
+    id: 'model-funasr',
+    providerId: 'provider-local',
+    label: 'FunASR Paraformer',
+    modelId: 'paraformer-zh',
+    locality: 'local',
+    capabilities: ['asr', 'timestamps'],
+  },
+  {
+    id: 'model-paddleocr',
+    providerId: 'provider-local',
+    label: 'PaddleOCR',
+    modelId: 'pp-ocrv5-server',
+    locality: 'local',
+    capabilities: ['ocr', 'timestamps'],
+  },
+  {
+    id: 'model-qwen',
+    providerId: 'provider-ollama',
+    label: 'Qwen 2.5 VL',
+    modelId: 'qwen2.5vl:7b',
+    locality: 'local',
+    capabilities: ['text', 'vision', 'json'],
+  },
+  {
+    id: 'model-text-local',
+    providerId: 'provider-ollama',
+    label: 'Qwen 3 14B',
+    modelId: 'qwen3:14b',
+    locality: 'local',
+    capabilities: ['text', 'json'],
+  },
+  {
+    id: 'model-cloud',
+    providerId: 'provider-openai',
+    label: 'Cloud reasoner',
+    modelId: 'configure-me',
+    locality: 'cloud',
+    capabilities: ['text', 'vision', 'json'],
+  },
+]
+
+export const roleFixtures: RoleBinding[] = [
+  {
+    id: 'asr-primary',
+    group: '语音',
+    label: '主要语音识别',
+    description: '默认输出词级时间戳与置信度',
+    requiredCapabilities: ['asr', 'timestamps'],
+    modelId: 'model-whisper',
+    fallbackModelId: 'model-funasr',
+  },
+  {
+    id: 'asr-secondary',
+    group: '语音',
+    label: '低置信复核',
+    description: '只处理冲突、噪声与语言不确定窗口',
+    requiredCapabilities: ['asr', 'timestamps'],
+    modelId: 'model-funasr',
+  },
+  {
+    id: 'ocr-primary',
+    group: '视觉',
+    label: '屏幕文字',
+    description: '输出原始文本、box 和时间区间',
+    requiredCapabilities: ['ocr'],
+    modelId: 'model-paddleocr',
+  },
+  {
+    id: 'frame-explainer',
+    group: '视觉',
+    label: '关键帧解释',
+    description: '仅解释已筛选的少量高价值画面',
+    requiredCapabilities: ['vision', 'json'],
+    modelId: 'model-qwen',
+  },
+  {
+    id: 'fact-extractor',
+    group: '笔记',
+    label: '事实提取',
+    description: '把证据块转为有引用的事实卡',
+    requiredCapabilities: ['text', 'json'],
+    modelId: 'model-text-local',
+  },
+  {
+    id: 'note-drafter',
+    group: '笔记',
+    label: '章节写作',
+    description: '根据事实卡生成结构化中文笔记',
+    requiredCapabilities: ['text'],
+    modelId: 'model-text-local',
+  },
+  {
+    id: 'note-verifier',
+    group: '笔记',
+    label: '事实验证',
+    description: '检查 claim 支持度与章节覆盖率',
+    requiredCapabilities: ['text', 'json'],
+    modelId: 'model-text-local',
+    fallbackModelId: 'model-cloud',
+  },
+]
