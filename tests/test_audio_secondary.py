@@ -5,6 +5,7 @@ import unittest
 from video2notes.audio import (
     SecondaryASRPolicy,
     SecondaryASRReason,
+    build_secondary_asr_decisions,
     evaluate_secondary_asr_window,
 )
 from video2notes.domain import EvidenceModality, EvidenceSpan
@@ -144,6 +145,54 @@ class SecondaryASRTests(unittest.TestCase):
                 primary_asr=[caption],
                 platform_captions=[],
             )
+
+    def test_candidate_windows_follow_evidence_components_not_a_time_grid(self) -> None:
+        primary = [
+            evidence(
+                identifier="a",
+                modality=EvidenceModality.ASR,
+                start_us=100_000,
+                end_us=500_000,
+                text="low",
+                confidence=0.2,
+            ),
+            evidence(
+                identifier="b",
+                modality=EvidenceModality.ASR,
+                start_us=4_000_000,
+                end_us=4_400_000,
+                text="certain",
+                confidence=0.99,
+            ),
+        ]
+        captions = [
+            evidence(
+                identifier="c",
+                modality=EvidenceModality.PLATFORM_CAPTION,
+                start_us=4_100_000,
+                end_us=4_350_000,
+                text="different",
+                confidence=1.0,
+            )
+        ]
+
+        decisions = build_secondary_asr_decisions(
+            primary_asr=primary,
+            platform_captions=captions,
+        )
+
+        self.assertEqual(
+            [(item.window_start_us, item.window_end_us) for item in decisions],
+            [(100_000, 500_000), (4_000_000, 4_400_000)],
+        )
+        self.assertEqual(
+            decisions[0].reasons,
+            [SecondaryASRReason.LOW_PRIMARY_CONFIDENCE],
+        )
+        self.assertIn(
+            SecondaryASRReason.CAPTION_CONFLICT,
+            decisions[1].reasons,
+        )
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from .extract import (
     AudioExtractionError,
     build_audio_extraction_command,
     extract_audio,
+    extract_audio_window,
     select_audio_stream,
 )
 from .models import (
@@ -25,6 +26,7 @@ from .secondary import (
     SecondaryASRDecision,
     SecondaryASRPolicy,
     SecondaryASRReason,
+    build_secondary_asr_decisions,
     evaluate_secondary_asr_window,
 )
 from .subtitles import (
@@ -51,8 +53,10 @@ __all__ = [
     "SubtitleParseError",
     "TranscriptTimeline",
     "build_audio_extraction_command",
+    "build_secondary_asr_decisions",
     "evaluate_secondary_asr_window",
     "extract_audio",
+    "extract_audio_window",
     "parse_subtitle_file",
     "parse_subtitle_text",
     "parse_subtitle_timestamp",

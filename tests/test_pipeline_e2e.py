@@ -30,8 +30,17 @@ from video2notes.system import GpuDevice, HardwareSnapshot, QualityMode
 
 
 class FakeAsr:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        text: str = "证据优先",
+        confidence: float = 0.95,
+        provider: str = "fake-asr",
+    ) -> None:
         self.calls = 0
+        self.text = text
+        self.confidence = confidence
+        self.provider = provider
 
     def transcribe(
         self,
@@ -41,16 +50,16 @@ class FakeAsr:
     ) -> ASRTranscript:
         self.calls += 1
         self.assert_audio(audio_path)
-        provider = "fake-asr"
+        provider = self.provider
         model = "fixture"
         version = "1"
         word = ASRWord(
             start_us=100_000,
             end_us=700_000,
-            text="证据优先",
+            text=self.text,
             language=language or "zh",
-            raw_confidence=0.95,
-            calibrated_confidence=0.95,
+            raw_confidence=self.confidence,
+            calibrated_confidence=self.confidence,
             confidence_method="fixture",
             provider=provider,
             model=model,
@@ -67,10 +76,10 @@ class FakeAsr:
                     id="segment-1",
                     start_us=0,
                     end_us=1_000_000,
-                    text="证据优先",
+                    text=self.text,
                     words=[word],
                     language=language or "zh",
-                    calibrated_confidence=0.95,
+                    calibrated_confidence=self.confidence,
                     confidence_method="fixture",
                     provider=provider,
                     model=model,
@@ -216,3 +225,47 @@ class PipelineEndToEndTests(unittest.TestCase):
             self.assertTrue(
                 all(record.attempt == 1 for record in reloaded.manifest.stages.values())
             )
+
+    def test_accurate_mode_only_reruns_low_confidence_audio_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            primary = FakeAsr(
+                text="uncertain primary",
+                confidence=0.3,
+                provider="primary",
+            )
+            secondary = FakeAsr(
+                text="confirmed secondary",
+                confidence=0.98,
+                provider="secondary",
+            )
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=primary,
+                secondary_asr_backend=secondary,
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.ACCURATE,
+                include_screenshots=False,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(request, run_id="secondary")
+
+            outcome = pipeline.run(workspace, request)
+
+            self.assertEqual(primary.calls, 1)
+            self.assertEqual(secondary.calls, 1)
+            decisions = (workspace.root / "asr" / "secondary-decisions.json").read_text(
+                encoding="utf-8"
+            )
+            evidence = (workspace.root / "asr" / "asr-evidence.json").read_text(encoding="utf-8")
+            self.assertIn('"status": "completed"', decisions)
+            self.assertIn('"asr_pass": "selective_secondary"', evidence)
+            self.assertGreaterEqual(outcome.evidence_count, 3)

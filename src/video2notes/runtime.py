@@ -91,7 +91,8 @@ def build_pipeline_runtime(
     """
 
     warnings: list[str] = []
-    asr = _resolve_asr(registry, warnings)
+    asr = _resolve_asr(registry, "asr.primary", warnings)
+    secondary_asr = _resolve_asr(registry, "asr.secondary", warnings)
     ocr = _resolve_ocr(registry, warnings)
     fact = _resolve_structured_role(
         registry,
@@ -129,6 +130,7 @@ def build_pipeline_runtime(
                 verifier_backend=verifier,
             ),
             asr_backend=asr,
+            secondary_asr_backend=secondary_asr,
             ocr_backend=ocr,
             hardware=hardware,
             ffmpeg_path=ffmpeg_path,
@@ -163,9 +165,10 @@ def _role_models(
 
 def _resolve_asr(
     registry: ModelRegistry,
+    role: str,
     warnings: list[str],
 ) -> FasterWhisperBackend | None:
-    for model in _role_models(registry, "asr.primary", warnings):
+    for model in _role_models(registry, role, warnings):
         provider = registry.providers[model.provider_id]
         engine = str(model.settings.get("engine", "")).strip().lower()
         if not engine and "whisper" in model.model_id.lower():
@@ -175,21 +178,21 @@ def _resolve_asr(
             "faster-whisper",
         }:
             warnings.append(
-                f"asr.primary: '{model.id}' is not supported by the local faster-whisper adapter."
+                f"{role}: '{model.id}' is not supported by the local faster-whisper adapter."
             )
             continue
         payload = dict(model.settings)
         payload.pop("engine", None)
         if not str(payload.get("model_path", "")).strip():
             warnings.append(
-                f"asr.primary: '{model.id}' needs settings.model_path pointing "
+                f"{role}: '{model.id}' needs settings.model_path pointing "
                 "to an existing local faster-whisper model."
             )
             continue
         try:
             return FasterWhisperBackend(FasterWhisperConfig.model_validate(payload))
         except ValidationError:
-            warnings.append(f"asr.primary: '{model.id}' has invalid runtime settings.")
+            warnings.append(f"{role}: '{model.id}' has invalid runtime settings.")
     return None
 
 

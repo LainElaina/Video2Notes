@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 
 from video2notes.domain import MediaManifest, MediaStream
@@ -126,6 +127,86 @@ def extract_audio(
         output_time_zero_canonical_us=canonical_start_us,
         duration_us=duration_us,
     )
+
+
+def extract_audio_window(
+    extraction: AudioExtractionResult,
+    output_path: str | Path,
+    *,
+    start_us: int,
+    end_us: int,
+    ffmpeg_path: str = "ffmpeg",
+    runner: CommandRunner | None = None,
+) -> AudioExtractionResult:
+    """Cut a canonical-time PCM window and retain its exact sample-zero mapping."""
+
+    if end_us <= start_us:
+        raise ValueError("audio window must have positive duration")
+    available_start = extraction.output_time_zero_canonical_us
+    available_end = available_start + extraction.duration_us
+    if start_us < available_start or end_us > available_end:
+        raise ValueError("audio window is outside the extracted track")
+    source_path = Path(extraction.output_path).expanduser().resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"extracted audio does not exist: {source_path}")
+    executable = shutil.which(ffmpeg_path)
+    if executable is None:
+        raise FileNotFoundError(f"required executable '{ffmpeg_path}' was not found on PATH")
+
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    relative_start_us = start_us - available_start
+    duration_us = end_us - start_us
+    command = [
+        executable,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
+        "-ss",
+        _microseconds_as_seconds(relative_start_us),
+        "-t",
+        _microseconds_as_seconds(duration_us),
+        "-vn",
+        "-sn",
+        "-dn",
+        "-map_metadata",
+        "-1",
+        "-ac",
+        str(extraction.channels),
+        "-ar",
+        str(extraction.sample_rate),
+        "-c:a",
+        extraction.codec,
+        str(destination),
+    ]
+    completed = (runner or _run_command)(command)
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise AudioExtractionError(f"ffmpeg audio window extraction failed{suffix}")
+    if not destination.is_file():
+        raise AudioExtractionError("ffmpeg reported success but did not create the audio window")
+    return AudioExtractionResult(
+        input_path=str(source_path),
+        output_path=str(destination),
+        audio_stream_index=0,
+        source_stream_start_us=extraction.timeline_origin_us + start_us,
+        timeline_origin_us=extraction.timeline_origin_us,
+        output_time_zero_canonical_us=start_us,
+        duration_us=duration_us,
+        sample_rate=extraction.sample_rate,
+        channels=extraction.channels,
+        sample_format=extraction.sample_format,
+        codec=extraction.codec,
+    )
+
+
+def _microseconds_as_seconds(value: int) -> str:
+    return format(Decimal(value) / Decimal(1_000_000), "f")
 
 
 def _run_command(command: list[str]) -> subprocess.CompletedProcess[str]:

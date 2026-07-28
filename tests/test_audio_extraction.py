@@ -9,8 +9,10 @@ from pathlib import Path
 
 from video2notes.audio import (
     AudioExtractionError,
+    AudioExtractionResult,
     build_audio_extraction_command,
     extract_audio,
+    extract_audio_window,
 )
 from video2notes.domain import MediaManifest, MediaStream, Rational
 
@@ -127,6 +129,43 @@ class AudioExtractionTests(unittest.TestCase):
                     ffmpeg_path=executable,
                     runner=failed,
                 )
+
+    def test_window_extraction_preserves_canonical_sample_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "full.wav"
+            source.write_bytes(b"fixture")
+            destination = root / "clip.wav"
+            extraction = AudioExtractionResult(
+                input_path="D:/source.mp4",
+                output_path=str(source),
+                audio_stream_index=2,
+                source_stream_start_us=2_000_000,
+                timeline_origin_us=1_500_000,
+                output_time_zero_canonical_us=500_000,
+                duration_us=10_000_000,
+            )
+            commands: list[list[str]] = []
+
+            def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+                commands.append(command)
+                destination.write_bytes(b"window")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            result = extract_audio_window(
+                extraction,
+                destination,
+                start_us=1_250_000,
+                end_us=3_750_000,
+                ffmpeg_path=sys.executable,
+                runner=runner,
+            )
+
+            self.assertEqual(result.output_time_zero_canonical_us, 1_250_000)
+            self.assertEqual(result.source_stream_start_us, 2_750_000)
+            self.assertEqual(result.duration_us, 2_500_000)
+            self.assertIn("0.75", commands[0])
+            self.assertIn("2.5", commands[0])
 
 
 if __name__ == "__main__":

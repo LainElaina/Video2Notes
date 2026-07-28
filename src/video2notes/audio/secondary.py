@@ -118,6 +118,47 @@ def evaluate_secondary_asr_window(
     )
 
 
+def build_secondary_asr_decisions(
+    *,
+    primary_asr: list[EvidenceSpan],
+    platform_captions: list[EvidenceSpan],
+    policy: SecondaryASRPolicy | None = None,
+    merge_gap_us: int = 250_000,
+) -> list[SecondaryASRDecision]:
+    """Evaluate natural evidence components instead of fixed-duration windows."""
+
+    if merge_gap_us < 0:
+        raise ValueError("merge_gap_us cannot be negative")
+    spans = sorted(
+        [*primary_asr, *platform_captions],
+        key=lambda item: (item.start_us, item.end_us, item.id),
+    )
+    if not spans:
+        return []
+    components: list[tuple[int, int]] = []
+    current_start = spans[0].start_us
+    current_end = max(spans[0].end_us, current_start + 1)
+    for item in spans[1:]:
+        item_end = max(item.end_us, item.start_us + 1)
+        if item.start_us <= current_end + merge_gap_us:
+            current_end = max(current_end, item_end)
+            continue
+        components.append((current_start, current_end))
+        current_start = item.start_us
+        current_end = item_end
+    components.append((current_start, current_end))
+    return [
+        evaluate_secondary_asr_window(
+            window_start_us=start,
+            window_end_us=end,
+            primary_asr=primary_asr,
+            platform_captions=platform_captions,
+            policy=policy,
+        )
+        for start, end in components
+    ]
+
+
 def _overlap_in_window(item: EvidenceSpan, start_us: int, end_us: int) -> int:
     return max(0, min(item.end_us, end_us) - max(item.start_us, start_us))
 

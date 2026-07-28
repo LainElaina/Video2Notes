@@ -19,8 +19,12 @@ from video2notes.audio import (
     ASREvidenceResult,
     AudioExtractionError,
     AudioExtractionResult,
+    SecondaryASRDecision,
+    SecondaryASRReason,
     SubtitleParseError,
+    build_secondary_asr_decisions,
     extract_audio,
+    extract_audio_window,
     parse_subtitle_file,
     transcribe_to_evidence,
 )
@@ -127,6 +131,7 @@ class PipelineRuntime:
     source_registry: SourceRegistry
     note_composer: EvidenceNoteComposer
     asr_backend: ASRBackend | None = None
+    secondary_asr_backend: ASRBackend | None = None
     ocr_backend: OcrBackend | None = None
     hardware: HardwareSnapshot | None = None
     ffmpeg_path: str = "ffmpeg"
@@ -148,7 +153,7 @@ class Video2NotesPipeline:
         "vision.scan": "3",
         "audio.extract": "2",
         "captions.parse": "2",
-        "audio.asr": "2",
+        "audio.asr": "3",
         "ocr.extract": "2",
         "evidence.fuse": "2",
         "notes.compose": "2",
@@ -241,6 +246,8 @@ class Video2NotesPipeline:
                 workspace,
                 extraction,
                 extraction_ref,
+                captions,
+                captions_ref,
                 request,
                 cancellation,
                 progress,
@@ -596,49 +603,148 @@ class Video2NotesPipeline:
         workspace: RunWorkspace,
         extraction: AudioExtractionResult | None,
         extraction_ref: ArtifactRef,
+        captions: list[EvidenceSpan],
+        captions_ref: ArtifactRef,
         request: PipelineRequest,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[list[EvidenceSpan], ArtifactRef]:
         output = workspace.artifact_path("asr", "asr-evidence.json")
-        backend_config = _backend_identity(self.runtime.asr_backend)
+        decisions_path = workspace.artifact_path("asr", "secondary-decisions.json")
         with workspace.stage(
             "audio.asr",
             stage_version=self.STAGE_VERSIONS["audio.asr"],
             config={
-                "backend": backend_config,
+                "primary_backend": _backend_identity(self.runtime.asr_backend),
+                "secondary_backend": _backend_identity(self.runtime.secondary_asr_backend),
+                "secondary_policy": request.quality_mode.value,
                 "language_hints": request.language_hints,
             },
-            inputs=[extraction_ref],
+            inputs=[extraction_ref, captions_ref],
         ) as stage:
             if stage.cached:
                 evidence = _read_model_list(output, EvidenceSpan)
             else:
                 cancel.raise_if_cancelled()
                 evidence = []
+                decision_records: list[dict[str, Any]] = []
                 if extraction is None:
                     stage.add_warning("No audio track was available for ASR.")
-                elif self.runtime.asr_backend is None:
-                    warning = "No ASR backend is configured; transcript contains captions only."
-                    stage.add_warning(warning)
-                    workspace.add_warning(warning)
                 else:
-                    emit("audio.asr", progress=0.0, message="运行带时间戳的语音识别")
-                    result: ASREvidenceResult = transcribe_to_evidence(
-                        extraction,
-                        self.runtime.asr_backend,
-                        run_id=workspace.manifest.run_id,
-                        language=(
-                            request.language_hints[0] if len(request.language_hints) == 1 else None
-                        ),
+                    language = (
+                        request.language_hints[0] if len(request.language_hints) == 1 else None
                     )
-                    evidence = result.evidence
+                    if self.runtime.asr_backend is None:
+                        warning = (
+                            "No primary ASR backend is configured; transcript "
+                            "contains captions and any configured selective secondary only."
+                        )
+                        stage.add_warning(warning)
+                        workspace.add_warning(warning)
+                    else:
+                        emit(
+                            "audio.asr",
+                            progress=0.0,
+                            message="运行带时间戳的主语音识别",
+                        )
+                        result: ASREvidenceResult = transcribe_to_evidence(
+                            extraction,
+                            self.runtime.asr_backend,
+                            run_id=workspace.manifest.run_id,
+                            language=language,
+                        )
+                        evidence = result.evidence
+
+                    decisions = build_secondary_asr_decisions(
+                        primary_asr=evidence,
+                        platform_captions=captions,
+                    )
+                    eligible = [
+                        item
+                        for item in decisions
+                        if _secondary_is_enabled(item.reasons, request.quality_mode)
+                    ]
+                    if eligible and self.runtime.secondary_asr_backend is None:
+                        warning = (
+                            f"{len(eligible)} ambiguous speech window(s) were found, "
+                            "but no secondary ASR backend is configured."
+                        )
+                        stage.add_warning(warning)
+                        workspace.add_warning(warning)
+                    for index, decision in enumerate(eligible):
+                        cancel.raise_if_cancelled()
+                        clip_start = max(
+                            extraction.output_time_zero_canonical_us,
+                            decision.window_start_us - 250_000,
+                        )
+                        clip_end = min(
+                            extraction.output_time_zero_canonical_us + extraction.duration_us,
+                            decision.window_end_us + 250_000,
+                        )
+                        record: dict[str, Any] = {
+                            "decision": decision.model_dump(mode="json"),
+                            "clip_start_us": clip_start,
+                            "clip_end_us": clip_end,
+                            "status": "not_configured",
+                            "secondary_evidence_ids": [],
+                        }
+                        if self.runtime.secondary_asr_backend is None or clip_end <= clip_start:
+                            decision_records.append(record)
+                            continue
+                        clip_path = workspace.artifact_path(
+                            "asr",
+                            "secondary-clips",
+                            (f"{index:04d}_{clip_start:015d}_{clip_end:015d}.wav"),
+                        )
+                        try:
+                            clip = extract_audio_window(
+                                extraction,
+                                clip_path,
+                                start_us=clip_start,
+                                end_us=clip_end,
+                                ffmpeg_path=self.runtime.ffmpeg_path,
+                            )
+                            stage.add_output(clip_path, kind=ArtifactKind.AUDIO)
+                            secondary = transcribe_to_evidence(
+                                clip,
+                                self.runtime.secondary_asr_backend,
+                                run_id=workspace.manifest.run_id,
+                                language=language,
+                            )
+                            enriched = [
+                                _mark_secondary_evidence(item, decision)
+                                for item in secondary.evidence
+                            ]
+                            evidence.extend(enriched)
+                            record["status"] = "completed"
+                            record["secondary_evidence_ids"] = [item.id for item in enriched]
+                        except AcquisitionCancelled:
+                            raise
+                        except Exception as error:
+                            record["status"] = "failed"
+                            record["error_type"] = type(error).__name__
+                            stage.add_warning(
+                                "Selective secondary ASR failed for one window "
+                                f"({type(error).__name__}); primary evidence was kept."
+                            )
+                        decision_records.append(record)
+                        emit(
+                            "audio.asr",
+                            progress=(index + 1) / max(1, len(eligible)),
+                            message=(f"选择性复核疑难语音片段 {index + 1}/{len(eligible)}"),
+                        )
                 _write_json(
                     output,
                     [item.model_dump(mode="json") for item in evidence],
                 )
+                _write_json(decisions_path, decision_records)
                 stage.add_output(output, kind=ArtifactKind.EVIDENCE)
+                stage.add_output(decisions_path, kind=ArtifactKind.ASR)
                 stage.add_metric("asr_segment_count", len(evidence))
+                stage.add_metric(
+                    "secondary_window_count",
+                    sum(item.get("status") == "completed" for item in decision_records),
+                )
                 emit("audio.asr", progress=1.0, message="语音证据已生成")
         return evidence, workspace.ref_for(output, kind=ArtifactKind.EVIDENCE)
 
@@ -1034,6 +1140,45 @@ def _source_resolution(source: SourceManifest) -> str | None:
     if best.height:
         return f"{best.height}p"
     return None
+
+
+def _secondary_is_enabled(
+    reasons: list[SecondaryASRReason],
+    quality_mode: QualityMode,
+) -> bool:
+    if quality_mode is QualityMode.FAST:
+        return False
+    if quality_mode is QualityMode.BALANCED:
+        return SecondaryASRReason.CAPTION_CONFLICT in reasons
+    return bool(reasons)
+
+
+def _mark_secondary_evidence(
+    evidence: EvidenceSpan,
+    decision: SecondaryASRDecision,
+) -> EvidenceSpan:
+    provenance = dict(evidence.provenance)
+    provenance.update(
+        {
+            "asr_pass": "selective_secondary",
+            "decision_reasons": [item.value for item in decision.reasons],
+            "decision_window_start_us": decision.window_start_us,
+            "decision_window_end_us": decision.window_end_us,
+            "primary_evidence_ids": decision.primary_evidence_ids,
+            "caption_evidence_ids": decision.caption_evidence_ids,
+        }
+    )
+    return EvidenceSpan.model_validate(
+        {
+            **evidence.model_dump(exclude={"provenance", "parent_hypothesis_id"}),
+            "parent_hypothesis_id": (
+                decision.primary_evidence_ids[0]
+                if len(decision.primary_evidence_ids) == 1
+                else None
+            ),
+            "provenance": provenance,
+        }
+    )
 
 
 def _screenshots_for_windows(
