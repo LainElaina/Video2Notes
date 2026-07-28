@@ -191,12 +191,32 @@ class PtsDecoderTests(unittest.TestCase):
             actual = preview.convert("RGB").getpixel((80, 45))
         expected = FRAME_COLORS[3]
         self.assertLess(
-            sum(
-                abs(left - right)
-                for left, right in zip(actual, expected, strict=True)
-            ),
+            sum(abs(left - right) for left, right in zip(actual, expected, strict=True)),
             30,
         )
+
+    def test_scanner_checks_cancellation_while_decoding(self) -> None:
+        calls = 0
+
+        def cancel_check() -> None:
+            nonlocal calls
+            calls += 1
+            if calls >= 3:
+                raise RuntimeError("cancelled fixture")
+
+        scanner = AdaptiveVideoScanner(
+            AdaptiveScanConfig(
+                coarse_fps=30,
+                fine_fps=30,
+                analysis_width=160,
+                analysis_height=90,
+            ),
+            cancel_check=cancel_check,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "cancelled fixture"):
+            scanner.scan(self.video)
+        self.assertGreaterEqual(calls, 3)
 
 
 if __name__ == "__main__":

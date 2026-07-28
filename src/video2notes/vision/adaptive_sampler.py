@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal
@@ -160,11 +160,7 @@ class ChangeEvent:
 
     @property
     def previous_keyframe_us(self) -> int | None:
-        return (
-            self.previous_keyframe.time_us
-            if self.previous_keyframe is not None
-            else None
-        )
+        return self.previous_keyframe.time_us if self.previous_keyframe is not None else None
 
     @property
     def transition_ms(self) -> int:
@@ -202,9 +198,7 @@ class ChangeEvent:
                 else None
             ),
             "previous_keyframe_pts": (
-                self.previous_keyframe.pts
-                if self.previous_keyframe is not None
-                else None
+                self.previous_keyframe.pts if self.previous_keyframe is not None else None
             ),
             "previous_keyframe_time_base": (
                 self.previous_keyframe.time_base.model_dump(mode="json")
@@ -521,9 +515,7 @@ class StableStateDetector:
         # Only the consecutive qualifying suffix represents the current state.
         # Its actual PTS span, not a frame count derived from nominal FPS,
         # determines whether the state persisted long enough.
-        qualifying_tail: list[
-            tuple[FrameObservation, FrameMetrics, FrameMetrics]
-        ] = []
+        qualifying_tail: list[tuple[FrameObservation, FrameMetrics, FrameMetrics]] = []
         for item in reversed(pending.observations):
             if not self._is_changed_state(item[1]):
                 break
@@ -531,16 +523,11 @@ class StableStateDetector:
         qualifying_tail.reverse()
         if len(qualifying_tail) < 2:
             return None
-        persistence_us = (
-            qualifying_tail[-1][0].timestamp_us
-            - qualifying_tail[0][0].timestamp_us
-        )
+        persistence_us = qualifying_tail[-1][0].timestamp_us - qualifying_tail[0][0].timestamp_us
         if persistence_us < self.config.min_persistence_ms * 1000:
             return None
 
-        stable_tail: list[
-            tuple[FrameObservation, FrameMetrics, FrameMetrics]
-        ] = []
+        stable_tail: list[tuple[FrameObservation, FrameMetrics, FrameMetrics]] = []
         for item in reversed(qualifying_tail):
             if item[2].state_score > self.config.stable_step_threshold:
                 break
@@ -548,10 +535,7 @@ class StableStateDetector:
         stable_tail.reverse()
         if len(stable_tail) < 2:
             return None
-        stable_us = (
-            stable_tail[-1][0].timestamp_us
-            - stable_tail[0][0].timestamp_us
-        )
+        stable_us = stable_tail[-1][0].timestamp_us - stable_tail[0][0].timestamp_us
         if stable_us < self.config.settle_ms * 1000:
             return None
 
@@ -609,6 +593,7 @@ class AdaptiveVideoScanner:
         *,
         ffmpeg_path: str = "ffmpeg",
         ffprobe_path: str = "ffprobe",
+        cancel_check: Callable[[], None] | None = None,
     ):
         self.config = config or AdaptiveScanConfig()
         self.config.validate()
@@ -616,6 +601,7 @@ class AdaptiveVideoScanner:
         # performs decoding; FFprobe remains the authoritative stream probe.
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
+        self.cancel_check = cancel_check
 
     def scan(
         self,
@@ -627,6 +613,7 @@ class AdaptiveVideoScanner:
         if not source_path.is_file():
             raise FileNotFoundError(f"video does not exist: {source_path}")
 
+        self._check_cancelled()
         probe = self.probe(source_path)
         coarse = StableStateDetector(self.config).detect(
             self._decode_frames(
@@ -658,9 +645,7 @@ class AdaptiveVideoScanner:
         if stream is None:
             raise ValueError("input does not contain a video stream")
         frame_rate = (
-            float(stream.avg_frame_rate.fraction)
-            if stream.avg_frame_rate is not None
-            else None
+            float(stream.avg_frame_rate.fraction) if stream.avg_frame_rate is not None else None
         )
         return VideoProbe(
             duration_us=media.duration_us,
@@ -693,6 +678,7 @@ class AdaptiveVideoScanner:
                 self.config.analysis_height,
             ),
         ):
+            self._check_cancelled()
             yield FrameObservation(
                 timestamp=decoded.timestamp,
                 image=decoded.image,
@@ -705,6 +691,7 @@ class AdaptiveVideoScanner:
         timestamp: MediaTimestamp,
         probe: VideoProbe,
     ) -> FrameObservation:
+        self._check_cancelled()
         decoded = decode_video_frame_at(
             source,
             timestamp=timestamp,
@@ -803,8 +790,7 @@ class AdaptiveVideoScanner:
 
         if (
             len(stable_window) < 2
-            or frames[stable_window[-1]].timestamp_us
-            - frames[stable_window[0]].timestamp_us
+            or frames[stable_window[-1]].timestamp_us - frames[stable_window[0]].timestamp_us
             < self.config.settle_ms * 1000
         ):
             return coarse
@@ -860,10 +846,7 @@ class AdaptiveVideoScanner:
             if run_start is None:
                 run_start = index
                 continue
-            if (
-                frames[index].timestamp_us - frames[run_start].timestamp_us
-                >= minimum_us
-            ):
+            if frames[index].timestamp_us - frames[run_start].timestamp_us >= minimum_us:
                 return run_start
         return None
 
@@ -877,6 +860,7 @@ class AdaptiveVideoScanner:
         preview_dir.mkdir(parents=True, exist_ok=True)
         updated: list[ChangeEvent] = []
         for index, event in enumerate(events):
+            self._check_cancelled()
             preview_path = preview_dir / (
                 f"{index:04d}_{event.keyframe_us:015d}us_{event.reason}.jpg"
             )
@@ -895,6 +879,11 @@ class AdaptiveVideoScanner:
             )
             updated.append(replace(event, preview_path=str(preview_path)))
         return updated
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_check is not None:
+            self.cancel_check()
+
 
 def synthetic_observations(
     images: Iterable[Image.Image],

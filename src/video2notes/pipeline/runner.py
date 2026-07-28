@@ -463,6 +463,7 @@ class Video2NotesPipeline:
                     config,
                     ffmpeg_path=self.runtime.ffmpeg_path,
                     ffprobe_path=self.runtime.ffprobe_path,
+                    cancel_check=cancel.raise_if_cancelled,
                 )
                 result = scanner.scan(
                     media.source_path,
