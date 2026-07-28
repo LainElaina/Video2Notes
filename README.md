@@ -268,6 +268,8 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 截至 2026-07-28，完整 Python 验证已通过 **133** 个测试（约 **82%** 覆盖率）；React 已通过 ESLint、TypeScript、**12** 个 Vitest、Vite build，Rust 已通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。
 
+这些命令还在一个路径含空格、没有既有 `.venv`、`node_modules`、Tauri target 或生成 sidecar 的全新本地克隆中重新执行：`bootstrap.ps1 -WithPlaywright`、`verify.ps1 -Strict` 和标准 `build.ps1` 均通过。bootstrap 会先安装 `pyproject.toml` 声明的 setuptools 构建后端；跟踪的空 backend 占位目录允许 Tauri 在 sidecar 尚未冻结前完成干净克隆的 Rust 检查。
+
 最终冻结 sidecar 还在 `PATH` 仅含 System32、数据目录含空格的条件下直接处理同一内置样例，run `20260728T114922Z-13de3d081925` 生成 3 张自适应截图、Markdown、HTML 和 263,800 B PDF。最终桌面 exe 实际打开后显示后端 `0.1.0`；通过窗口关闭后，托管 sidecar 与 loopback 监听均已退出。
 
 ## 已实测的运行证据（不是精度宣称）

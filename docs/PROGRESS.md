@@ -45,6 +45,7 @@
 | `99d8ebe` | Tauri 隔离 sidecar 生命周期、原生文件与 artifact 路径 |
 | `860a17d` / `aa8d02f` | 自包含 Windows 演示发行、可移植验证与 Vite 进程树回收 |
 | `bcb9329` / `cb04b8c` | 严格验证真实 API UI 路径、可复现 sidecar 清单与发行 notices |
+| `8a6ddd5` / `e502129` | 干净 Python venv 构建后端与 Tauri 空资源目录修复 |
 
 ### 验证记录
 
@@ -53,6 +54,7 @@
 - PDF：实际生成 HTML→PDF，使用 Poppler 渲染为两页 PNG 并人工检查页面布局。
 - 前端：ESLint、TypeScript、Vite production build 和 **12/12** Vitest 通过；真实 API client/store 测试覆盖 token、probe、job、artifact、Provider secret/test 和 role 保存。
 - UI：Playwright 显式 demo 主路径与真实 loopback API 主路径通过；`verify.ps1 -Strict` 会自行启动临时 API 和 Vite 并跑两条路径，真实阅读器显示本地视频、自适应关键帧、证据轨与 canonical 导出。
+- 干净克隆：在路径含空格、没有 `.venv`/`node_modules`/Tauri target/生成 sidecar 的新克隆中，`bootstrap.ps1 -WithPlaywright`、完整 `verify.ps1 -Strict` 和标准 `build.ps1` 均通过。
 - 发行：PyInstaller onedir sidecar 在没有仓库 `.venv`、PATH 仅含 System32 时通过 `--help` 与 token `/api/health`；其 1,103 个 payload 的 size/SHA-256 清单逐项匹配。Tauri MSI/NSIS 均构建成功，最终大小分别为 154,042,761 B 与 112,509,531 B，sidecar 资源约 355.4 MiB。包内已核对后端、样例、项目许可证、第三方 notices、FFmpeg 许可证与构建信息。
 - 真实来源：在当次验证时对 X、YouTube、Bilibili URL 分别完成下载、处理与 Markdown/HTML 输出；详细耗时和边界见下表。
 
