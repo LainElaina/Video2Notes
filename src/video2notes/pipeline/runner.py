@@ -157,7 +157,7 @@ class Video2NotesPipeline:
         "ocr.extract": "2",
         "evidence.fuse": "2",
         "notes.compose": "2",
-        "render.outputs": "2",
+        "render.outputs": "3",
     }
 
     def __init__(
@@ -973,6 +973,7 @@ class Video2NotesPipeline:
         markdown_path = workspace.artifact_path("notes", "note.md")
         html_path = workspace.artifact_path("render", "note.html")
         pdf_path = workspace.artifact_path("render", "note.pdf")
+        outcome_path = workspace.artifact_path("render", "outcome.json")
         with workspace.stage(
             "render.outputs",
             stage_version=self.STAGE_VERSIONS["render.outputs"],
@@ -1002,22 +1003,30 @@ class Video2NotesPipeline:
                         browser_executable=self.runtime.pdf_browser_executable,
                     )
                     stage.add_output(pdf_path, kind=ArtifactKind.RENDER)
+                outcome = PipelineOutcome(
+                    run_id=workspace.manifest.run_id,
+                    markdown=workspace.ref_for(
+                        markdown_path,
+                        kind=ArtifactKind.NOTE,
+                    ),
+                    html=workspace.ref_for(
+                        html_path,
+                        kind=ArtifactKind.RENDER,
+                    ),
+                    pdf=(
+                        workspace.ref_for(pdf_path, kind=ArtifactKind.RENDER)
+                        if request.generate_pdf
+                        else None
+                    ),
+                    note_document=note_ref,
+                    evidence_count=len(fusion.evidence),
+                    visual_state_count=len(visual_states),
+                    used_deterministic_note_fallback=(composition.used_deterministic_fallback),
+                )
+                _write_model(outcome_path, outcome)
+                stage.add_output(outcome_path, kind=ArtifactKind.RENDER)
                 emit("render.outputs", progress=1.0, message="笔记输出已完成")
-        markdown_ref = workspace.ref_for(markdown_path, kind=ArtifactKind.NOTE)
-        html_ref = workspace.ref_for(html_path, kind=ArtifactKind.RENDER)
-        pdf_ref = (
-            workspace.ref_for(pdf_path, kind=ArtifactKind.RENDER) if request.generate_pdf else None
-        )
-        return PipelineOutcome(
-            run_id=workspace.manifest.run_id,
-            markdown=markdown_ref,
-            html=html_ref,
-            pdf=pdf_ref,
-            note_document=note_ref,
-            evidence_count=len(fusion.evidence),
-            visual_state_count=len(visual_states),
-            used_deterministic_note_fallback=(composition.used_deterministic_fallback),
-        )
+        return _read_model(outcome_path, PipelineOutcome)
 
 
 T = TypeVar("T", bound=BaseModel)

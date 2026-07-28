@@ -207,6 +207,7 @@ class PipelineEndToEndTests(unittest.TestCase):
             html_path = workspace.root / first.html.relative_path
             self.assertTrue(markdown_path.is_file())
             self.assertTrue(html_path.is_file())
+            self.assertTrue((workspace.root / "render" / "outcome.json").is_file())
             markdown = markdown_path.read_text(encoding="utf-8")
             self.assertIn("证据优先", markdown)
             self.assertIn("Evidence First", markdown)

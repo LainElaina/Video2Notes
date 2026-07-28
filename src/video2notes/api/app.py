@@ -235,7 +235,16 @@ class ApiContext:
 
     def get_result(self, run_id: str) -> PipelineOutcome | None:
         with self._results_lock:
-            return self._results.get(run_id)
+            result = self._results.get(run_id)
+        if result is not None:
+            return result
+        try:
+            outcome_path = self.get_workspace(run_id).root / "render" / "outcome.json"
+            if not outcome_path.is_file():
+                return None
+            return PipelineOutcome.model_validate_json(outcome_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
 
 
 def create_app(
