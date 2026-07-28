@@ -153,6 +153,12 @@ if (Test-Path -LiteralPath $safeResourceRoot) {
     Remove-Item -LiteralPath $safeResourceRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $ResourceRoot, $ToolRoot | Out-Null
+$PlaceholderPath = Join-Path $ResourceRoot ".gitkeep"
+[IO.File]::WriteAllText(
+    $PlaceholderPath,
+    "This directory is populated by scripts/build_sidecar.ps1.`n",
+    [Text.UTF8Encoding]::new($false)
+)
 Get-ChildItem -LiteralPath $BuiltSidecarDirectory -Force | Copy-Item -Destination $ResourceRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffmpeg.exe") -Destination (Join-Path $ToolRoot "ffmpeg.exe") -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffprobe.exe") -Destination (Join-Path $ToolRoot "ffprobe.exe") -Force
@@ -188,7 +194,7 @@ if ($UnexpectedToolEntries.Count -gt 0) {
     throw "The backend tool output contains unexpected entries: $($UnexpectedToolEntries.Name -join ', ')"
 }
 
-$AllowedTopLevelEntries = @("_internal", "tools", "video2notes.exe")
+$AllowedTopLevelEntries = @(".gitkeep", "_internal", "tools", "video2notes.exe")
 $UnexpectedTopLevelEntries = @(
     Get-ChildItem -LiteralPath $ResourceRoot -Force |
         Where-Object { $_.Name -notin $AllowedTopLevelEntries }
