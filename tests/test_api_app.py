@@ -62,7 +62,36 @@ class ApiAppTests(unittest.TestCase):
         self.assertIn("fast", response.json()["plans"])
         self.assertIn("accurate", response.json()["plans"])
 
+    def test_processing_estimate_and_runtime_diagnostics_are_protected(self) -> None:
+        self.assertEqual(
+            self.client.post(
+                "/api/estimate",
+                json={"duration_seconds": 600, "quality_mode": "balanced"},
+            ).status_code,
+            401,
+        )
+        estimate = self.client.post(
+            "/api/estimate",
+            headers=self.headers,
+            json={
+                "duration_seconds": 600,
+                "quality_mode": "balanced",
+                "source_height": 2160,
+                "source_fps": 60,
+            },
+        )
+        self.assertEqual(estimate.status_code, 200)
+        self.assertGreater(
+            estimate.json()["upper_seconds"],
+            estimate.json()["lower_seconds"],
+        )
+        runtime = self.client.get("/api/runtime", headers=self.headers)
+        self.assertEqual(runtime.status_code, 200)
+        self.assertFalse(runtime.json()["injected"])
+        self.assertIsInstance(runtime.json()["warnings"], list)
+
     def test_provider_secret_is_write_only(self) -> None:
+        previous_pipeline = self.context.pipeline
         response = self.client.put(
             "/api/providers/cloud/secret",
             headers=self.headers,
@@ -74,6 +103,7 @@ class ApiAppTests(unittest.TestCase):
             self.backend.values[("Video2Notes", "cloud")],
             "private-value",
         )
+        self.assertIsNot(self.context.pipeline, previous_pipeline)
 
     def test_run_manifest_and_artifact_are_confined(self) -> None:
         response = self.client.post(
@@ -103,6 +133,12 @@ class ApiAppTests(unittest.TestCase):
             params={"path": "../manifest.json"},
         )
         self.assertEqual(escape.status_code, 404)
+        raw_manifest = self.client.get(
+            f"/api/runs/{run_id}/artifact",
+            headers=self.headers,
+            params={"path": "manifest.json"},
+        )
+        self.assertEqual(raw_manifest.status_code, 404)
 
     def test_provider_registry_response_contains_no_keyring_values(self) -> None:
         self.backend.set_password("Video2Notes", "local", "private-value")
