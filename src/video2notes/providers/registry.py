@@ -7,7 +7,7 @@ import os
 import uuid
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -66,6 +66,8 @@ class ProviderSpec(RegistryModel):
     kind: ProviderKind
     base_url: str | None = None
     credential_ref: str | None = None
+    endpoint_style: Literal["responses", "chat_completions"] = "chat_completions"
+    request_timeout_seconds: float = Field(default=180, gt=0)
     locality: Locality
     enabled: bool = True
 
@@ -86,6 +88,7 @@ class ModelSpec(RegistryModel):
     capabilities: set[Capability]
     locality: Locality
     context_window: int | None = Field(default=None, gt=0)
+    settings: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
 
 
