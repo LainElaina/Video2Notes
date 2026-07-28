@@ -5,24 +5,28 @@ visual state changed and to choose a stable, sharp frame for the expensive OCR
 stage.  A cheap coarse pass covers the whole video.  Only candidate transition
 windows are decoded again at a higher frame rate.
 
-The implementation is dependency-light on purpose: FFmpeg performs decoding
-and Pillow supplies deterministic image metrics.  Production profiles can
-replace the metric backend with OpenCV/CUDA or a learned detector without
-changing the event contract.
+PyAV performs PTS-preserving FFmpeg decoding and Pillow supplies deterministic
+image metrics. Production profiles can replace the metric backend with
+OpenCV/CUDA or a learned detector without changing the event contract.
 """
 
 from __future__ import annotations
 
 import json
 import math
-import shutil
-import subprocess
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import IO, Literal
+from typing import Literal
 
 from PIL import Image, ImageChops, ImageFilter, ImageStat
+
+from video2notes.domain import MediaTimestamp, Rational
+from video2notes.media import (
+    decode_video_frame_at,
+    iter_video_frames,
+    probe_media,
+)
 
 ChangeReason = Literal["initial", "hard_cut", "text_or_ui_change", "state_change"]
 
@@ -116,18 +120,28 @@ class FrameMetrics:
 
 @dataclass(frozen=True, slots=True)
 class FrameObservation:
-    timestamp_ms: int
+    timestamp: MediaTimestamp
     image: Image.Image = field(repr=False, compare=False)
     sharpness: float
+
+    @property
+    def timestamp_us(self) -> int:
+        return self.timestamp.time_us
+
+    @property
+    def timestamp_ms(self) -> int:
+        """Rounded millisecond view retained for callers of the research API."""
+
+        return round(self.timestamp_us / 1000)
 
 
 @dataclass(frozen=True, slots=True)
 class ChangeEvent:
     """A persistent visual state boundary and its representative keyframe."""
 
-    transition_ms: int
-    keyframe_ms: int
-    previous_keyframe_ms: int | None
+    transition: MediaTimestamp
+    keyframe: MediaTimestamp
+    previous_keyframe: MediaTimestamp | None
     reason: ChangeReason
     state_score: float
     scene_score: float
@@ -136,16 +150,101 @@ class ChangeEvent:
     refined: bool
     preview_path: str | None = None
 
+    @property
+    def transition_us(self) -> int:
+        return self.transition.time_us
+
+    @property
+    def keyframe_us(self) -> int:
+        return self.keyframe.time_us
+
+    @property
+    def previous_keyframe_us(self) -> int | None:
+        return (
+            self.previous_keyframe.time_us
+            if self.previous_keyframe is not None
+            else None
+        )
+
+    @property
+    def transition_ms(self) -> int:
+        """Rounded millisecond view retained for compatibility."""
+
+        return round(self.transition_us / 1000)
+
+    @property
+    def keyframe_ms(self) -> int:
+        """Rounded millisecond view retained for compatibility."""
+
+        return round(self.keyframe_us / 1000)
+
+    @property
+    def previous_keyframe_ms(self) -> int | None:
+        """Rounded millisecond view retained for compatibility."""
+
+        value = self.previous_keyframe_us
+        return round(value / 1000) if value is not None else None
+
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        return {
+            "transition_us": self.transition_us,
+            "transition_source_time_us": self.transition.source_time_us,
+            "transition_pts": self.transition.pts,
+            "transition_time_base": self.transition.time_base.model_dump(mode="json"),
+            "keyframe_us": self.keyframe_us,
+            "keyframe_source_time_us": self.keyframe.source_time_us,
+            "keyframe_pts": self.keyframe.pts,
+            "keyframe_time_base": self.keyframe.time_base.model_dump(mode="json"),
+            "previous_keyframe_us": self.previous_keyframe_us,
+            "previous_keyframe_source_time_us": (
+                self.previous_keyframe.source_time_us
+                if self.previous_keyframe is not None
+                else None
+            ),
+            "previous_keyframe_pts": (
+                self.previous_keyframe.pts
+                if self.previous_keyframe is not None
+                else None
+            ),
+            "previous_keyframe_time_base": (
+                self.previous_keyframe.time_base.model_dump(mode="json")
+                if self.previous_keyframe is not None
+                else None
+            ),
+            "reason": self.reason,
+            "state_score": self.state_score,
+            "scene_score": self.scene_score,
+            "text_score": self.text_score,
+            "step_score": self.step_score,
+            "refined": self.refined,
+            "preview_path": self.preview_path,
+        }
 
 
 @dataclass(frozen=True, slots=True)
 class VideoProbe:
-    duration_ms: int
+    duration_us: int
     width: int
     height: int
     frame_rate: float | None
+    timeline_origin_us: int
+    stream_index: int
+    stream_time_base: Rational
+
+    @property
+    def duration_ms(self) -> int:
+        return round(self.duration_us / 1000)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "duration_us": self.duration_us,
+            "width": self.width,
+            "height": self.height,
+            "frame_rate": self.frame_rate,
+            "timeline_origin_us": self.timeline_origin_us,
+            "stream_index": self.stream_index,
+            "stream_time_base": self.stream_time_base.model_dump(mode="json"),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,9 +256,9 @@ class ScanResult:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "source": self.source,
-            "probe": asdict(self.probe),
+            "probe": self.probe.to_dict(),
             "config": asdict(self.config),
             "events": [event.to_dict() for event in self.events],
         }
@@ -176,10 +275,10 @@ class ScanResult:
 
 @dataclass(slots=True)
 class _PendingTransition:
-    trigger_ms: int
+    trigger: MediaTimestamp
     reason: ChangeReason
     observations: list[tuple[FrameObservation, FrameMetrics, FrameMetrics]]
-    stable_since_ms: int | None = None
+    stable_since_us: int | None = None
 
 
 def _clamp01(value: float) -> float:
@@ -308,9 +407,9 @@ class StableStateDetector:
 
         events = [
             ChangeEvent(
-                transition_ms=first.timestamp_ms,
-                keyframe_ms=first.timestamp_ms,
-                previous_keyframe_ms=None,
+                transition=first.timestamp,
+                keyframe=first.timestamp,
+                previous_keyframe=None,
                 reason="initial",
                 state_score=0.0,
                 scene_score=0.0,
@@ -322,9 +421,11 @@ class StableStateDetector:
         reference = first
         previous = first
         pending: _PendingTransition | None = None
-        last_emitted_ms = first.timestamp_ms
+        last_emitted_us = first.timestamp_us
 
         for current in iterator:
+            if current.timestamp_us <= previous.timestamp_us:
+                raise ValueError("frame observations must have strictly increasing PTS")
             step_metrics = compare_frames(previous.image, current.image, self.config)
             reference_metrics = compare_frames(reference.image, current.image, self.config)
 
@@ -332,11 +433,11 @@ class StableStateDetector:
                 reason = self._classify_candidate(
                     reference_metrics,
                     step_metrics,
-                    current.timestamp_ms - last_emitted_ms,
+                    current.timestamp_us - last_emitted_us,
                 )
                 if reason is not None:
                     pending = _PendingTransition(
-                        trigger_ms=current.timestamp_ms,
+                        trigger=current.timestamp,
                         reason=reason,
                         observations=[],
                     )
@@ -344,34 +445,33 @@ class StableStateDetector:
             if pending is not None:
                 pending.observations.append((current, reference_metrics, step_metrics))
                 if step_metrics.state_score <= self.config.stable_step_threshold:
-                    if pending.stable_since_ms is None:
-                        pending.stable_since_ms = current.timestamp_ms
+                    if pending.stable_since_us is None:
+                        pending.stable_since_us = current.timestamp_us
                 else:
-                    pending.stable_since_ms = None
+                    pending.stable_since_us = None
 
-                elapsed = current.timestamp_ms - pending.trigger_ms
+                elapsed_us = current.timestamp_us - pending.trigger.time_us
                 settled_for = (
-                    current.timestamp_ms - pending.stable_since_ms
-                    if pending.stable_since_ms is not None
+                    current.timestamp_us - pending.stable_since_us
+                    if pending.stable_since_us is not None
                     else 0
                 )
                 should_resolve = (
-                    elapsed >= self.config.min_persistence_ms
-                    and settled_for >= self.config.settle_ms
+                    elapsed_us >= self.config.min_persistence_ms * 1000
+                    and settled_for >= self.config.settle_ms * 1000
                 )
-                timed_out = elapsed >= self.config.max_transition_ms
+                timed_out = elapsed_us >= self.config.max_transition_ms * 1000
 
                 if should_resolve or timed_out:
                     resolved = self._resolve_pending(
                         pending,
                         reference,
-                        events[-1].keyframe_ms,
-                        timed_out=timed_out,
+                        events[-1].keyframe,
                     )
                     if resolved is not None:
                         event, reference = resolved
                         events.append(event)
-                        last_emitted_ms = event.keyframe_ms
+                        last_emitted_us = event.keyframe_us
                     pending = None
 
             previous = current
@@ -382,8 +482,7 @@ class StableStateDetector:
             resolved = self._resolve_pending(
                 pending,
                 reference,
-                events[-1].keyframe_ms,
-                timed_out=True,
+                events[-1].keyframe,
             )
             if resolved is not None:
                 event, _ = resolved
@@ -395,9 +494,9 @@ class StableStateDetector:
         self,
         reference: FrameMetrics,
         step: FrameMetrics,
-        since_last_event_ms: int,
+        since_last_event_us: int,
     ) -> ChangeReason | None:
-        if since_last_event_ms < self.config.cooldown_ms:
+        if since_last_event_us < self.config.cooldown_ms * 1000:
             return None
         if step.scene_score >= self.config.hard_cut_threshold:
             return "hard_cut"
@@ -414,39 +513,51 @@ class StableStateDetector:
         self,
         pending: _PendingTransition,
         reference: FrameObservation,
-        previous_keyframe_ms: int,
-        *,
-        timed_out: bool,
+        previous_keyframe: MediaTimestamp,
     ) -> tuple[ChangeEvent, FrameObservation] | None:
         if not pending.observations:
             return None
 
-        persistence_count = max(
-            2,
-            math.ceil(self.config.min_persistence_ms * self.config.coarse_fps / 1000.0),
+        # Only the consecutive qualifying suffix represents the current state.
+        # Its actual PTS span, not a frame count derived from nominal FPS,
+        # determines whether the state persisted long enough.
+        qualifying_tail: list[
+            tuple[FrameObservation, FrameMetrics, FrameMetrics]
+        ] = []
+        for item in reversed(pending.observations):
+            if not self._is_changed_state(item[1]):
+                break
+            qualifying_tail.append(item)
+        qualifying_tail.reverse()
+        if len(qualifying_tail) < 2:
+            return None
+        persistence_us = (
+            qualifying_tail[-1][0].timestamp_us
+            - qualifying_tail[0][0].timestamp_us
         )
-        tail = pending.observations[-persistence_count:]
-        qualifying = [
-            item
-            for item in tail
-            if (
-                item[1].state_score >= self.config.state_change_threshold
-                or item[1].text_score >= self.config.text_change_threshold
-            )
-        ]
-        required = persistence_count if not timed_out else max(2, persistence_count - 1)
-        if len(qualifying) < required:
+        if persistence_us < self.config.min_persistence_ms * 1000:
             return None
 
-        stable_items = [
-            item for item in tail if item[2].state_score <= self.config.stable_step_threshold
-        ]
-        if not stable_items:
+        stable_tail: list[
+            tuple[FrameObservation, FrameMetrics, FrameMetrics]
+        ] = []
+        for item in reversed(qualifying_tail):
+            if item[2].state_score > self.config.stable_step_threshold:
+                break
+            stable_tail.append(item)
+        stable_tail.reverse()
+        if len(stable_tail) < 2:
+            return None
+        stable_us = (
+            stable_tail[-1][0].timestamp_us
+            - stable_tail[0][0].timestamp_us
+        )
+        if stable_us < self.config.settle_ms * 1000:
             return None
 
         # Prefer the sharpest stable image, but only within the persistent tail
         # so a transient early frame cannot win.
-        selected = max(stable_items, key=lambda item: item[0].sharpness)
+        selected = max(stable_tail, key=lambda item: item[0].sharpness)
         observation, state_metrics, step_metrics = selected
         verified = compare_frames(reference.image, observation.image, self.config)
         if (
@@ -470,9 +581,9 @@ class StableStateDetector:
             reason = "state_change"
 
         event = ChangeEvent(
-            transition_ms=pending.trigger_ms,
-            keyframe_ms=observation.timestamp_ms,
-            previous_keyframe_ms=previous_keyframe_ms,
+            transition=pending.trigger,
+            keyframe=observation.timestamp,
+            previous_keyframe=previous_keyframe,
             reason=reason,
             state_score=state_metrics.state_score,
             scene_score=state_metrics.scene_score,
@@ -482,9 +593,15 @@ class StableStateDetector:
         )
         return event, observation
 
+    def _is_changed_state(self, metrics: FrameMetrics) -> bool:
+        return (
+            metrics.state_score >= self.config.state_change_threshold
+            or metrics.text_score >= self.config.text_change_threshold
+        )
+
 
 class AdaptiveVideoScanner:
-    """FFmpeg-backed two-pass visual-state scanner."""
+    """PyAV-backed two-pass visual-state scanner with source-frame PTS."""
 
     def __init__(
         self,
@@ -495,8 +612,10 @@ class AdaptiveVideoScanner:
     ):
         self.config = config or AdaptiveScanConfig()
         self.config.validate()
-        self.ffmpeg_path = _resolve_executable(ffmpeg_path)
-        self.ffprobe_path = _resolve_executable(ffprobe_path)
+        # ffmpeg_path remains accepted for research-CLI compatibility. PyAV now
+        # performs decoding; FFprobe remains the authoritative stream probe.
+        self.ffmpeg_path = ffmpeg_path
+        self.ffprobe_path = ffprobe_path
 
     def scan(
         self,
@@ -510,15 +629,20 @@ class AdaptiveVideoScanner:
 
         probe = self.probe(source_path)
         coarse = StableStateDetector(self.config).detect(
-            self._decode_frames(source_path, fps=self.config.coarse_fps)
+            self._decode_frames(
+                source_path,
+                probe=probe,
+                fps=self.config.coarse_fps,
+            )
         )
-        refined = self._refine_events(source_path, coarse)
+        refined = self._refine_events(source_path, coarse, probe)
 
         if preview_dir is not None:
             refined = self._write_previews(
                 source_path,
                 refined,
                 Path(preview_dir).expanduser().resolve(),
+                probe,
             )
 
         return ScanResult(
@@ -529,149 +653,91 @@ class AdaptiveVideoScanner:
         )
 
     def probe(self, source: str | Path) -> VideoProbe:
-        command = [
-            self.ffprobe_path,
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height,avg_frame_rate:format=duration",
-            "-of",
-            "json",
-            str(source),
-        ]
-        completed = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        payload = json.loads(completed.stdout)
-        streams = payload.get("streams") or []
-        if not streams:
+        media = probe_media(source, ffprobe_path=self.ffprobe_path)
+        stream = media.video_stream
+        if stream is None:
             raise ValueError("input does not contain a video stream")
-        stream = streams[0]
-        duration = float((payload.get("format") or {}).get("duration") or 0.0)
+        frame_rate = (
+            float(stream.avg_frame_rate.fraction)
+            if stream.avg_frame_rate is not None
+            else None
+        )
         return VideoProbe(
-            duration_ms=max(0, round(duration * 1000)),
-            width=int(stream.get("width") or 0),
-            height=int(stream.get("height") or 0),
-            frame_rate=_parse_frame_rate(stream.get("avg_frame_rate")),
+            duration_us=media.duration_us,
+            width=stream.width or 0,
+            height=stream.height or 0,
+            frame_rate=frame_rate,
+            timeline_origin_us=media.timeline_origin_us,
+            stream_index=stream.index,
+            stream_time_base=stream.time_base,
         )
 
     def _decode_frames(
         self,
         source: Path,
         *,
+        probe: VideoProbe,
         fps: float,
-        start_ms: int = 0,
-        end_ms: int | None = None,
+        start_us: int = 0,
+        end_us: int | None = None,
     ) -> Iterator[FrameObservation]:
-        command = [self.ffmpeg_path, "-hide_banner", "-loglevel", "error"]
-        if start_ms > 0:
-            command.extend(["-ss", f"{start_ms / 1000.0:.6f}"])
-        command.extend(["-i", str(source)])
-        if end_ms is not None:
-            duration_ms = max(1, end_ms - start_ms)
-            command.extend(["-t", f"{duration_ms / 1000.0:.6f}"])
-
-        filter_graph = (
-            f"fps={fps},"
-            f"scale={self.config.analysis_width}:{self.config.analysis_height}:"
-            "force_original_aspect_ratio=decrease,"
-            f"pad={self.config.analysis_width}:{self.config.analysis_height}:"
-            "(ow-iw)/2:(oh-ih)/2"
-        )
-        command.extend(
-            [
-                "-map",
-                "0:v:0",
-                "-an",
-                "-sn",
-                "-dn",
-                "-vf",
-                filter_graph,
-                "-pix_fmt",
-                "rgb24",
-                "-f",
-                "rawvideo",
-                "pipe:1",
-            ]
-        )
-
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if process.stdout is None or process.stderr is None:
-            process.kill()
-            raise RuntimeError("failed to open FFmpeg pipes")
-
-        frame_bytes = self.config.analysis_width * self.config.analysis_height * 3
-        index = 0
-        try:
-            while True:
-                raw = _read_exact(process.stdout, frame_bytes)
-                if not raw:
-                    break
-                if len(raw) != frame_bytes:
-                    raise RuntimeError("FFmpeg returned a truncated video frame")
-                image = Image.frombytes(
-                    "RGB",
-                    (self.config.analysis_width, self.config.analysis_height),
-                    raw,
-                )
-                timestamp_ms = start_ms + round(index * 1000.0 / fps)
-                yield FrameObservation(
-                    timestamp_ms=timestamp_ms,
-                    image=image,
-                    sharpness=frame_sharpness(image),
-                )
-                index += 1
-        finally:
-            process.stdout.close()
-            stderr = process.stderr.read().decode("utf-8", errors="replace")
-            process.stderr.close()
-            return_code = process.wait()
-            if return_code and not _generator_is_closing():
-                raise RuntimeError(f"FFmpeg frame decode failed: {stderr.strip()}")
-
-    def _frame_at(self, source: Path, timestamp_ms: int) -> FrameObservation:
-        # Decode a tiny window because a raw one-frame seek can land before the
-        # requested presentation timestamp with long-GOP media.
-        end_ms = timestamp_ms + max(250, round(1000 / self.config.fine_fps))
-        frames = list(
-            self._decode_frames(
-                source,
-                fps=self.config.fine_fps,
-                start_ms=max(0, timestamp_ms),
-                end_ms=end_ms,
+        for decoded in iter_video_frames(
+            source,
+            timeline_origin_us=probe.timeline_origin_us,
+            stream_index=probe.stream_index,
+            sample_fps=fps,
+            start_us=start_us,
+            end_us=end_us,
+            target_size=(
+                self.config.analysis_width,
+                self.config.analysis_height,
+            ),
+        ):
+            yield FrameObservation(
+                timestamp=decoded.timestamp,
+                image=decoded.image,
+                sharpness=frame_sharpness(decoded.image),
             )
+
+    def _frame_at(
+        self,
+        source: Path,
+        timestamp: MediaTimestamp,
+        probe: VideoProbe,
+    ) -> FrameObservation:
+        decoded = decode_video_frame_at(
+            source,
+            timestamp=timestamp,
+            timeline_origin_us=probe.timeline_origin_us,
+            stream_index=probe.stream_index,
+            target_size=(
+                self.config.analysis_width,
+                self.config.analysis_height,
+            ),
         )
-        if not frames:
-            raise RuntimeError(f"could not decode frame at {timestamp_ms} ms")
-        return frames[0]
+        return FrameObservation(
+            timestamp=decoded.timestamp,
+            image=decoded.image,
+            sharpness=frame_sharpness(decoded.image),
+        )
 
     def _refine_events(
         self,
         source: Path,
         coarse_events: list[ChangeEvent],
+        probe: VideoProbe,
     ) -> list[ChangeEvent]:
         if len(coarse_events) <= 1:
             return coarse_events
 
         refined = [coarse_events[0]]
-        reference = self._frame_at(source, coarse_events[0].keyframe_ms)
+        reference = self._frame_at(source, coarse_events[0].keyframe, probe)
         for event in coarse_events[1:]:
-            candidate = self._refine_event(source, event, reference)
-            if candidate.keyframe_ms <= refined[-1].keyframe_ms:
+            candidate = self._refine_event(source, event, reference, probe)
+            if candidate.keyframe_us <= refined[-1].keyframe_us:
                 continue
             refined.append(candidate)
-            reference = self._frame_at(source, candidate.keyframe_ms)
+            reference = self._frame_at(source, candidate.keyframe, probe)
         return refined
 
     def _refine_event(
@@ -679,18 +745,23 @@ class AdaptiveVideoScanner:
         source: Path,
         coarse: ChangeEvent,
         reference: FrameObservation,
+        probe: VideoProbe,
     ) -> ChangeEvent:
-        start_ms = max(
-            reference.timestamp_ms,
-            coarse.transition_ms - self.config.refine_padding_ms,
+        start_us = max(
+            reference.timestamp_us,
+            coarse.transition_us - self.config.refine_padding_ms * 1000,
         )
-        end_ms = coarse.keyframe_ms + self.config.refine_padding_ms
+        end_us = min(
+            probe.duration_us,
+            coarse.keyframe_us + self.config.refine_padding_ms * 1000,
+        )
         frames = list(
             self._decode_frames(
                 source,
+                probe=probe,
                 fps=self.config.fine_fps,
-                start_ms=start_ms,
-                end_ms=end_ms,
+                start_us=start_us,
+                end_us=end_us,
             )
         )
         if len(frames) < 2:
@@ -707,38 +778,35 @@ class AdaptiveVideoScanner:
             ],
         ]
 
-        persistence_frames = max(
-            2,
-            math.ceil(self.config.min_persistence_ms * self.config.fine_fps / 1000.0),
+        crossing_index = self._find_persistent_crossing(
+            frames,
+            state_metrics,
+            minimum_us=self.config.min_persistence_ms * 1000,
         )
-        crossing_index: int | None = None
-        for index in range(0, len(frames) - persistence_frames + 1):
-            window = state_metrics[index : index + persistence_frames]
-            if all(
-                metric.state_score >= self.config.state_change_threshold
-                or metric.text_score >= self.config.text_change_threshold
-                for metric in window
-            ):
-                crossing_index = index
-                break
 
         if crossing_index is None:
             return coarse
 
-        settle_frames = max(
-            2,
-            math.ceil(self.config.settle_ms * self.config.fine_fps / 1000.0),
-        )
         stable_window: list[int] = []
         for index in range(crossing_index, len(frames)):
             if step_metrics[index].state_score <= self.config.stable_step_threshold:
                 stable_window.append(index)
-                if len(stable_window) >= settle_frames:
+                if (
+                    len(stable_window) >= 2
+                    and frames[stable_window[-1]].timestamp_us
+                    - frames[stable_window[0]].timestamp_us
+                    >= self.config.settle_ms * 1000
+                ):
                     break
             else:
                 stable_window.clear()
 
-        if len(stable_window) < settle_frames:
+        if (
+            len(stable_window) < 2
+            or frames[stable_window[-1]].timestamp_us
+            - frames[stable_window[0]].timestamp_us
+            < self.config.settle_ms * 1000
+        ):
             return coarse
 
         selected_index = max(
@@ -760,9 +828,9 @@ class AdaptiveVideoScanner:
             reason = "state_change"
 
         return ChangeEvent(
-            transition_ms=frames[crossing_index].timestamp_ms,
-            keyframe_ms=selected_frame.timestamp_ms,
-            previous_keyframe_ms=reference.timestamp_ms,
+            transition=frames[crossing_index].timestamp,
+            keyframe=selected_frame.timestamp,
+            previous_keyframe=reference.timestamp,
             reason=reason,
             state_score=selected_state.state_score,
             scene_score=selected_state.scene_score,
@@ -771,80 +839,62 @@ class AdaptiveVideoScanner:
             refined=True,
         )
 
+    def _find_persistent_crossing(
+        self,
+        frames: list[FrameObservation],
+        metrics: list[FrameMetrics],
+        *,
+        minimum_us: int,
+    ) -> int | None:
+        """Find the first changed-state run that spans ``minimum_us`` in PTS."""
+
+        run_start: int | None = None
+        for index, metric in enumerate(metrics):
+            is_changed = (
+                metric.state_score >= self.config.state_change_threshold
+                or metric.text_score >= self.config.text_change_threshold
+            )
+            if not is_changed:
+                run_start = None
+                continue
+            if run_start is None:
+                run_start = index
+                continue
+            if (
+                frames[index].timestamp_us - frames[run_start].timestamp_us
+                >= minimum_us
+            ):
+                return run_start
+        return None
+
     def _write_previews(
         self,
         source: Path,
         events: list[ChangeEvent],
         preview_dir: Path,
+        probe: VideoProbe,
     ) -> list[ChangeEvent]:
         preview_dir.mkdir(parents=True, exist_ok=True)
         updated: list[ChangeEvent] = []
         for index, event in enumerate(events):
             preview_path = preview_dir / (
-                f"{index:04d}_{event.keyframe_ms:012d}ms_{event.reason}.jpg"
+                f"{index:04d}_{event.keyframe_us:015d}us_{event.reason}.jpg"
             )
-            command = [
-                self.ffmpeg_path,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-ss",
-                f"{event.keyframe_ms / 1000.0:.6f}",
-                "-i",
-                str(source),
-                "-map",
-                "0:v:0",
-                "-frames:v",
-                "1",
-                "-q:v",
-                "2",
-                "-y",
-                str(preview_path),
-            ]
-            subprocess.run(command, check=True, capture_output=True)
+            decoded = decode_video_frame_at(
+                source,
+                timestamp=event.keyframe,
+                timeline_origin_us=probe.timeline_origin_us,
+                stream_index=probe.stream_index,
+                target_size=None,
+            )
+            decoded.image.save(
+                preview_path,
+                format="JPEG",
+                quality=95,
+                subsampling=0,
+            )
             updated.append(replace(event, preview_path=str(preview_path)))
         return updated
-
-
-def _resolve_executable(name: str) -> str:
-    resolved = shutil.which(name)
-    if resolved is None:
-        raise FileNotFoundError(f"required executable '{name}' was not found on PATH")
-    return resolved
-
-
-def _parse_frame_rate(value: object) -> float | None:
-    if not isinstance(value, str) or not value or value == "0/0":
-        return None
-    if "/" in value:
-        numerator, denominator = value.split("/", 1)
-        denominator_value = float(denominator)
-        if denominator_value == 0:
-            return None
-        return float(numerator) / denominator_value
-    return float(value)
-
-
-def _read_exact(stream: IO[bytes], size: int) -> bytes:
-    chunks: list[bytes] = []
-    remaining = size
-    while remaining:
-        chunk = stream.read(remaining)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-def _generator_is_closing() -> bool:
-    # When a consumer intentionally stops iterating, GeneratorExit reaches the
-    # finally block.  FFmpeg then commonly exits with a broken-pipe status.  The
-    # scanner always consumes streams fully, so this is primarily defensive.
-    import sys
-
-    return sys.exc_info()[0] is GeneratorExit
-
 
 def synthetic_observations(
     images: Iterable[Image.Image],
@@ -853,9 +903,38 @@ def synthetic_observations(
 ) -> Iterator[FrameObservation]:
     """Build observations for deterministic tests and calibration tools."""
 
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+    microsecond_time_base = Rational(numerator=1, denominator=1_000_000)
     for index, image in enumerate(images):
+        timestamp_us = round(index * 1_000_000.0 / fps)
         yield FrameObservation(
-            timestamp_ms=round(index * 1000.0 / fps),
+            timestamp=MediaTimestamp.from_pts(
+                timestamp_us,
+                microsecond_time_base,
+                timeline_origin_us=0,
+            ),
+            image=image.convert("RGB"),
+            sharpness=frame_sharpness(image),
+        )
+
+
+def timestamped_observations(
+    images: Iterable[Image.Image],
+    *,
+    timestamps_us: Iterable[int],
+) -> Iterator[FrameObservation]:
+    """Build observations at explicit, potentially non-uniform timestamps."""
+
+    microsecond_time_base = Rational(numerator=1, denominator=1_000_000)
+    for image, timestamp_us in zip(images, timestamps_us, strict=True):
+        timestamp = MediaTimestamp.from_pts(
+            timestamp_us,
+            microsecond_time_base,
+            timeline_origin_us=0,
+        )
+        yield FrameObservation(
+            timestamp=timestamp,
             image=image.convert("RGB"),
             sharpness=frame_sharpness(image),
         )

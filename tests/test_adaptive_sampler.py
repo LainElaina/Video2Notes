@@ -4,11 +4,15 @@ import unittest
 
 from PIL import Image, ImageDraw
 
+from video2notes.domain import Rational
 from video2notes.vision.adaptive_sampler import (
     AdaptiveScanConfig,
+    ScanResult,
     StableStateDetector,
+    VideoProbe,
     compare_frames,
     synthetic_observations,
+    timestamped_observations,
 )
 
 SIZE = (640, 360)
@@ -92,6 +96,79 @@ class StableStateDetectorTests(unittest.TestCase):
         events = self.detector.detect(synthetic_observations(frames, fps=FPS))
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1].reason, "hard_cut")
+
+    def test_sparse_frames_use_pts_span_instead_of_configured_fps(self) -> None:
+        detector = StableStateDetector(
+            AdaptiveScanConfig(
+                coarse_fps=30.0,
+                fine_fps=30.0,
+                min_persistence_ms=500,
+                settle_ms=500,
+                cooldown_ms=250,
+                state_change_threshold=0.020,
+                text_change_threshold=0.014,
+                stable_step_threshold=0.010,
+                hard_cut_threshold=0.10,
+            )
+        )
+        first = slide(bullet_count=1)
+        second = slide(bullet_count=2)
+        frames = [first, second, second.copy(), second.copy()]
+        timestamps_us = [0, 500_000, 1_100_000, 1_700_000]
+
+        events = detector.detect(
+            timestamped_observations(frames, timestamps_us=timestamps_us)
+        )
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1].transition_us, 500_000)
+        self.assertEqual(events[1].keyframe_us, 1_100_000)
+
+    def test_many_short_lived_frames_do_not_fake_persistence(self) -> None:
+        base = slide(bullet_count=1)
+        changed = slide(bullet_count=2)
+        timestamps_us = [0, 300_000, *range(500_000, 610_000, 10_000)]
+        frames = [base, base.copy()]
+        frames.extend(changed.copy() for _ in range(len(timestamps_us) - 2))
+
+        events = self.detector.detect(
+            timestamped_observations(frames, timestamps_us=timestamps_us)
+        )
+
+        self.assertEqual([event.reason for event in events], ["initial"])
+
+    def test_event_manifest_keeps_raw_pts_and_rational_time_base(self) -> None:
+        first = slide(bullet_count=1)
+        second = slide(bullet_count=2)
+        frames = [first.copy() for _ in range(6)]
+        frames.extend(second.copy() for _ in range(8))
+        events = self.detector.detect(synthetic_observations(frames, fps=FPS))
+        probe = VideoProbe(
+            duration_us=4_000_000,
+            width=640,
+            height=360,
+            frame_rate=FPS,
+            timeline_origin_us=0,
+            stream_index=0,
+            stream_time_base=Rational(numerator=1, denominator=1_000_000),
+        )
+
+        payload = ScanResult(
+            source="fixture.mp4",
+            probe=probe,
+            config=self.config,
+            events=tuple(events),
+        ).to_dict()
+
+        self.assertEqual(payload["schema_version"], 2)
+        event_payload = payload["events"][1]
+        self.assertEqual(event_payload["transition_us"], events[1].transition_us)
+        self.assertEqual(event_payload["transition_pts"], events[1].transition.pts)
+        self.assertEqual(
+            event_payload["transition_time_base"],
+            {"numerator": 1, "denominator": 1_000_000},
+        )
+        self.assertNotIn("transition_ms", event_payload)
 
 
 if __name__ == "__main__":
