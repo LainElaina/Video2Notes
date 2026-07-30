@@ -255,6 +255,19 @@ fn find_backend_executable(app: &AppHandle) -> Option<(PathBuf, Option<PathBuf>)
     } else {
         "video2notes"
     };
+
+    // Installed and portable release builds must exercise the frozen backend
+    // shipped beside the desktop executable, even when a portable directory
+    // happens to live inside a source checkout that also contains `.venv`.
+    // Debug builds keep the opposite preference so `tauri dev` continues to
+    // use the editable Python environment.
+    let bundled_backend = find_bundled_backend_executable(app, executable_name);
+    if !cfg!(debug_assertions) {
+        if let Some(backend) = bundled_backend.clone() {
+            return Some(backend);
+        }
+    }
+
     let mut roots = Vec::new();
     if let Ok(current) = env::current_dir() {
         roots.push(current);
@@ -273,19 +286,28 @@ fn find_backend_executable(app: &AppHandle) -> Option<(PathBuf, Option<PathBuf>)
         }
     }
 
-    if let Ok(resources) = app.path().resource_dir() {
-        for candidate in [
-            resources.join("backend").join(executable_name),
-            resources.join(executable_name),
-        ] {
-            if candidate.is_file() {
-                return Some((candidate, None));
-            }
-        }
+    if let Some(backend) = bundled_backend {
+        return Some(backend);
     }
 
     // A normal installed `video2notes` command on PATH is the final fallback.
     Some((PathBuf::from(executable_name), None))
+}
+
+fn find_bundled_backend_executable(
+    app: &AppHandle,
+    executable_name: &str,
+) -> Option<(PathBuf, Option<PathBuf>)> {
+    let resources = app.path().resource_dir().ok()?;
+    for candidate in [
+        resources.join("backend").join(executable_name),
+        resources.join(executable_name),
+    ] {
+        if candidate.is_file() {
+            return Some((candidate, None));
+        }
+    }
+    None
 }
 
 fn refresh_backend_status(state: &mut BackendState) {

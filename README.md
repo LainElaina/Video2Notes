@@ -278,6 +278,7 @@ $env:VIDEO2NOTES_TOKEN = "请使用至少16字符的随机本地令牌"
 .\scripts\dev.ps1              # loopback API + Vite
 .\scripts\dev.ps1 -Tauri       # Tauri 开发窗口；脚本管理本次开发 API
 .\scripts\build.ps1            # Python wheel + Vite 生产构建
+.\scripts\build_portable.ps1   # 免安装目录；双击顶层 Video2Notes.exe
 .\scripts\build.ps1 -Tauri     # 自包含后端 + FFmpeg + Tauri 安装包
 ```
 
@@ -287,7 +288,9 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 构建脚本会从 FFmpeg 二进制目录或其父目录一并查找许可证；若目录布局不同，使用 `-FfmpegLicensePath` 显式指定。发行包还包含项目 MIT 许可证、第三方 notices、完整 `ffmpeg -version` 输出和对应源码引用。
 
-构建产物位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。本机最终验证的含样例 MSI 为 **154,059,279 B**（SHA-256 `2D2BCCE4BD5B5B91069007EEE0D14A1DEC305B25688DDF8A69F84E83CF98007F`），NSIS 为 **112,515,353 B**（SHA-256 `61733C7F16CD518CB32A8A87D4EAC2C3F80DDFE3A48A876D48E5678BD3A954EE`）；安装后不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。sidecar 原始资源约 355.4 MiB，主要体积来自两个静态 FFmpeg 工具。两种本地构建产物都未做 Authenticode 签名，因此首次运行时 Windows SmartScreen 可能提示未知发布者。
+免安装调试版输出到 `artifacts/portable/current/`；只需双击其中的 `Video2Notes.exe`，无需安装、注册卸载项或替换 Program Files。顶层 EXE 旁的 `backend/`、`demo/`、`licenses/` 是运行资源，不能单独移动 EXE。默认仍把任务与配置放在 Windows AppData，因此反复覆盖 `current` 不会删除已有结果。完整构建会重新冻结 sidecar；只改 React/Rust 时可显式使用 `.\scripts\build_portable.ps1 -ReuseSidecar`，另加 `-Zip` 可生成搬运用压缩包。每次构建的 commit、dirty 状态和文件哈希记录在产物自己的 `BUILD_INFO.json` 与 `SHA256SUMS.txt` 中。
+
+安装包位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。安装版和免安装版都不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。sidecar 原始资源约 355.4 MiB，主要体积来自两个静态 FFmpeg 工具。未签名的本地调试构建首次运行时，Windows SmartScreen 可能提示未知发布者；调试构建的变化哈希不硬编码在 README 中，以产物旁的校验文件为准。
 
 ## 测试与构建
 
@@ -300,6 +303,9 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 # 构建并 smoke 测试独立后端，再产出 Windows 安装包
 .\scripts\build.ps1 -Tauri
+
+# 构建可反复覆盖、无需安装的 Windows 便携目录
+.\scripts\build_portable.ps1
 ```
 
 截至 2026-07-28，完整 Python 验证已通过 **133** 个测试（约 **82%** 覆盖率）；React 已通过 ESLint、TypeScript、**12** 个 Vitest、Vite build，Rust 已通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。

@@ -134,6 +134,7 @@ Write-Host "  Tests:   .\scripts\test.ps1"
 Write-Host "  Verify:  .\scripts\verify.ps1"
 Write-Host "  Dev:     .\scripts\dev.ps1"
 Write-Host "  Build:   .\scripts\build.ps1"
+Write-Host "  Portable: .\scripts\build_portable.ps1"
 if (-not $WithAsr -or -not $WithOcr) {
     Write-Host "  Optional local runtimes: rerun with -WithAsr and/or -WithOcr (models remain local and are never downloaded by bootstrap)."
 }
