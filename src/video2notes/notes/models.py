@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Self
 
@@ -25,6 +26,8 @@ class NoteMetadata(NoteModel):
     duration_us: int = Field(ge=0)
     languages: list[str] = Field(default_factory=list)
     quality_mode: str
+    report_preset: str = "detailed"
+    report_template_version: str = "1"
     source_resolution: str | None = None
     quality_warnings: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -47,6 +50,52 @@ class NoteScreenshot(NoteModel):
         return str(path)
 
 
+class SupportingMaterialKind(StrEnum):
+    TEXT = "text"
+    IMAGE = "image"
+
+
+class SupportingMaterial(NoteModel):
+    """An immutable, run-relative snapshot of external material used by a note."""
+
+    id: str = Field(pattern=r"^material-[A-Za-z0-9]+$")
+    kind: SupportingMaterialKind
+    title: str = Field(min_length=1, max_length=240)
+    artifact_path: str
+    media_type: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size_bytes: int = Field(ge=0)
+    text_content: str | None = None
+    original_name: str | None = None
+    start_us: int | None = Field(default=None, ge=0)
+    end_us: int | None = Field(default=None, ge=0)
+
+    @field_validator("artifact_path")
+    @classmethod
+    def validate_artifact_path(cls, value: str) -> str:
+        normalized = value.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if path.is_absolute() or ".." in path.parts or normalized in {"", "."}:
+            raise ValueError("supporting material path must stay inside the run directory")
+        return str(path)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> Self:
+        if (self.start_us is None) != (self.end_us is None):
+            raise ValueError("supporting material range must provide both start_us and end_us")
+        if (
+            self.start_us is not None
+            and self.end_us is not None
+            and self.end_us <= self.start_us
+        ):
+            raise ValueError("supporting material end_us must be greater than start_us")
+        if self.kind is SupportingMaterialKind.TEXT and self.text_content is None:
+            raise ValueError("text supporting material requires text_content")
+        if self.kind is SupportingMaterialKind.IMAGE and not self.media_type.startswith("image/"):
+            raise ValueError("image supporting material requires an image media type")
+        return self
+
+
 class FactCard(NoteModel):
     id: str = Field(min_length=1)
     claim: str = Field(min_length=1)
@@ -65,6 +114,7 @@ class NoteSection(NoteModel):
     body_markdown: str
     evidence_ids: list[str] = Field(default_factory=list)
     fact_ids: list[str] = Field(default_factory=list)
+    material_ids: list[str] = Field(default_factory=list)
     screenshots: list[NoteScreenshot] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -87,6 +137,7 @@ class NoteDocument(NoteModel):
     sections: list[NoteSection]
     facts: list[FactCard] = Field(default_factory=list)
     evidence: list[EvidenceSpan] = Field(default_factory=list)
+    supporting_materials: list[SupportingMaterial] = Field(default_factory=list)
     glossary: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -108,6 +159,10 @@ class NoteDocument(NoteModel):
                 context=f"fact '{fact.id}'",
             )
 
+        material_ids = {item.id for item in self.supporting_materials}
+        if len(material_ids) != len(self.supporting_materials):
+            raise ValueError("supporting material IDs must be unique")
+
         section_ids = {item.id for item in self.sections}
         if len(section_ids) != len(self.sections):
             raise ValueError("section IDs must be unique")
@@ -121,6 +176,11 @@ class NoteDocument(NoteModel):
                 section.fact_ids,
                 fact_ids,
                 context=f"section '{section.id}' facts",
+            )
+            _require_known(
+                section.material_ids,
+                material_ids,
+                context=f"section '{section.id}' supporting materials",
             )
             for screenshot in section.screenshots:
                 _require_known(

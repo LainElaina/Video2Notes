@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from video2notes.artifacts import RunWorkspace
 from video2notes.audio import (
     ASRSegment,
     ASRTranscript,
@@ -27,6 +29,13 @@ from video2notes.pipeline import (
 )
 from video2notes.sources import AcquisitionPolicy, SourceInput, SourceRegistry
 from video2notes.system import GpuDevice, HardwareSnapshot, QualityMode
+from video2notes.vision import (
+    SamplingMode,
+    SamplingOverride,
+    SamplingPlan,
+    SamplingSpec,
+    TimeRange,
+)
 
 
 class FakeAsr:
@@ -177,6 +186,74 @@ def fixture_hardware() -> HardwareSnapshot:
 
 
 class PipelineEndToEndTests(unittest.TestCase):
+    def test_visual_stage_executes_adaptive_fixed_and_skip_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=FakeAsr(),
+                ocr_backend=None,
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.FAST,
+                sampling_plan=SamplingPlan(
+                    default=SamplingSpec(mode=SamplingMode.ADAPTIVE),
+                    overrides=[
+                        SamplingOverride(
+                            range=TimeRange(start_us=500_000, end_us=1_000_000),
+                            sampling=SamplingSpec(
+                                mode=SamplingMode.FIXED_INTERVAL,
+                                interval_us=100_000,
+                            ),
+                        ),
+                        SamplingOverride(
+                            range=TimeRange(start_us=1_000_000, end_us=1_500_000),
+                            sampling=SamplingSpec(mode=SamplingMode.SKIP),
+                        ),
+                    ],
+                ),
+                include_screenshots=False,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(request, run_id="segmented-sampling")
+
+            pipeline.run(workspace, request)
+
+            states = json.loads(
+                (workspace.root / "vision" / "visual-states.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIn("fixed_interval", {item["change_reason"] for item in states})
+            self.assertTrue(
+                all(
+                    not (item["start_us"] < 1_500_000 and item["end_us"] > 1_000_000)
+                    for item in states
+                )
+            )
+            fixed_states = [
+                item for item in states if item["change_reason"] == "fixed_interval"
+            ]
+            self.assertGreaterEqual(len(fixed_states), 4)
+            self.assertTrue(
+                all(
+                    item["quality"]["requested_interval_us"] == 100_000
+                    and item["quality"]["sampling_mode"] == "fixed_interval"
+                    for item in fixed_states
+                )
+            )
+            record = RunWorkspace(workspace.root).manifest.stages["vision.scan"]
+            self.assertEqual(record.metrics["fixed_interval_segment_count"], 1)
+            self.assertEqual(record.metrics["skip_segment_count"], 1)
+            self.assertEqual(record.metrics["adaptive_segment_count"], 2)
+
     def test_visual_scan_keeps_a_representative_when_ocr_abstains(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

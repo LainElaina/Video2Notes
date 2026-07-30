@@ -8,7 +8,7 @@ import os
 import shutil
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
@@ -40,12 +40,15 @@ from video2notes.domain import (
     VisualState,
 )
 from video2notes.fusion import FusionResult, build_evidence_timeline
+from video2notes.media import iter_video_frames
 from video2notes.notes import (
     EvidenceNoteComposer,
     NoteCompositionResult,
     NoteDocument,
     NoteMetadata,
     NoteScreenshot,
+    OutputFormat,
+    ReportSpec,
     render_pdf_from_html,
     write_html,
     write_markdown,
@@ -74,9 +77,14 @@ from video2notes.system import (
     detect_hardware,
 )
 from video2notes.vision import (
+    MAX_FIXED_SAMPLES,
     AdaptiveScanConfig,
     AdaptiveVideoScanner,
     ChangeEvent,
+    SamplingMode,
+    SamplingPlan,
+    SamplingSegment,
+    merge_change_events,
 )
 
 
@@ -91,8 +99,28 @@ class PipelineRequest(PipelineModel):
     quality_mode: QualityMode = QualityMode.BALANCED
     title_override: str | None = None
     language_hints: list[str] = Field(default_factory=list)
+    sampling_plan: SamplingPlan = Field(default_factory=SamplingPlan)
     include_screenshots: bool = True
     generate_pdf: bool = True
+    report_spec: ReportSpec | None = None
+
+    def effective_report_spec(self) -> ReportSpec:
+        """Resolve legacy booleans into the new report contract.
+
+        Explicit report_spec values take precedence. This preserves existing
+        CLI/API requests while allowing the desktop UI to select an audience,
+        detail budget, screenshots, and output formats as one coherent policy.
+        """
+
+        if self.report_spec is not None:
+            return self.report_spec
+        output_formats = {OutputFormat.MARKDOWN, OutputFormat.HTML}
+        if self.generate_pdf:
+            output_formats.add(OutputFormat.PDF)
+        return ReportSpec(
+            include_screenshots=self.include_screenshots,
+            output_formats=output_formats,
+        )
 
 
 class PipelineOutcome(PipelineModel):
@@ -151,14 +179,14 @@ class Video2NotesPipeline:
     STAGE_VERSIONS: Mapping[str, str] = {
         "source.acquire": "2",
         "media.probe": "2",
-        "vision.scan": "3",
+        "vision.scan": "4",
         "audio.extract": "2",
         "captions.parse": "2",
         "audio.asr": "4",
         "ocr.extract": "2",
         "evidence.fuse": "2",
-        "notes.compose": "3",
-        "render.outputs": "5",
+        "notes.compose": "4",
+        "render.outputs": "6",
     }
 
     def __init__(
@@ -214,7 +242,7 @@ class Video2NotesPipeline:
                 media_ref,
                 progress,
             )
-            plan = build_execution_plan(
+            execution_plan = build_execution_plan(
                 self.runtime.hardware or detect_hardware(),
                 request.quality_mode,
             )
@@ -223,7 +251,8 @@ class Video2NotesPipeline:
                 workspace,
                 media,
                 media_ref,
-                plan.model_dump(mode="json"),
+                execution_plan.model_dump(mode="json"),
+                request.sampling_plan,
                 cancellation,
                 progress,
             )
@@ -437,27 +466,36 @@ class Video2NotesPipeline:
         workspace: RunWorkspace,
         media: MediaManifest,
         media_ref: ArtifactRef,
-        plan: dict[str, Any],
+        execution_plan: dict[str, Any],
+        sampling_plan: SamplingPlan,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[list[VisualState], ArtifactRef]:
         states_path = workspace.artifact_path("vision", "visual-states.json")
         events_path = workspace.artifact_path("vision", "scan-events.json")
-        analysis_width = int(plan["analysis_width"])
+        segments = sampling_plan.compile(
+            media.duration_us,
+            max_fixed_samples=MAX_FIXED_SAMPLES,
+        )
+        analysis_width = int(execution_plan["analysis_width"])
         analysis_height = max(64, round(analysis_width * 9 / 16))
         if analysis_height % 2:
             analysis_height += 1
         config = AdaptiveScanConfig(
-            coarse_fps=float(plan["cheap_scan_fps"]),
-            fine_fps=float(plan["expensive_scan_fps"]),
+            coarse_fps=float(execution_plan["cheap_scan_fps"]),
+            fine_fps=float(execution_plan["expensive_scan_fps"]),
             analysis_width=analysis_width,
             analysis_height=analysis_height,
         )
+        compiled_payload = [item.model_dump(mode="json") for item in segments]
         with workspace.stage(
             "vision.scan",
             stage_version=self.STAGE_VERSIONS["vision.scan"],
             config={
                 "scanner": asdict(config),
+                "sampling_plan": sampling_plan.model_dump(mode="json"),
+                "sampling_segments": compiled_payload,
+                "max_fixed_samples": MAX_FIXED_SAMPLES,
                 "ffprobe": self.runtime.ffprobe_path,
             },
             inputs=[media_ref],
@@ -466,22 +504,90 @@ class Video2NotesPipeline:
                 states = _read_model_list(states_path, VisualState)
             else:
                 cancel.raise_if_cancelled()
-                emit("vision.scan", progress=0.0, message="顺序扫描持久画面变化")
+                emit("vision.scan", progress=0.0, message="按分段计划扫描视频画面")
                 scanner = AdaptiveVideoScanner(
                     config,
                     ffmpeg_path=self.runtime.ffmpeg_path,
                     ffprobe_path=self.runtime.ffprobe_path,
                     cancel_check=cancel.raise_if_cancelled,
                 )
-                result = scanner.scan(
-                    media.source_path,
-                    preview_dir=workspace.artifact_path("vision", "keyframes"),
+                adaptive_probe = (
+                    scanner.probe(media.source_path)
+                    if any(
+                        item.sampling.mode is SamplingMode.ADAPTIVE
+                        for item in segments
+                    )
+                    else None
                 )
-                _write_json(events_path, result.to_dict())
+                discovered: list[ChangeEvent] = []
+                raw_event_count = 0
+                fixed_sample_count = 0
+                for index, segment in enumerate(segments):
+                    cancel.raise_if_cancelled()
+                    segment_dir = workspace.artifact_path(
+                        "vision",
+                        "keyframes",
+                        f"segment-{index:04d}",
+                    )
+                    if segment.sampling.mode is SamplingMode.ADAPTIVE:
+                        result = scanner.scan_range(
+                            media.source_path,
+                            start_us=segment.start_us,
+                            end_us=segment.end_us,
+                            preview_dir=segment_dir,
+                            probe=adaptive_probe,
+                        )
+                        segment_events = [
+                            replace(
+                                item,
+                                sampling_mode="adaptive",
+                                segment_start_us=segment.start_us,
+                                segment_end_us=segment.end_us,
+                            )
+                            for item in result.events
+                        ]
+                    elif segment.sampling.mode is SamplingMode.FIXED_INTERVAL:
+                        segment_events = _fixed_interval_events(
+                            media,
+                            segment,
+                            preview_dir=segment_dir,
+                            cancel=cancel,
+                        )
+                        fixed_sample_count += len(segment_events)
+                        if fixed_sample_count > MAX_FIXED_SAMPLES:
+                            raise ValueError(
+                                "fixed_interval sampling exceeded runtime maximum "
+                                f"of {MAX_FIXED_SAMPLES} frames"
+                            )
+                    else:
+                        segment_events = []
+                    raw_event_count += len(segment_events)
+                    discovered.extend(segment_events)
+                    emit(
+                        "vision.scan",
+                        progress=(index + 1) / max(1, len(segments)),
+                        message=(
+                            f"完成采样分段 {index + 1}/{len(segments)}"
+                            f"（{segment.sampling.mode.value}）"
+                        ),
+                    )
+
+                events = merge_change_events(discovered)
+                _write_json(
+                    events_path,
+                    {
+                        "schema_version": 3,
+                        "source": media.source_path,
+                        "scanner": asdict(config),
+                        "sampling_plan": sampling_plan.model_dump(mode="json"),
+                        "segments": compiled_payload,
+                        "events": [item.to_dict() for item in events],
+                    },
+                )
                 stage.add_output(events_path, kind=ArtifactKind.VISUAL)
                 states = _events_to_visual_states(
                     workspace,
-                    list(result.events),
+                    events,
                     duration_us=media.duration_us,
                     run_id=workspace.manifest.run_id,
                     add_artifact=stage.add_output,
@@ -492,6 +598,34 @@ class Video2NotesPipeline:
                 )
                 stage.add_output(states_path, kind=ArtifactKind.VISUAL)
                 stage.add_metric("visual_state_count", len(states))
+                stage.add_metric("sampling_segment_count", len(segments))
+                stage.add_metric(
+                    "adaptive_segment_count",
+                    sum(
+                        item.sampling.mode is SamplingMode.ADAPTIVE
+                        for item in segments
+                    ),
+                )
+                stage.add_metric(
+                    "fixed_interval_segment_count",
+                    sum(
+                        item.sampling.mode is SamplingMode.FIXED_INTERVAL
+                        for item in segments
+                    ),
+                )
+                stage.add_metric(
+                    "skip_segment_count",
+                    sum(item.sampling.mode is SamplingMode.SKIP for item in segments),
+                )
+                stage.add_metric("fixed_interval_sample_count", fixed_sample_count)
+                stage.add_metric(
+                    "fixed_interval_requested_count",
+                    sum(item.estimated_sample_count for item in segments),
+                )
+                stage.add_metric(
+                    "deduplicated_visual_event_count",
+                    raw_event_count - len(events),
+                )
                 emit(
                     "vision.scan",
                     progress=1.0,
@@ -884,12 +1018,14 @@ class Video2NotesPipeline:
     ) -> tuple[NoteCompositionResult, ArtifactRef]:
         document_path = workspace.artifact_path("notes", "document.json")
         composition_path = workspace.artifact_path("notes", "composition.json")
+        report_spec = request.effective_report_spec()
+        resolved_report = report_spec.resolve()
         with workspace.stage(
             "notes.compose",
             stage_version=self.STAGE_VERSIONS["notes.compose"],
             config={
                 "composer": _composer_identity(self.runtime.note_composer),
-                "screenshots": request.include_screenshots,
+                "report_spec": resolved_report.model_dump(mode="json"),
                 "title_override": request.title_override,
             },
             inputs=[fusion_ref],
@@ -937,13 +1073,14 @@ class Video2NotesPipeline:
                 )
                 screenshots = (
                     _screenshots_for_windows(workspace, fusion, ocr_bundle)
-                    if request.include_screenshots
+                    if resolved_report.include_screenshots
                     else {}
                 )
                 composition = self.runtime.note_composer.compose(
                     metadata,
                     fusion,
                     screenshots_by_window=screenshots,
+                    report_spec=report_spec,
                 )
                 _write_model(document_path, composition.note)
                 _write_json(
@@ -984,13 +1121,16 @@ class Video2NotesPipeline:
         html_path = workspace.artifact_path("render", "note.html")
         pdf_path = workspace.artifact_path("render", "note.pdf")
         outcome_path = workspace.artifact_path("render", "outcome.json")
+        resolved_report = request.effective_report_spec().resolve()
+        generate_pdf = OutputFormat.PDF in resolved_report.output_formats
         with workspace.stage(
             "render.outputs",
             stage_version=self.STAGE_VERSIONS["render.outputs"],
             config={
                 "markdown": True,
                 "html": True,
-                "pdf": request.generate_pdf,
+                "pdf": generate_pdf,
+                "report_spec": resolved_report.model_dump(mode="json"),
                 "theme": "evidence-light-table-v1",
             },
             inputs=[note_ref],
@@ -1006,7 +1146,7 @@ class Video2NotesPipeline:
                 )
                 stage.add_output(markdown_path, kind=ArtifactKind.NOTE)
                 stage.add_output(html_path, kind=ArtifactKind.RENDER)
-                if request.generate_pdf:
+                if generate_pdf:
                     render_pdf_from_html(
                         html_path,
                         pdf_path,
@@ -1025,7 +1165,7 @@ class Video2NotesPipeline:
                     ),
                     pdf=(
                         workspace.ref_for(pdf_path, kind=ArtifactKind.RENDER)
-                        if request.generate_pdf
+                        if generate_pdf
                         else None
                     ),
                     note_document=note_ref,
@@ -1071,6 +1211,80 @@ def _write_json(path: Path, value: Any) -> None:
     os.replace(temporary, path)
 
 
+def _fixed_interval_events(
+    media: MediaManifest,
+    segment: SamplingSegment,
+    *,
+    preview_dir: Path,
+    cancel: CancellationToken,
+) -> list[ChangeEvent]:
+    """Decode and persist real source frames for one fixed-interval segment."""
+
+    interval_us = segment.sampling.interval_us
+    if segment.sampling.mode is not SamplingMode.FIXED_INTERVAL or interval_us is None:
+        raise ValueError("fixed interval events require a fixed_interval segment")
+    video_stream = media.video_stream
+    if video_stream is None:
+        raise ValueError("input does not contain a video stream")
+
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    events: list[ChangeEvent] = []
+    previous_keyframe = None
+    for index, decoded in enumerate(
+        iter_video_frames(
+            media.source_path,
+            timeline_origin_us=media.timeline_origin_us,
+            stream_index=video_stream.index,
+            sample_period_us=interval_us,
+            start_us=segment.start_us,
+            end_us=segment.end_us,
+            target_size=None,
+        )
+    ):
+        cancel.raise_if_cancelled()
+        if index >= MAX_FIXED_SAMPLES:
+            raise ValueError(
+                "fixed_interval sampling exceeded runtime maximum "
+                f"of {MAX_FIXED_SAMPLES} frames"
+            )
+        requested_time_us = (
+            decoded.requested_time_us
+            if decoded.requested_time_us is not None
+            else decoded.timestamp.time_us
+        )
+        preview_path = preview_dir / (
+            f"{index:05d}_{requested_time_us:015d}req_"
+            f"{decoded.timestamp.time_us:015d}us_fixed.jpg"
+        )
+        decoded.image.save(
+            preview_path,
+            format="JPEG",
+            quality=95,
+            subsampling=0,
+        )
+        events.append(
+            ChangeEvent(
+                transition=decoded.timestamp,
+                keyframe=decoded.timestamp,
+                previous_keyframe=previous_keyframe,
+                reason="fixed_interval",
+                state_score=0.0,
+                scene_score=0.0,
+                text_score=0.0,
+                step_score=0.0,
+                refined=False,
+                preview_path=str(preview_path),
+                sampling_mode="fixed_interval",
+                requested_time_us=requested_time_us,
+                requested_interval_us=interval_us,
+                segment_start_us=segment.start_us,
+                segment_end_us=segment.end_us,
+            )
+        )
+        previous_keyframe = decoded.timestamp
+    return events
+
+
 def _events_to_visual_states(
     workspace: RunWorkspace,
     events: list[ChangeEvent],
@@ -1081,8 +1295,14 @@ def _events_to_visual_states(
 ) -> list[VisualState]:
     states: list[VisualState] = []
     for index, event in enumerate(events):
+        segment_start_us = event.segment_start_us if event.segment_start_us is not None else 0
+        segment_end_us = (
+            event.segment_end_us if event.segment_end_us is not None else duration_us
+        )
         next_transition = (
-            events[index + 1].transition_us if index + 1 < len(events) else duration_us
+            min(events[index + 1].transition_us, segment_end_us)
+            if index + 1 < len(events)
+            else segment_end_us
         )
         end_us = max(event.keyframe_us, next_transition)
         keyframe_ref: ArtifactRef | None = None
@@ -1096,9 +1316,9 @@ def _events_to_visual_states(
             VisualState(
                 id=f"visual-state-{index:05d}",
                 run_id=run_id,
-                start_us=max(0, event.transition_us),
-                end_us=max(0, end_us),
-                transition_us=max(0, event.transition_us),
+                start_us=max(0, segment_start_us, event.transition_us),
+                end_us=max(0, min(end_us, segment_end_us)),
+                transition_us=max(0, segment_start_us, event.transition_us),
                 stable_keyframe_us=max(0, event.keyframe_us),
                 transition_pts=event.transition.pts,
                 keyframe_pts=event.keyframe.pts,
@@ -1111,6 +1331,9 @@ def _events_to_visual_states(
                     "text_score": event.text_score,
                     "step_score": event.step_score,
                     "refined": event.refined,
+                    "sampling_mode": event.sampling_mode,
+                    "requested_time_us": event.requested_time_us,
+                    "requested_interval_us": event.requested_interval_us,
                 },
             )
         )

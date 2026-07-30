@@ -12,6 +12,8 @@ from .models import (
     NoteMetadata,
     NoteScreenshot,
     NoteSection,
+    SupportingMaterial,
+    SupportingMaterialKind,
 )
 from .render import (
     format_timestamp,
@@ -20,6 +22,13 @@ from .render import (
     render_pdf_from_html,
     write_html,
     write_markdown,
+)
+from .reporting import OutputFormat, ReportPreset, ReportSpec, ResolvedReportSpec
+from .revisions import (
+    LatestReportRevision,
+    ReportRevisionIndex,
+    ReportRevisionRecord,
+    ReportRevisionService,
 )
 
 __all__ = [
@@ -31,6 +40,16 @@ __all__ = [
     "NoteMetadata",
     "NoteScreenshot",
     "NoteSection",
+    "SupportingMaterial",
+    "SupportingMaterialKind",
+    "OutputFormat",
+    "LatestReportRevision",
+    "ReportPreset",
+    "ReportRevisionIndex",
+    "ReportRevisionRecord",
+    "ReportRevisionService",
+    "ReportSpec",
+    "ResolvedReportSpec",
     "format_timestamp",
     "build_deterministic_note",
     "render_html",

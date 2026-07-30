@@ -28,7 +28,13 @@ from video2notes.media import (
     probe_media,
 )
 
-ChangeReason = Literal["initial", "hard_cut", "text_or_ui_change", "state_change"]
+ChangeReason = Literal[
+    "initial",
+    "hard_cut",
+    "text_or_ui_change",
+    "state_change",
+    "fixed_interval",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +155,11 @@ class ChangeEvent:
     step_score: float
     refined: bool
     preview_path: str | None = None
+    sampling_mode: Literal["adaptive", "fixed_interval"] = "adaptive"
+    requested_time_us: int | None = None
+    requested_interval_us: int | None = None
+    segment_start_us: int | None = None
+    segment_end_us: int | None = None
 
     @property
     def transition_us(self) -> int:
@@ -212,6 +223,11 @@ class ChangeEvent:
             "step_score": self.step_score,
             "refined": self.refined,
             "preview_path": self.preview_path,
+            "sampling_mode": self.sampling_mode,
+            "requested_time_us": self.requested_time_us,
+            "requested_interval_us": self.requested_interval_us,
+            "segment_start_us": self.segment_start_us,
+            "segment_end_us": self.segment_end_us,
         }
 
 
@@ -615,14 +631,70 @@ class AdaptiveVideoScanner:
 
         self._check_cancelled()
         probe = self.probe(source_path)
+        return self._scan_probed(
+            source_path,
+            probe=probe,
+            start_us=0,
+            end_us=probe.duration_us,
+            preview_dir=preview_dir,
+        )
+
+    def scan_range(
+        self,
+        source: str | Path,
+        *,
+        start_us: int,
+        end_us: int,
+        preview_dir: str | Path | None = None,
+        probe: VideoProbe | None = None,
+    ) -> ScanResult:
+        """Adaptively scan one half-open canonical-time range."""
+
+        source_path = Path(source).expanduser().resolve()
+        if not source_path.is_file():
+            raise FileNotFoundError(f"video does not exist: {source_path}")
+        if start_us < 0:
+            raise ValueError("start_us cannot be negative")
+        if end_us <= start_us:
+            raise ValueError("end_us must be greater than start_us")
+
+        self._check_cancelled()
+        resolved_probe = probe or self.probe(source_path)
+        if end_us > resolved_probe.duration_us:
+            raise ValueError("scan range ends after media duration")
+        return self._scan_probed(
+            source_path,
+            probe=resolved_probe,
+            start_us=start_us,
+            end_us=end_us,
+            preview_dir=preview_dir,
+        )
+
+    def _scan_probed(
+        self,
+        source_path: Path,
+        *,
+        probe: VideoProbe,
+        start_us: int,
+        end_us: int,
+        preview_dir: str | Path | None,
+    ) -> ScanResult:
         coarse = StableStateDetector(self.config).detect(
             self._decode_frames(
                 source_path,
                 probe=probe,
                 fps=self.config.coarse_fps,
+                start_us=start_us,
+                end_us=end_us,
             )
         )
-        refined = self._refine_events(source_path, coarse, probe)
+        refined = self._refine_events(
+            source_path,
+            coarse,
+            probe,
+            start_us=start_us,
+            end_us=end_us,
+        )
 
         if preview_dir is not None:
             refined = self._write_previews(
@@ -713,14 +785,25 @@ class AdaptiveVideoScanner:
         source: Path,
         coarse_events: list[ChangeEvent],
         probe: VideoProbe,
+        *,
+        start_us: int = 0,
+        end_us: int | None = None,
     ) -> list[ChangeEvent]:
         if len(coarse_events) <= 1:
             return coarse_events
 
         refined = [coarse_events[0]]
         reference = self._frame_at(source, coarse_events[0].keyframe, probe)
+        range_end_us = probe.duration_us if end_us is None else end_us
         for event in coarse_events[1:]:
-            candidate = self._refine_event(source, event, reference, probe)
+            candidate = self._refine_event(
+                source,
+                event,
+                reference,
+                probe,
+                start_us=start_us,
+                end_us=range_end_us,
+            )
             if candidate.keyframe_us <= refined[-1].keyframe_us:
                 continue
             refined.append(candidate)
@@ -733,15 +816,23 @@ class AdaptiveVideoScanner:
         coarse: ChangeEvent,
         reference: FrameObservation,
         probe: VideoProbe,
+        *,
+        start_us: int = 0,
+        end_us: int | None = None,
     ) -> ChangeEvent:
+        range_end_us = probe.duration_us if end_us is None else end_us
         start_us = max(
+            start_us,
             reference.timestamp_us,
             coarse.transition_us - self.config.refine_padding_ms * 1000,
         )
         end_us = min(
             probe.duration_us,
+            range_end_us,
             coarse.keyframe_us + self.config.refine_padding_ms * 1000,
         )
+        if end_us <= start_us:
+            return coarse
         frames = list(
             self._decode_frames(
                 source,

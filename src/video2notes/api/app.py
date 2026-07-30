@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -29,6 +29,22 @@ from video2notes.jobs import (
     JobSnapshot,
 )
 from video2notes.jobs.manager import EventEmitter
+from video2notes.materials import MaterialStore, RunMaterial, TextMaterialRequest
+from video2notes.notes import (
+    ReportRevisionIndex,
+    ReportRevisionRecord,
+    ReportRevisionService,
+    ReportSpec,
+)
+from video2notes.operations import (
+    EvidenceView,
+    OperationConflictError,
+    OperationInputError,
+    OperationNotFoundError,
+    OperationRecord,
+    OperationRequest,
+    OperationService,
+)
 from video2notes.pipeline import (
     PipelineOutcome,
     PipelineRequest,
@@ -171,6 +187,7 @@ class ApiContext:
         self.runtime_warnings: tuple[str, ...]
         self._results: dict[str, PipelineOutcome] = {}
         self._results_lock = threading.RLock()
+        self._operations_lock = threading.RLock()
         if pipeline is not None:
             self.pipeline = pipeline
             self.runtime_warnings = ()
@@ -547,6 +564,197 @@ def create_app(
         return FileResponse(target)
 
     @app.get(
+        "/api/runs/{run_id}/materials",
+        response_model=list[RunMaterial],
+        dependencies=protected,
+    )
+    def list_materials(run_id: str) -> list[RunMaterial]:
+        try:
+            return MaterialStore(context.get_workspace(run_id)).list()
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail="run not found") from None
+
+    @app.post(
+        "/api/runs/{run_id}/materials/text",
+        response_model=RunMaterial,
+        dependencies=protected,
+    )
+    def add_text_material(run_id: str, request: TextMaterialRequest) -> RunMaterial:
+        try:
+            return MaterialStore(context.get_workspace(run_id)).add_text(request)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+
+    @app.post(
+        "/api/runs/{run_id}/materials/files",
+        response_model=RunMaterial,
+        dependencies=protected,
+    )
+    async def add_file_material(
+        run_id: str,
+        file: Annotated[UploadFile, File()],
+        title: Annotated[str | None, Query(max_length=240)] = None,
+        start_us: Annotated[int | None, Query(ge=0)] = None,
+        end_us: Annotated[int | None, Query(ge=0)] = None,
+    ) -> RunMaterial:
+        try:
+            workspace = context.get_workspace(run_id)
+            content = await file.read(25 * 1024 * 1024 + 1)
+            return MaterialStore(workspace).add_file(
+                filename=file.filename or "material",
+                content_type=file.content_type,
+                content=content,
+                title=title,
+                start_us=start_us,
+                end_us=end_us,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        finally:
+            await file.close()
+
+    @app.delete(
+        "/api/runs/{run_id}/materials/{material_id}",
+        response_model=RunMaterial,
+        dependencies=protected,
+    )
+    def delete_material(run_id: str, material_id: str) -> RunMaterial:
+        try:
+            return MaterialStore(context.get_workspace(run_id)).delete(material_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except KeyError:
+            raise HTTPException(status_code=404, detail="material not found") from None
+
+    @app.get(
+        "/api/runs/{run_id}/operations",
+        response_model=list[OperationRecord],
+        dependencies=protected,
+    )
+    def list_operations(run_id: str) -> list[OperationRecord]:
+        try:
+            service = _operation_service(context, context.get_workspace(run_id))
+            return service.list_operations()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except OperationConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
+    @app.post(
+        "/api/runs/{run_id}/operations",
+        response_model=OperationRecord,
+        dependencies=protected,
+    )
+    def create_operation(
+        run_id: str,
+        request: OperationRequest,
+    ) -> OperationRecord:
+        try:
+            service = _operation_service(context, context.get_workspace(run_id))
+            return service.execute(request)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except OperationConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        except OperationInputError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+
+    @app.get(
+        "/api/runs/{run_id}/evidence",
+        response_model=EvidenceView,
+        dependencies=protected,
+    )
+    def get_evidence(
+        run_id: str,
+        revision: Annotated[str | None, Query(max_length=100)] = None,
+    ) -> EvidenceView:
+        try:
+            service = _operation_service(context, context.get_workspace(run_id))
+            return service.get_evidence(revision)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except OperationNotFoundError:
+            raise HTTPException(status_code=404, detail="evidence revision not found") from None
+        except OperationConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
+    @app.post(
+        "/api/runs/{run_id}/report-revisions",
+        response_model=ReportRevisionRecord,
+        dependencies=protected,
+    )
+    def create_report_revision(
+        run_id: str,
+        request: ReportSpec,
+    ) -> ReportRevisionRecord:
+        try:
+            workspace = context.get_workspace(run_id)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail="run not found") from None
+        try:
+            return _report_revision_service(context, workspace).create_revision(request)
+        except FileNotFoundError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=f"run is not ready for report revision: {error}",
+            ) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+
+    @app.get(
+        "/api/runs/{run_id}/report-revisions",
+        response_model=ReportRevisionIndex,
+        dependencies=protected,
+    )
+    def list_report_revisions(run_id: str) -> ReportRevisionIndex:
+        try:
+            workspace = context.get_workspace(run_id)
+            return _report_revision_service(context, workspace).list_revisions()
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail="run not found") from None
+
+    @app.get(
+        "/api/runs/{run_id}/report-revisions/latest",
+        response_model=ReportRevisionRecord,
+        dependencies=protected,
+    )
+    def get_latest_report_revision(run_id: str) -> ReportRevisionRecord:
+        try:
+            workspace = context.get_workspace(run_id)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(status_code=404, detail="run not found") from None
+        revision = _report_revision_service(context, workspace).latest_revision()
+        if revision is None:
+            raise HTTPException(status_code=404, detail="no report revision exists")
+        return revision
+
+    @app.get(
+        "/api/runs/{run_id}/report-revisions/{revision_id}",
+        response_model=ReportRevisionRecord,
+        dependencies=protected,
+    )
+    def get_report_revision(
+        run_id: str,
+        revision_id: str,
+    ) -> ReportRevisionRecord:
+        try:
+            workspace = context.get_workspace(run_id)
+            return _report_revision_service(context, workspace).get_revision(revision_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail="report revision not found",
+            ) from None
+        except ValueError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+
+    @app.get(
         "/api/jobs",
         response_model=list[JobSnapshot],
         dependencies=protected,
@@ -656,6 +864,32 @@ def create_app(
             ) from None
 
     return app
+
+
+def _operation_service(
+    context: ApiContext,
+    workspace: RunWorkspace,
+) -> OperationService:
+    runtime = getattr(context.pipeline, "runtime", None)
+    return OperationService(
+        workspace,
+        asr_backend=(runtime.asr_backend if runtime is not None else None),
+        ocr_backend=(runtime.ocr_backend if runtime is not None else None),
+        ffmpeg_path=(runtime.ffmpeg_path if runtime is not None else "ffmpeg"),
+        ffprobe_path=(runtime.ffprobe_path if runtime is not None else "ffprobe"),
+        lock=context._operations_lock,
+    )
+
+
+def _report_revision_service(
+    context: ApiContext,
+    workspace: RunWorkspace,
+) -> ReportRevisionService:
+    return ReportRevisionService(
+        workspace,
+        composer=context.pipeline.runtime.note_composer,
+        pdf_browser_executable=context.pipeline.runtime.pdf_browser_executable,
+    )
 
 
 def _require_provider(context: ApiContext, provider_id: str) -> ProviderSpec:

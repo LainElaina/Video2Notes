@@ -40,6 +40,7 @@ class DecodedVideoFrame:
     stream_index: int
     key_frame: bool
     picture_type: str | None = None
+    requested_time_us: int | None = None
 
 
 def iter_video_frames(
@@ -48,6 +49,7 @@ def iter_video_frames(
     timeline_origin_us: int,
     stream_index: int | None = None,
     sample_fps: float | None = None,
+    sample_period_us: int | None = None,
     start_us: int = 0,
     end_us: int | None = None,
     target_size: tuple[int, int] | None = None,
@@ -55,9 +57,11 @@ def iter_video_frames(
     """Decode video frames while retaining their source PTS.
 
     ``start_us`` and ``end_us`` are positions on the shared canonical media
-    timeline. The end is exclusive. When ``sample_fps`` is provided, the
-    decoder emits the first real source frame at or after each sampling tick;
-    the emitted timestamp always remains that source frame's PTS.
+    timeline. The end is exclusive. When ``sample_fps`` or
+    ``sample_period_us`` is provided, the decoder emits the first real source
+    frame at or after each sampling tick; the emitted timestamp always remains
+    that source frame's PTS. ``requested_time_us`` records the tick that selected
+    a sampled frame without replacing its physical timestamp.
     """
 
     source_path = Path(source).expanduser().resolve()
@@ -69,6 +73,10 @@ def iter_video_frames(
         raise ValueError("end_us must be greater than start_us")
     if sample_fps is not None and sample_fps <= 0:
         raise ValueError("sample_fps must be positive")
+    if sample_period_us is not None and sample_period_us <= 0:
+        raise ValueError("sample_period_us must be positive")
+    if sample_fps is not None and sample_period_us is not None:
+        raise ValueError("provide sample_fps or sample_period_us, not both")
     _validate_target_size(target_size)
 
     av = _load_av()
@@ -83,9 +91,13 @@ def iter_video_frames(
             )
 
         sample_period = (
-            Fraction(1_000_000, 1) / Fraction(str(sample_fps))
-            if sample_fps is not None
-            else None
+            Fraction(sample_period_us, 1)
+            if sample_period_us is not None
+            else (
+                Fraction(1_000_000, 1) / Fraction(str(sample_fps))
+                if sample_fps is not None
+                else None
+            )
         )
         next_sample = Fraction(start_us, 1)
 
@@ -100,9 +112,11 @@ def iter_video_frames(
             if end_us is not None and timestamp.time_us >= end_us:
                 break
 
+            requested_time_us: int | None = None
             if sample_period is not None:
                 if Fraction(timestamp.time_us, 1) < next_sample:
                     continue
+                requested_time_us = int(next_sample)
                 elapsed = Fraction(timestamp.time_us - start_us, 1)
                 completed_ticks = elapsed // sample_period
                 next_sample = (
@@ -115,6 +129,7 @@ def iter_video_frames(
                 timestamp,
                 stream_index=int(stream.index),
                 target_size=target_size,
+                requested_time_us=requested_time_us,
             )
 
 
@@ -257,6 +272,7 @@ def _decoded_frame(
     *,
     stream_index: int,
     target_size: tuple[int, int] | None,
+    requested_time_us: int | None = None,
 ) -> DecodedVideoFrame:
     image = _frame_to_image(frame, target_size=target_size)
     raw_picture_type = getattr(frame, "pict_type", None)
@@ -267,6 +283,7 @@ def _decoded_frame(
         stream_index=stream_index,
         key_frame=bool(getattr(frame, "key_frame", False)),
         picture_type=picture_type,
+        requested_time_us=requested_time_us,
     )
 
 

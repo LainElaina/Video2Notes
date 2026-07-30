@@ -119,6 +119,69 @@ class PtsDecoderTests(unittest.TestCase):
         canonical_times = [frame.timestamp.time_us for frame in decoded]
         self.assertTrue(any(value % 250_000 != 0 for value in canonical_times[1:]))
 
+    def test_integer_sample_period_retains_requested_tick_and_real_pts(self) -> None:
+        decoded = list(
+            iter_video_frames(
+                self.video,
+                timeline_origin_us=self.timeline_origin_us,
+                sample_period_us=250_000,
+            )
+        )
+
+        source_pts = {item[0] for item in self.expected}
+        self.assertTrue(all(frame.timestamp.pts in source_pts for frame in decoded))
+        requested = [frame.requested_time_us for frame in decoded]
+        self.assertTrue(all(item is not None for item in requested))
+        requested_ticks = [item for item in requested if item is not None]
+        self.assertEqual(requested_ticks, sorted(requested_ticks))
+        self.assertTrue(
+            any(
+                frame.requested_time_us != frame.timestamp.time_us
+                for frame in decoded[1:]
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "not both"):
+            list(
+                iter_video_frames(
+                    self.video,
+                    timeline_origin_us=self.timeline_origin_us,
+                    sample_fps=4.0,
+                    sample_period_us=250_000,
+                )
+            )
+
+    def test_range_aware_adaptive_scan_keeps_events_inside_real_pts_range(self) -> None:
+        scanner = AdaptiveVideoScanner(
+            AdaptiveScanConfig(
+                coarse_fps=4.0,
+                fine_fps=8.0,
+                analysis_width=160,
+                analysis_height=90,
+                min_persistence_ms=100,
+                settle_ms=100,
+            )
+        )
+        probe = scanner.probe(self.video)
+        start_us = 100_000
+        end_us = min(1_000_000, probe.duration_us)
+
+        result = scanner.scan_range(
+            self.video,
+            start_us=start_us,
+            end_us=end_us,
+        )
+
+        self.assertGreaterEqual(len(result.events), 1)
+        source_pts = {item[0] for item in self.expected}
+        self.assertTrue(
+            all(
+                start_us <= item.keyframe_us < end_us
+                and item.keyframe.pts in source_pts
+                for item in result.events
+            )
+        )
+
     def test_exact_frame_lookup_matches_pts_and_time_base(self) -> None:
         pts, time_base, _ = self.expected[2]
         target = MediaTimestamp.from_pts(

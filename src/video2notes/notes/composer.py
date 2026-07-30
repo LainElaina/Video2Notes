@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,8 +15,10 @@ from video2notes.llm import (
     GenerationError,
     GenerationRequest,
     GenerationResult,
+    ImageInput,
     StructuredGenerationBackend,
 )
+from video2notes.materials import MaterialKind, MaterialStatus, RunMaterial
 
 from .models import (
     FactCard,
@@ -22,7 +26,10 @@ from .models import (
     NoteMetadata,
     NoteScreenshot,
     NoteSection,
+    SupportingMaterial,
+    SupportingMaterialKind,
 )
+from .reporting import ReportSpec, ResolvedReportSpec
 
 
 class ComposerModel(BaseModel):
@@ -49,6 +56,7 @@ class CandidateSection(ComposerModel):
     body_markdown: str
     evidence_ids: list[str]
     fact_ids: list[str]
+    material_ids: list[str] = Field(default_factory=list)
 
 
 class NoteDraftEnvelope(ComposerModel):
@@ -108,15 +116,28 @@ class EvidenceNoteComposer:
         fusion: FusionResult,
         *,
         screenshots_by_window: Mapping[str, list[NoteScreenshot]] | None = None,
+        report_spec: ReportSpec | None = None,
+        supporting_materials: Sequence[RunMaterial | SupportingMaterial] = (),
+        artifact_root: str | Path | None = None,
     ) -> NoteCompositionResult:
         if fusion.run_id != metadata.run_id:
             raise ValueError("note metadata and fusion result must belong to one run")
+        resolved_report = (report_spec or ReportSpec()).resolve()
+        metadata = metadata.model_copy(
+            update={
+                "report_preset": resolved_report.preset.value,
+                "report_template_version": resolved_report.template_version,
+            }
+        )
         screenshots = screenshots_by_window or {}
+        materials = _canonical_supporting_materials(supporting_materials)
         if self.fact_backend is None or self.draft_backend is None:
             note = build_deterministic_note(
                 metadata,
                 fusion,
                 screenshots_by_window=screenshots,
+                report_spec=report_spec,
+                supporting_materials=materials,
             )
             return NoteCompositionResult(
                 note=note,
@@ -128,13 +149,23 @@ class EvidenceNoteComposer:
         warnings: list[str] = []
         try:
             facts = self._extract_facts(fusion, invocations)
-            draft = self._draft(metadata, fusion, facts, invocations)
+            draft = self._draft(
+                metadata,
+                fusion,
+                facts,
+                invocations,
+                report_spec=resolved_report,
+                supporting_materials=materials,
+                artifact_root=artifact_root,
+            )
             note = _note_from_draft(
                 metadata,
                 fusion,
                 facts,
                 draft,
                 screenshots_by_window=screenshots,
+                report_spec=resolved_report,
+                supporting_materials=materials,
             )
             if self.verifier_backend is not None and facts:
                 note = self._verify(note, fusion, invocations)
@@ -149,6 +180,8 @@ class EvidenceNoteComposer:
                 metadata,
                 fusion,
                 screenshots_by_window=screenshots,
+                report_spec=report_spec,
+                supporting_materials=materials,
             )
             return NoteCompositionResult(
                 note=note,
@@ -215,9 +248,17 @@ class EvidenceNoteComposer:
         fusion: FusionResult,
         facts: list[FactCard],
         invocations: list[InvocationSummary],
+        *,
+        report_spec: ResolvedReportSpec,
+        supporting_materials: Sequence[SupportingMaterial],
+        artifact_root: str | Path | None,
     ) -> NoteDraftEnvelope:
         if self.draft_backend is None:
             raise RuntimeError("draft backend is not configured")
+        material_payload, material_images = _material_prompt_payload(
+            supporting_materials,
+            artifact_root=artifact_root,
+        )
         result = self.draft_backend.generate(
             GenerationRequest(
                 role="notes.drafter",
@@ -226,16 +267,19 @@ class EvidenceNoteComposer:
                     {
                         "title": metadata.title,
                         "duration_us": metadata.duration_us,
+                        "report_spec": report_spec.model_dump(mode="json"),
                         "facts": [item.model_dump(mode="json") for item in facts],
                         "windows": [item.model_dump(mode="json") for item in fusion.windows],
+                        "supporting_materials": material_payload,
                     },
                     ensure_ascii=False,
                     indent=2,
                 ),
                 schema_name="video_note_document",
                 json_schema=NoteDraftEnvelope.model_json_schema(),
+                images=material_images,
                 temperature=0.2,
-                max_output_tokens=16_384,
+                max_output_tokens=report_spec.max_output_tokens,
             )
         )
         invocations.append(_invocation_summary(result))
@@ -298,18 +342,30 @@ def build_deterministic_note(
     fusion: FusionResult,
     *,
     screenshots_by_window: Mapping[str, list[NoteScreenshot]] | None = None,
+    report_spec: ReportSpec | None = None,
+    supporting_materials: Sequence[RunMaterial | SupportingMaterial] = (),
 ) -> NoteDocument:
     """Generate a useful extractive Markdown source without any LLM dependency."""
 
     if fusion.run_id != metadata.run_id:
         raise ValueError("note metadata and fusion result must belong to one run")
+    resolved_report = (report_spec or ReportSpec()).resolve()
+    metadata = metadata.model_copy(
+        update={
+            "report_preset": resolved_report.preset.value,
+            "report_template_version": resolved_report.template_version,
+        }
+    )
     screenshots = screenshots_by_window or {}
+    materials = _canonical_supporting_materials(supporting_materials)
     evidence_by_id = {item.id: item for item in fusion.evidence}
     facts: list[FactCard] = []
     sections: list[NoteSection] = []
     takeaway_candidates: list[str] = []
 
     for section_index, window in enumerate(fusion.windows):
+        if len(sections) >= resolved_report.max_sections:
+            break
         window_evidence = [
             evidence_by_id[item] for item in window.evidence_ids if item in evidence_by_id
         ]
@@ -338,11 +394,11 @@ def build_deterministic_note(
                 )
             )
             fact_ids.append(fact_id)
-            if len(takeaway_candidates) < 8:
+            if len(takeaway_candidates) < resolved_report.max_takeaways * 2:
                 takeaway_candidates.append(text)
             label = _modality_label(evidence.modality)
             body_lines.append(f"- **{label}** {text}")
-            if len(fact_ids) >= 16:
+            if len(fact_ids) >= resolved_report.max_facts_per_section:
                 break
 
         title_source = textual[0] if textual else None
@@ -359,6 +415,11 @@ def build_deterministic_note(
                 body_markdown="\n".join(body_lines) or "本节仅包含视觉证据，请查看关键截图。",
                 evidence_ids=[item.id for item in window_evidence],
                 fact_ids=fact_ids,
+                material_ids=_timed_material_ids_for_window(
+                    materials,
+                    start_us=window.start_us,
+                    end_us=window.end_us,
+                ),
                 screenshots=list(screenshots.get(window.id, [])),
             )
         )
@@ -371,10 +432,11 @@ def build_deterministic_note(
     return NoteDocument(
         metadata=metadata,
         abstract=abstract,
-        key_takeaways=takeaway_candidates[:5],
+        key_takeaways=takeaway_candidates[: resolved_report.max_takeaways],
         sections=sections,
         facts=facts,
         evidence=fusion.evidence,
+        supporting_materials=materials,
     )
 
 
@@ -385,20 +447,24 @@ def _note_from_draft(
     draft: NoteDraftEnvelope,
     *,
     screenshots_by_window: Mapping[str, list[NoteScreenshot]],
+    report_spec: ResolvedReportSpec,
+    supporting_materials: Sequence[SupportingMaterial],
 ) -> NoteDocument:
     evidence_ids = {item.id for item in fusion.evidence}
     fact_ids = {item.id for item in facts}
+    material_ids = {item.id for item in supporting_materials}
     all_screenshots = [
         screenshot
         for window_screenshots in screenshots_by_window.values()
         for screenshot in window_screenshots
     ]
     sections: list[NoteSection] = []
-    for index, candidate in enumerate(draft.sections):
+    for index, candidate in enumerate(draft.sections[: report_spec.max_sections]):
         unknown_evidence = set(candidate.evidence_ids) - evidence_ids
         unknown_facts = set(candidate.fact_ids) - fact_ids
-        if unknown_evidence or unknown_facts:
-            raise ValueError("draft cited unknown fact or evidence IDs")
+        unknown_materials = set(candidate.material_ids) - material_ids
+        if unknown_evidence or unknown_facts or unknown_materials:
+            raise ValueError("draft cited unknown fact, evidence, or supporting material IDs")
         if candidate.end_us < candidate.start_us:
             raise ValueError("draft section has a reversed interval")
         section_screenshots = [
@@ -416,18 +482,99 @@ def _note_from_draft(
                 body_markdown=candidate.body_markdown,
                 evidence_ids=candidate.evidence_ids,
                 fact_ids=candidate.fact_ids,
+                material_ids=candidate.material_ids,
                 screenshots=section_screenshots,
             )
         )
     return NoteDocument(
         metadata=metadata,
         abstract=draft.abstract,
-        key_takeaways=draft.key_takeaways,
+        key_takeaways=draft.key_takeaways[: report_spec.max_takeaways],
         sections=sections,
         facts=facts,
         evidence=fusion.evidence,
-        glossary=draft.glossary,
+        supporting_materials=list(supporting_materials),
+        glossary=draft.glossary if report_spec.include_glossary else {},
     )
+
+
+def _canonical_supporting_materials(
+    materials: Sequence[RunMaterial | SupportingMaterial],
+) -> list[SupportingMaterial]:
+    canonical: list[SupportingMaterial] = []
+    for material in materials:
+        if isinstance(material, SupportingMaterial):
+            canonical.append(material)
+            continue
+        if material.status is not MaterialStatus.ACTIVE:
+            continue
+        canonical.append(
+            SupportingMaterial(
+                id=material.id,
+                kind=(
+                    SupportingMaterialKind.TEXT
+                    if material.kind is MaterialKind.TEXT
+                    else SupportingMaterialKind.IMAGE
+                ),
+                title=material.title,
+                artifact_path=material.artifact.relative_path,
+                media_type=material.media_type,
+                sha256=material.sha256,
+                size_bytes=material.size_bytes,
+                text_content=material.text_content,
+                original_name=material.original_name,
+                start_us=material.start_us,
+                end_us=material.end_us,
+            )
+        )
+    identifiers = [item.id for item in canonical]
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("supporting material IDs must be unique")
+    return canonical
+
+
+def _material_prompt_payload(
+    materials: Sequence[SupportingMaterial],
+    *,
+    artifact_root: str | Path | None,
+) -> tuple[list[dict[str, object]], list[ImageInput]]:
+    root = Path(artifact_root).expanduser().resolve() if artifact_root is not None else None
+    payload: list[dict[str, object]] = []
+    images: list[ImageInput] = []
+    for material in materials:
+        item = material.model_dump(mode="json")
+        item["source_classification"] = "external_supporting_material"
+        if material.kind is SupportingMaterialKind.IMAGE and root is not None:
+            image_path = (root / material.artifact_path).resolve()
+            if image_path.is_relative_to(root) and image_path.is_file():
+                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+                images.append(
+                    ImageInput(
+                        data_url=f"data:{material.media_type};base64,{encoded}",
+                        detail="high",
+                    )
+                )
+                item["image_input_index"] = len(images) - 1
+        payload.append(item)
+    return payload, images
+
+
+def _timed_material_ids_for_window(
+    materials: Sequence[SupportingMaterial],
+    *,
+    start_us: int,
+    end_us: int,
+) -> list[str]:
+    """Attach only explicitly timed material; global material stays in the appendix."""
+
+    return [
+        material.id
+        for material in materials
+        if material.start_us is not None
+        and material.end_us is not None
+        and material.start_us < end_us
+        and start_us < material.end_us
+    ]
 
 
 def _window_prompt_payload(
@@ -491,7 +638,14 @@ OCR 与语音是互补来源，不要因为文字不同就把它们互相覆盖�
 证据冲突时保留候选并将 needs_review 设为 true。
 严格返回指定 JSON schema，不要输出解释。"""
 
-_DRAFT_SYSTEM_PROMPT = """你是中文视频笔记编辑。只能使用给定 fact cards 组织文稿，不得添加外部事实。
+_DRAFT_SYSTEM_PROMPT = """你是中文视频笔记编辑。
+只能使用给定 fact cards 与 supporting_materials 组织文稿，
+不得添加未提供的事实。supporting_materials 是用户从评论区、网页或本地文件加入的外部补充资料，
+绝不能把其中内容伪装成视频原话、画面文字或视频内已经证实的事实；引用它们的章节必须填写对应
+material_ids，并在正文中明确标注“外部补充资料”或等价措辞。图片内容只在对应 image_input_index
+存在时才可进行视觉解读；只有路径而没有图像输入时不得猜测图片内容。
+必须遵守输入 report_spec 中的 audience、editorial_goal、max_sections、max_takeaways
+和 include_glossary。
 按主题和物理时间组织章节；每一章节都要引用实际 fact_id 与 evidence_id。
 保持 start_us/end_us 在素材时长内。
 正文使用清晰 Markdown，可包含列表、步骤、表格和代码，但不要重复章节标题。明确标注待核对内容。

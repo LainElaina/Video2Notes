@@ -15,7 +15,13 @@ from urllib.parse import quote
 
 from markdown_it import MarkdownIt
 
-from .models import NoteDocument, NoteScreenshot, NoteSection
+from .models import (
+    NoteDocument,
+    NoteScreenshot,
+    NoteSection,
+    SupportingMaterial,
+    SupportingMaterialKind,
+)
 
 ProcessRunner = Callable[
     [Sequence[str]],
@@ -42,7 +48,12 @@ def _yaml_string(value: str) -> str:
     return f'"{escaped}"'
 
 
-def render_markdown(note: NoteDocument) -> str:
+def render_markdown(
+    note: NoteDocument,
+    *,
+    artifact_root: str | Path | None = None,
+    document_directory: str | Path | None = None,
+) -> str:
     """Render the primary portable output with evidence IDs kept in comments."""
 
     metadata = note.metadata
@@ -87,6 +98,15 @@ def render_markdown(note: NoteDocument) -> str:
     for section in note.sections:
         lines.extend(_render_markdown_section(note, section))
 
+    if note.supporting_materials:
+        lines.extend(
+            _render_markdown_materials(
+                note,
+                artifact_root=artifact_root,
+                document_directory=document_directory,
+            )
+        )
+
     if note.glossary:
         lines.extend(["## 术语表", "", "| 术语 | 说明 |", "|---|---|"])
         for term, definition in note.glossary.items():
@@ -113,6 +133,13 @@ def _render_markdown_section(note: NoteDocument, section: NoteSection) -> list[s
         lines.extend([f"> {section.summary.strip()}", ""])
     if section.body_markdown.strip():
         lines.extend([section.body_markdown.strip(), ""])
+    if section.material_ids:
+        materials_by_id = {item.id: item for item in note.supporting_materials}
+        references = "、".join(
+            f"[{materials_by_id[identifier].title}](#supporting-{identifier})"
+            for identifier in section.material_ids
+        )
+        lines.extend([f"**关联外部补充资料：** {references}", ""])
     for screenshot in section.screenshots:
         run_relative_path = screenshot.relative_path.replace(" ", "%20")
         markdown_path = (
@@ -139,10 +166,91 @@ def _render_markdown_section(note: NoteDocument, section: NoteSection) -> list[s
     return lines
 
 
-def write_markdown(note: NoteDocument, destination: str | Path) -> Path:
+def _render_markdown_materials(
+    note: NoteDocument,
+    *,
+    artifact_root: str | Path | None,
+    document_directory: str | Path | None,
+) -> list[str]:
+    lines = [
+        "## 补充资料",
+        "",
+        "> 本附录由用户添加的外部资料组成，不代表视频原话或画面文字。",
+        "",
+    ]
+    for material in note.supporting_materials:
+        lines.extend(
+            [
+                f'<a id="supporting-{material.id}"></a>',
+                "",
+                f"### {material.title}",
+                "",
+                _markdown_material_metadata(note, material),
+                "",
+            ]
+        )
+        if material.kind is SupportingMaterialKind.TEXT:
+            lines.extend([(material.text_content or "").strip(), ""])
+        else:
+            image_path = _markdown_artifact_path(
+                material.artifact_path,
+                artifact_root=artifact_root,
+                document_directory=document_directory,
+            )
+            lines.extend(
+                [
+                    f"![{material.title}]({image_path})",
+                    "",
+                ]
+            )
+        lines.extend([f"<!-- supporting-material: {material.id} -->", ""])
+    return lines
+
+
+def _markdown_material_metadata(
+    note: NoteDocument,
+    material: SupportingMaterial,
+) -> str:
+    prefix = f"`外部补充资料` · `{material.id}`"
+    if material.start_us is None or material.end_us is None:
+        return f"{prefix} · 全局资料（未绑定视频时间）"
+    start = format_timestamp(material.start_us)
+    end = format_timestamp(material.end_us)
+    return f"{prefix} · [{start}]({_seek_uri(note, material.start_us)})–{end}"
+
+
+def _markdown_artifact_path(
+    artifact_path: str,
+    *,
+    artifact_root: str | Path | None,
+    document_directory: str | Path | None,
+) -> str:
+    if artifact_root is not None and document_directory is not None:
+        root = Path(artifact_root).expanduser().resolve()
+        directory = Path(document_directory).expanduser().resolve()
+        target = (root / artifact_path).resolve()
+        if directory.is_relative_to(root) and target.is_relative_to(root):
+            relative = Path(os.path.relpath(target, start=directory)).as_posix()
+            return quote(relative)
+    return quote("../" + artifact_path)
+
+
+def write_markdown(
+    note: NoteDocument,
+    destination: str | Path,
+    *,
+    artifact_root: str | Path | None = None,
+) -> Path:
     target = Path(destination).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_text(target, render_markdown(note))
+    _atomic_write_text(
+        target,
+        render_markdown(
+            note,
+            artifact_root=artifact_root,
+            document_directory=target.parent,
+        ),
+    )
     return target
 
 
@@ -179,6 +287,7 @@ def render_html(
     )
     languages = " · ".join(note.metadata.languages) or "未标注"
     source = note.metadata.source_url or note.metadata.source_locator
+    supporting = _render_html_materials(note, md, artifact_root=artifact_root)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -212,6 +321,7 @@ def render_html(
       {takeaways}
     </div>
     <div class="section-stack">{sections}</div>
+    {supporting}
   </main>
   <footer>
     <span>Video2Notes · 证据优先笔记</span>
@@ -246,6 +356,18 @@ def _render_html_section(
         if section.evidence_ids
         else ""
     )
+    materials_by_id = {item.id: item for item in note.supporting_materials}
+    material_references = (
+        '<div class="material-references"><span>外部补充资料</span>'
+        + "".join(
+            f'<a href="#supporting-{html.escape(identifier)}">'
+            f"{html.escape(materials_by_id[identifier].title)}</a>"
+            for identifier in section.material_ids
+        )
+        + "</div>"
+        if section.material_ids
+        else ""
+    )
     start_uri = html.escape(_seek_uri(note, section.start_us), quote=True)
     return f"""
 <article id="{html.escape(section.id)}" class="note-section">
@@ -257,9 +379,77 @@ def _render_html_section(
     <h2>{html.escape(section.title)}</h2>
     <p class="section-summary">{html.escape(section.summary)}</p>
     <div class="prose">{markdown.render(section.body_markdown)}</div>
+    {material_references}
     {screenshots}
     {evidence_block}
   </div>
+</article>
+"""
+
+
+def _render_html_materials(
+    note: NoteDocument,
+    markdown: MarkdownIt,
+    *,
+    artifact_root: str | Path | None,
+) -> str:
+    if not note.supporting_materials:
+        return ""
+    items = "".join(
+        _render_html_material(
+            note,
+            material,
+            markdown,
+            artifact_root=artifact_root,
+        )
+        for material in note.supporting_materials
+    )
+    return f"""
+<section class="supporting-appendix" aria-labelledby="supporting-materials-title">
+  <p class="eyebrow">EXTERNAL SOURCES</p>
+  <h2 id="supporting-materials-title">补充资料</h2>
+  <p class="supporting-disclaimer">
+    本附录由用户添加的外部资料组成，不代表视频原话或画面文字。
+  </p>
+  <div class="supporting-grid">{items}</div>
+</section>
+"""
+
+
+def _render_html_material(
+    note: NoteDocument,
+    material: SupportingMaterial,
+    markdown: MarkdownIt,
+    *,
+    artifact_root: str | Path | None,
+) -> str:
+    if material.start_us is None or material.end_us is None:
+        time_label = '<span class="material-time global">全局资料 · 未绑定视频时间</span>'
+    else:
+        seek_uri = html.escape(_seek_uri(note, material.start_us), quote=True)
+        time_label = (
+            f'<a class="material-time" href="{seek_uri}">'
+            f"{format_timestamp(material.start_us)}–{format_timestamp(material.end_us)}</a>"
+        )
+    if material.kind is SupportingMaterialKind.TEXT:
+        content = f'<div class="prose">{markdown.render(material.text_content or "")}</div>'
+    else:
+        source = _image_source(material.artifact_path, artifact_root)
+        content = (
+            f'<img src="{html.escape(source, quote=True)}" '
+            f'alt="{html.escape(material.title)}">'
+        )
+    return f"""
+<article id="supporting-{html.escape(material.id)}" class="supporting-material">
+  <div class="supporting-heading">
+    <div>
+      <p class="material-kind">外部补充资料 · {html.escape(material.kind.value)}</p>
+      <h3>{html.escape(material.title)}</h3>
+    </div>
+    {time_label}
+  </div>
+  {content}
+  <code class="material-id">{html.escape(material.id)}</code>
 </article>
 """
 
@@ -625,6 +815,93 @@ summary { cursor: pointer; }
 .evidence-list code {
   padding: 3px 6px;
   border: 1px solid var(--line);
+}
+.material-references {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 8px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--teal);
+  background: #eef6f3;
+  font-size: 13px;
+}
+.material-references span {
+  color: var(--muted);
+  font-weight: 700;
+}
+.material-references a {
+  color: var(--teal);
+  font-weight: 650;
+}
+.supporting-appendix {
+  margin-top: 64px;
+  padding: 38px 46px 48px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+.supporting-appendix > h2 {
+  margin: 0;
+  font: 650 36px/1.15 "IBM Plex Sans Condensed",
+    "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+}
+.supporting-disclaimer {
+  max-width: 720px;
+  margin: 10px 0 30px;
+  color: var(--muted);
+}
+.supporting-grid {
+  display: grid;
+  gap: 18px;
+}
+.supporting-material {
+  padding: 22px;
+  border: 1px solid var(--line);
+  background: #f7f9f7;
+  break-inside: avoid-page;
+}
+.supporting-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.supporting-heading h3 {
+  margin: 2px 0 0;
+  font-size: 20px;
+}
+.material-kind {
+  margin: 0;
+  color: var(--teal);
+  font: 700 11px/1.4 "Cascadia Mono", monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.material-time {
+  flex: 0 0 auto;
+  color: var(--vermilion);
+  font: 700 12px/1.6 "Cascadia Mono", monospace;
+  text-decoration: none;
+}
+.material-time.global {
+  color: var(--muted);
+}
+.supporting-material > img {
+  display: block;
+  max-width: 100%;
+  max-height: 620px;
+  margin: 0 auto 16px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.material-id {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
 }
 footer {
   display: flex;

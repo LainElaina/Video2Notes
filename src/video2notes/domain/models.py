@@ -74,6 +74,7 @@ class ArtifactKind(StrEnum):
     EVIDENCE = "evidence"
     NOTE = "note"
     RENDER = "render"
+    SUPPORTING = "supporting"
     LOG = "log"
 
 

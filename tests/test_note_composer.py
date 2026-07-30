@@ -8,6 +8,8 @@ from video2notes.llm import GenerationRequest, GenerationResult
 from video2notes.notes import (
     EvidenceNoteComposer,
     NoteMetadata,
+    ReportPreset,
+    ReportSpec,
     build_deterministic_note,
 )
 
@@ -176,3 +178,70 @@ class NoteComposerTests(unittest.TestCase):
         self.assertTrue(result.used_deterministic_fallback)
         self.assertGreater(len(result.note.facts), 0)
         self.assertTrue(any("fallback" in item for item in result.warnings))
+
+    def test_report_profile_is_resolved_for_drafter_and_persisted(self) -> None:
+        metadata, fusion = fixture()
+        fact = FakeBackend(
+            "facts",
+            "extractor",
+            {
+                "notes.fact_extractor": {
+                    "facts": [
+                        {
+                            "claim": "先建立证据",
+                            "evidence_ids": ["asr-1"],
+                        }
+                    ]
+                }
+            },
+        )
+        draft = FakeBackend(
+            "writer",
+            "executive",
+            {
+                "notes.drafter": {
+                    "abstract": "管理摘要",
+                    "key_takeaways": ["结论"],
+                    "sections": [
+                        {
+                            "title": "结论",
+                            "start_us": 0,
+                            "end_us": 2_000_000,
+                            "summary": "先证据后笔记",
+                            "body_markdown": "证据充分。",
+                            "evidence_ids": ["asr-1"],
+                            "fact_ids": ["fact-window-00000-000"],
+                        }
+                    ],
+                    "glossary": {"PTS": "不应出现在领导版"},
+                }
+            },
+        )
+        result = EvidenceNoteComposer(
+            fact_backend=fact,
+            draft_backend=draft,
+        ).compose(
+            metadata,
+            fusion,
+            report_spec=ReportSpec(preset=ReportPreset.EXECUTIVE),
+        )
+        request_payload = draft.requests[0].user_prompt
+        self.assertIn('"preset": "executive"', request_payload)
+        self.assertIn("管理者", request_payload)
+        self.assertEqual(result.note.metadata.report_preset, "executive")
+        self.assertEqual(result.note.glossary, {})
+
+    def test_concise_deterministic_profile_limits_sections(self) -> None:
+        metadata, fusion = fixture()
+        note = build_deterministic_note(
+            metadata,
+            fusion,
+            report_spec=ReportSpec(
+                preset=ReportPreset.CONCISE,
+                max_sections=1,
+                max_takeaways=1,
+            ),
+        )
+        self.assertLessEqual(len(note.sections), 1)
+        self.assertLessEqual(len(note.key_takeaways), 1)
+        self.assertEqual(note.metadata.report_preset, "concise")

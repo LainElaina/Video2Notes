@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from video2notes.api import ApiContext, create_app
 from video2notes.providers import (
@@ -140,6 +142,100 @@ class ApiAppTests(unittest.TestCase):
             params={"path": "manifest.json"},
         )
         self.assertEqual(raw_manifest.status_code, 404)
+
+    def test_supporting_text_and_image_materials_are_persisted(self) -> None:
+        created = self.client.post(
+            "/api/runs",
+            headers=self.headers,
+            json={
+                "source": SourceInput.local("C:/video.mp4").model_dump(mode="json"),
+                "quality_mode": "balanced",
+            },
+        )
+        run_id = created.json()["run_id"]
+        text = self.client.post(
+            f"/api/runs/{run_id}/materials/text",
+            headers=self.headers,
+            json={
+                "title": "评论区资料",
+                "content": "补充的文字证据",
+                "start_us": 1_000_000,
+                "end_us": 2_000_000,
+            },
+        )
+        self.assertEqual(text.status_code, 200)
+
+        image_stream = BytesIO()
+        Image.new("RGB", (8, 8), (20, 160, 100)).save(image_stream, format="PNG")
+        image = self.client.post(
+            f"/api/runs/{run_id}/materials/files",
+            headers=self.headers,
+            params={"title": "补充图片"},
+            files={"file": ("../../unsafe.png", image_stream.getvalue(), "image/png")},
+        )
+        self.assertEqual(image.status_code, 200)
+        self.assertEqual(image.json()["original_name"], "unsafe.png")
+
+        listed = self.client.get(
+            f"/api/runs/{run_id}/materials",
+            headers=self.headers,
+        )
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(len(listed.json()), 2)
+        material_id = text.json()["id"]
+        deleted = self.client.delete(
+            f"/api/runs/{run_id}/materials/{material_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json()["status"], "deleted")
+
+    def test_report_revision_routes_expose_readiness_and_contract_validation(
+        self,
+    ) -> None:
+        created = self.client.post(
+            "/api/runs",
+            headers=self.headers,
+            json={
+                "source": SourceInput.local("C:/video.mp4").model_dump(mode="json"),
+                "quality_mode": "balanced",
+            },
+        )
+        run_id = created.json()["run_id"]
+
+        listed = self.client.get(
+            f"/api/runs/{run_id}/report-revisions",
+            headers=self.headers,
+        )
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["latest_revision_id"], None)
+        self.assertEqual(listed.json()["revisions"], [])
+
+        latest = self.client.get(
+            f"/api/runs/{run_id}/report-revisions/latest",
+            headers=self.headers,
+        )
+        self.assertEqual(latest.status_code, 404)
+
+        not_ready = self.client.post(
+            f"/api/runs/{run_id}/report-revisions",
+            headers=self.headers,
+            json={
+                "preset": "executive",
+                "output_formats": ["markdown", "html"],
+            },
+        )
+        self.assertEqual(not_ready.status_code, 409)
+
+        invalid = self.client.post(
+            f"/api/runs/{run_id}/report-revisions",
+            headers=self.headers,
+            json={
+                "preset": "detailed",
+                "output_formats": ["html"],
+            },
+        )
+        self.assertEqual(invalid.status_code, 422)
 
     def test_provider_registry_response_contains_no_keyring_values(self) -> None:
         self.backend.set_password("Video2Notes", "local", "private-value")

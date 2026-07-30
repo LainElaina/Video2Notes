@@ -66,6 +66,9 @@ class RunWorkspace:
         "evidence",
         "notes",
         "render",
+        "supporting",
+        "operations",
+        "revisions",
         "logs",
     )
 
