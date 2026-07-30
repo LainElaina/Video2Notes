@@ -7,7 +7,10 @@ import type {
   ProviderDefinition,
   RoleBinding,
   SourceManifest,
+  SupportingMaterial,
   TaskStage,
+  TelemetrySample,
+  TelemetryValue,
 } from './domain'
 
 export const machineFixture: MachineProfile = {
@@ -56,16 +59,135 @@ const stageBlueprint = [
   ['render', '导出', '渲染 Markdown、HTML 与 PDF'],
 ] as const
 
+type DemoStageId = (typeof stageBlueprint)[number][0]
+
+const demoStageData: Record<
+  DemoStageId,
+  {
+    backendStage: string
+    metrics: Record<string, TelemetryValue>
+    metric?: string
+    warnings?: string[]
+    artifact: {
+      kind: string
+      relativePath: string
+      sizeBytes: number
+      mediaType: string
+    }
+  }
+> = {
+  acquire: {
+    backendStage: 'source.acquire',
+    metrics: { selected_stream_count: 2, subtitle_track_count: 1 },
+    artifact: {
+      kind: 'source',
+      relativePath: 'source/source-manifest.json',
+      sizeBytes: 2_816,
+      mediaType: 'application/json',
+    },
+  },
+  normalize: {
+    backendStage: 'media.probe',
+    metrics: { timeline_origin_us: 0, video_stream_count: 1, audio_stream_count: 1 },
+    artifact: {
+      kind: 'media',
+      relativePath: 'media/media-manifest.json',
+      sizeBytes: 3_584,
+      mediaType: 'application/json',
+    },
+  },
+  speech: {
+    backendStage: 'audio.asr',
+    metrics: { asr_segment_count: 184, secondary_window_count: 3 },
+    metric: '4.8× realtime',
+    warnings: ['演示样本：3 个低置信语音窗口使用了选择性复核。'],
+    artifact: {
+      kind: 'evidence',
+      relativePath: 'speech/asr-evidence.json',
+      sizeBytes: 148_320,
+      mediaType: 'application/json',
+    },
+  },
+  vision: {
+    backendStage: 'vision.scan',
+    metrics: { visual_state_count: 37, coarse_scan_fps: 138 },
+    metric: '138 fps coarse',
+    artifact: {
+      kind: 'visual',
+      relativePath: 'vision/visual-states.json',
+      sizeBytes: 42_752,
+      mediaType: 'application/json',
+    },
+  },
+  fusion: {
+    backendStage: 'evidence.fuse',
+    metrics: { evidence_count: 48, conflict_count: 2, window_count: 11 },
+    artifact: {
+      kind: 'evidence',
+      relativePath: 'evidence/fusion.json',
+      sizeBytes: 72_640,
+      mediaType: 'application/json',
+    },
+  },
+  draft: {
+    backendStage: 'notes.compose',
+    metrics: { section_count: 4, fact_count: 12 },
+    artifact: {
+      kind: 'note',
+      relativePath: 'notes/document.json',
+      sizeBytes: 38_912,
+      mediaType: 'application/json',
+    },
+  },
+  verify: {
+    backendStage: 'notes.compose',
+    metrics: { supported_claim_ratio: 0.96, review_claim_count: 1 },
+    warnings: ['演示样本：1 条事实卡保留为待复核。'],
+    artifact: {
+      kind: 'note',
+      relativePath: 'notes/composition.json',
+      sizeBytes: 41_216,
+      mediaType: 'application/json',
+    },
+  },
+  render: {
+    backendStage: 'render.outputs',
+    metrics: { output_format_count: 3, embedded_screenshot_count: 4 },
+    metric: '3 formats',
+    artifact: {
+      kind: 'note',
+      relativePath: 'notes/note.md',
+      sizeBytes: 24_576,
+      mediaType: 'text/markdown',
+    },
+  },
+}
+
 export const makeStages = (progress: number): TaskStage[] => {
   const activeIndex = Math.min(stageBlueprint.length - 1, Math.floor(progress / 12.5))
   return stageBlueprint.map(([id, label, detail], index) => {
     const completed = progress >= 100 || index < activeIndex
     const running = progress < 100 && index === activeIndex
+    const hasStarted = completed || running
     const localProgress = completed
       ? 100
       : running
         ? Math.min(96, Math.round(((progress % 12.5) / 12.5) * 100))
         : 0
+    const demo = demoStageData[id]
+    const outputArtifacts = completed
+      ? [
+          {
+            stage: demo.backendStage,
+            kind: demo.artifact.kind,
+            relativePath: demo.artifact.relativePath,
+            sha256: `demo-fixture-${id}`,
+            sizeBytes: demo.artifact.sizeBytes,
+            mediaType: demo.artifact.mediaType,
+            createdAt: '2026-07-28T14:32:00Z',
+          },
+        ]
+      : []
     return {
       id,
       label,
@@ -73,18 +195,82 @@ export const makeStages = (progress: number): TaskStage[] => {
       status: completed ? 'completed' : running ? 'running' : 'pending',
       progress: localProgress,
       durationSeconds: completed ? 7 + index * 5 : undefined,
-      artifactCount: completed ? 2 + index * 3 : running ? index + 1 : 0,
-      metric:
-        id === 'speech'
-          ? '4.8× realtime'
-          : id === 'vision'
-            ? '138 fps coarse'
-            : id === 'render'
-              ? '3 formats'
-              : undefined,
+      artifactCount: outputArtifacts.length,
+      metrics: hasStarted ? { ...demo.metrics } : {},
+      warnings: hasStarted ? [...(demo.warnings ?? [])] : [],
+      outputArtifacts,
+      metric: hasStarted ? demo.metric : undefined,
     }
   })
 }
+
+export const demoRuntimeWarnings = [
+  '演示任务的阶段指标与遥测来自固定 fixture，不代表当前机器的真实测量结果。',
+]
+
+export const makeDemoMaterials = (runId: string): SupportingMaterial[] => {
+  const textContent =
+    '演示补充材料：固定间隔抽帧会错过短暂出现的文字，因此应先检测变化，再对候选窗口精扫。'
+  const materialKey = runId.replace(/[^A-Za-z0-9]/g, '')
+  return [
+    {
+      id: `material-demo${materialKey}text`,
+      runId,
+      kind: 'text',
+      title: '评论区补充说明（演示内存）',
+      originalName: null,
+      mediaType: 'text/markdown; charset=utf-8',
+      artifact: null,
+      sha256: null,
+      sizeBytes: new TextEncoder().encode(textContent).byteLength,
+      textContent,
+      startUs: 32_000_000,
+      endUs: 81_000_000,
+      status: 'active',
+      createdAt: '2026-07-28T14:31:00Z',
+      deletedAt: null,
+      storage: 'demo-memory',
+    },
+    {
+      id: `material-demo${materialKey}image`,
+      runId,
+      kind: 'image',
+      title: '时间轴参考图（演示仅保存名称与元数据）',
+      originalName: 'timeline-reference.png',
+      mediaType: 'image/png',
+      artifact: null,
+      sha256: null,
+      sizeBytes: 0,
+      textContent: null,
+      startUs: 92_000_000,
+      endUs: 93_000_000,
+      status: 'active',
+      createdAt: '2026-07-28T14:31:30Z',
+      deletedAt: null,
+      storage: 'demo-memory',
+    },
+  ]
+}
+
+export const makeDemoTelemetry = (
+  progress: number,
+  runId = 'demo-fixture',
+): TelemetrySample[] =>
+  makeStages(progress)
+    .filter(stage => stage.status !== 'pending')
+    .map((stage, index, samples) => ({
+      sequence: index + 1,
+      runId,
+      state:
+        progress >= 100 && index === samples.length - 1
+          ? ('completed' as const)
+          : ('running' as const),
+      stage: demoStageData[stage.id as DemoStageId].backendStage,
+      progress: stage.progress / 100,
+      message: `演示遥测 · ${stage.label}${stage.status === 'completed' ? '已完成' : '处理中'}`,
+      metrics: { ...stage.metrics },
+      createdAt: new Date(Date.UTC(2026, 6, 28, 14, 32, index)).toISOString(),
+    }))
 
 export const evidenceFixture: EvidenceItem[] = [
   {
@@ -313,6 +499,10 @@ export const makeTaskFixtures = (): ProcessingTask[] => [
     etaSeconds: 1062,
     createdAt: '今天 15:08',
     stages: makeStages(36),
+    telemetry: makeDemoTelemetry(36, 'task-running'),
+    runtimeWarnings: [...demoRuntimeWarnings],
+    materials: makeDemoMaterials('task-running'),
+    operations: [],
     evidence: evidenceFixture.slice(0, 7),
   },
   {
@@ -324,6 +514,10 @@ export const makeTaskFixtures = (): ProcessingTask[] => [
     etaSeconds: 0,
     createdAt: '今天 14:07',
     stages: makeStages(100),
+    telemetry: makeDemoTelemetry(100, 'task-complete'),
+    runtimeWarnings: [...demoRuntimeWarnings],
+    materials: makeDemoMaterials('task-complete'),
+    operations: [],
     evidence: evidenceFixture,
     note: noteFixture,
   },

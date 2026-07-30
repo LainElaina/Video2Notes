@@ -8,7 +8,7 @@ import {
   CircleDot,
   Clock3,
   Cpu,
-  Library,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -18,6 +18,7 @@ import {
 import type { ViewId } from '../domain'
 import { formatTime, platformLabel, statusLabel } from '../domain'
 import { useStudioStore } from '../store'
+import { useUiPreferences, type ThemePreset } from '../stores/uiPreferences'
 
 const navItems: Array<{
   view: ViewId
@@ -40,27 +41,51 @@ function BrandMark() {
   )
 }
 
-function NavRail() {
+const themeOptions: Array<{ value: ThemePreset; label: string }> = [
+  { value: 'precision-light', label: '精确亮色' },
+  { value: 'paper-light', label: '纸张亮色' },
+  { value: 'studio-graphite', label: '工作室石墨' },
+]
+
+function TopNavigation() {
   const view = useStudioStore(state => state.view)
   const navigate = useStudioStore(state => state.navigate)
+  const backend = useStudioStore(state => state.backend)
+  const workspaceMode = useUiPreferences(state => state.workspaceMode)
+  const setWorkspaceMode = useUiPreferences(state => state.setWorkspaceMode)
+  const themePreset = useUiPreferences(state => state.themePreset)
+  const setThemePreset = useUiPreferences(state => state.setThemePreset)
+
+  const backendLabel =
+    backend.mode === 'real'
+      ? `后端 ${backend.version ?? '正常'}`
+      : backend.mode === 'demo'
+        ? '演示模式'
+        : backend.mode === 'connecting'
+          ? '正在连接'
+          : '后端离线'
 
   return (
-    <nav className="nav-rail" aria-label="主导航">
+    <header className="top-navigation">
       <button
-        className="brand-button"
+        className="topbar-brand"
         type="button"
         onClick={() => navigate('create')}
         aria-label="返回新建任务"
       >
         <BrandMark />
+        <span className="brand-copy" aria-hidden="true">
+          <strong>Video2Notes</strong>
+          <small>LOCAL ANALYSIS</small>
+        </span>
       </button>
-      <div className="nav-rail-items">
+      <nav className="top-navigation-items" aria-label="主导航">
         {navItems.map(item => {
           const Icon = item.icon
           const selected = view === item.view
           return (
             <button
-              className="nav-rail-button"
+              className="top-navigation-button"
               type="button"
               key={item.view}
               aria-current={selected ? 'page' : undefined}
@@ -73,12 +98,52 @@ function NavRail() {
             </button>
           )
         })}
+      </nav>
+      <div className="top-navigation-controls">
+        <div className="workspace-mode-switch" role="group" aria-label="界面信息密度">
+          <button
+            type="button"
+            aria-label="简约视图"
+            aria-pressed={workspaceMode === 'simple'}
+            onClick={() => setWorkspaceMode('simple')}
+          >
+            简约
+          </button>
+          <button
+            type="button"
+            aria-label="详细视图"
+            aria-pressed={workspaceMode === 'detailed'}
+            onClick={() => setWorkspaceMode('detailed')}
+          >
+            详细
+          </button>
+        </div>
+        <label className="theme-preset-control">
+          <Palette size={14} aria-hidden="true" />
+          <span className="sr-only">主题预置</span>
+          <select
+            value={themePreset}
+            aria-label="主题预置"
+            onChange={event => setThemePreset(event.currentTarget.value as ThemePreset)}
+          >
+            {themeOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div
+          className={`topbar-backend backend-${backend.mode}`}
+          role="group"
+          aria-label={`后端状态：${backendLabel}`}
+          title={backend.detail}
+        >
+          <CircleDot size={13} aria-hidden="true" />
+          <span>{backendLabel}</span>
+        </div>
       </div>
-      <div className="nav-rail-footer" title="全部内容保存在本机">
-        <Library aria-hidden="true" size={17} />
-        <span>LOCAL</span>
-      </div>
-    </nav>
+    </header>
   )
 }
 
@@ -279,7 +344,6 @@ function ContextPanel() {
 
 function WorkspaceHeader() {
   const machine = useStudioStore(state => state.machine)
-  const backend = useStudioStore(state => state.backend)
   const view = useStudioStore(state => state.view)
   const tasks = useStudioStore(state => state.tasks)
   const activeTaskId = useStudioStore(state => state.activeTaskId)
@@ -298,21 +362,17 @@ function WorkspaceHeader() {
         <span className="eyebrow">VIDEO2NOTES / {view.toUpperCase()}</span>
         <h1>{viewTitle[view]}</h1>
       </div>
-      <div className="machine-status" aria-label="本机运行状态">
+      <div
+        className="machine-status"
+        aria-label={`本机运行状态：${machine.gpu}，${machine.cpu}`}
+        title={`${machine.gpu} · ${machine.cpu} · ${machine.memory}`}
+      >
         <Cpu size={16} aria-hidden="true" />
         <span>
           <strong>{machine.gpu}</strong>
-          <small>{machine.cpu}</small>
-        </span>
-        <span className={machine.backend === 'ready' ? 'backend-ready' : 'backend-offline'}>
-          <CircleDot size={13} aria-hidden="true" />
-          {backend.mode === 'real'
-            ? `后端 ${backend.version ?? '正常'}`
-            : backend.mode === 'demo'
-              ? '演示模式'
-              : backend.mode === 'connecting'
-                ? '正在连接'
-                : '后端离线'}
+          <small>
+            {machine.cpu} · {machine.memory}
+          </small>
         </span>
       </div>
     </header>
@@ -320,18 +380,28 @@ function WorkspaceHeader() {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const view = useStudioStore(state => state.view)
   const contextCollapsed = useStudioStore(state => state.contextCollapsed)
   const toggleContext = useStudioStore(state => state.toggleContext)
   const notice = useStudioStore(state => state.notice)
   const clearNotice = useStudioStore(state => state.clearNotice)
+  const workspaceMode = useUiPreferences(state => state.workspaceMode)
+  const themePreset = useUiPreferences(state => state.themePreset)
+  const detailedReader = view === 'reader' && workspaceMode === 'detailed'
 
   return (
-    <div className={`app-shell ${contextCollapsed ? 'context-is-collapsed' : ''}`}>
-      <NavRail />
-      {!contextCollapsed && <ContextPanel />}
+    <div
+      className={`app-shell ${contextCollapsed ? 'context-is-collapsed' : ''} ${
+        detailedReader ? 'detail-workspace' : ''
+      }`}
+      data-theme={themePreset}
+      data-workspace-mode={workspaceMode}
+    >
+      <TopNavigation />
+      {!contextCollapsed && !detailedReader && <ContextPanel />}
       <section className="workspace">
         <WorkspaceHeader />
-        {contextCollapsed && (
+        {contextCollapsed && !detailedReader && (
           <button
             type="button"
             className="context-expand"

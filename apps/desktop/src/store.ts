@@ -9,20 +9,30 @@ import {
 } from './api'
 import type {
   ApiAcquisitionPolicy,
+  ApiArtifactRef,
   ApiAuthSpec,
   ApiEvidenceSpan,
+  ApiJobEvent,
   ApiJobSnapshot,
   ApiModelRegistry,
   ApiNoteDocument,
   ApiProcessingRun,
+  ApiReportRevision,
+  ApiRunMaterial,
   ApiRunManifest,
+  ApiRunOperation,
+  ApiRunOperationRequest,
+  ApiStageRecord,
   ApiSourceInput,
   ApiSourceManifest,
   PipelineSubmission,
 } from './api'
 import {
+  demoRuntimeWarnings,
   evidenceFixture,
   machineFixture,
+  makeDemoMaterials,
+  makeDemoTelemetry,
   makeStages,
   makeTaskFixtures,
   modelFixtures,
@@ -41,11 +51,25 @@ import type {
   ProcessingMode,
   ProcessingTask,
   ProviderDefinition,
+  ReportPreset,
+  ReportRevision,
+  ReportRevisionFormat,
+  ReworkOperation,
   RoleBinding,
+  SamplingOverrideDraft,
   SourceManifest,
+  StageOutputArtifact,
+  SupportingMaterial,
   TaskStage,
+  TelemetrySample,
+  TelemetryValue,
   ViewId,
 } from './domain'
+import {
+  nextSamplingOverride,
+  serializeSamplingPlan,
+  validateSamplingDraft,
+} from './sampling'
 
 interface StudioData {
   view: ViewId
@@ -82,6 +106,15 @@ interface StudioActions {
   setLanguageHints: (value: string) => void
   setIncludeScreenshots: (value: boolean) => void
   setGeneratePdf: (value: boolean) => void
+  setSamplingMode: (mode: DraftState['samplingMode']) => void
+  setSamplingIntervalSeconds: (seconds: number) => void
+  addSamplingOverride: () => void
+  updateSamplingOverride: (
+    id: string,
+    patch: Partial<Omit<SamplingOverrideDraft, 'id'>>,
+  ) => void
+  removeSamplingOverride: (id: string) => void
+  setReportPreset: (preset: DraftState['reportPreset']) => void
   probeSource: () => void
   chooseLocalFile: () => void
   chooseBundledDemo: () => void
@@ -92,6 +125,69 @@ interface StudioActions {
   resumeTask: (taskId: string) => void
   cancelTask: (taskId: string) => void
   restartTask: (taskId: string) => void
+  refreshOperations: (taskId: string) => void
+  runVisionRework: (
+    taskId: string,
+    input: {
+      startSeconds: number
+      endSeconds: number
+      mode: 'adaptive' | 'fixed_interval'
+      intervalSeconds?: number
+      runOcr: boolean
+    },
+  ) => void
+  runAsrRework: (
+    taskId: string,
+    input: {
+      range: {
+        startSeconds: number
+        endSeconds: number
+      }
+      languageHints: string[]
+    },
+  ) => void
+  correctEvidence: (
+    taskId: string,
+    input: {
+      evidenceId: string
+      newText: string
+      reason?: string
+    },
+  ) => void
+  refreshReportRevisions: (taskId: string) => Promise<void>
+  generateReportRevision: (
+    taskId: string,
+    input: {
+      preset: ReportPreset
+      includeScreenshots: boolean
+      includePdf: boolean
+    },
+  ) => Promise<void>
+  downloadReportRevisionArtifact: (
+    taskId: string,
+    relativePath: string,
+    format: ReportRevisionFormat,
+  ) => void
+  refreshMaterials: (taskId: string) => void
+  addTextMaterial: (
+    taskId: string,
+    input: {
+      title: string
+      content: string
+      startUs?: number
+      endUs?: number
+    },
+  ) => void
+  addFileMaterial: (
+    taskId: string,
+    file: File,
+    options?: {
+      title?: string
+      startUs?: number
+      endUs?: number
+    },
+  ) => void
+  deleteMaterial: (taskId: string, materialId: string) => void
   setCurrentTime: (seconds: number) => void
   selectEvidence: (evidenceId: string, timeSeconds?: number) => void
   selectProvider: (providerId: string) => void
@@ -120,6 +216,13 @@ let pollInFlight = false
 const sourceByRun = new Map<string, SourceManifest>()
 const submissionByRun = new Map<string, PipelineSubmission>()
 const objectUrls = new Map<string, string>()
+let demoMaterialSequence = 0
+let demoOperationSequence = 0
+let samplingOverrideSequence = 0
+
+const MICROSECONDS_PER_SECOND = 1_000_000
+const MIN_OPERATION_INTERVAL_US = 100_000
+const MAX_OPERATION_FIXED_SAMPLES = 5_000
 
 const emptyDraft = (): DraftState => ({
   input: '',
@@ -133,6 +236,10 @@ const emptyDraft = (): DraftState => ({
   languageHints: '',
   includeScreenshots: true,
   generatePdf: true,
+  samplingMode: 'adaptive',
+  samplingIntervalSeconds: 0.5,
+  samplingOverrides: [],
+  reportPreset: 'detailed',
 })
 
 const demoDraft = (): DraftState => ({
@@ -317,18 +424,32 @@ const acquisitionPolicy = (mode: ProcessingMode): ApiAcquisitionPolicy => ({
   prefer_hardlink: true,
 })
 
-const submissionForDraft = (draft: DraftState): PipelineSubmission => ({
-  source: sourceInput(draft),
-  auth: authSpec(draft),
-  acquisition: acquisitionPolicy(draft.mode),
-  quality_mode: draft.mode,
-  language_hints: draft.languageHints
+export const buildPipelineSubmission = (draft: DraftState): PipelineSubmission => {
+  const languageHints = draft.languageHints
     .split(',')
     .map(value => value.trim())
-    .filter(Boolean),
-  include_screenshots: draft.includeScreenshots,
-  generate_pdf: draft.generatePdf,
-})
+    .filter(Boolean)
+  const reportLanguage =
+    languageHints.find(value => value.toLowerCase() !== 'auto') ?? 'zh-CN'
+  return {
+    source: sourceInput(draft),
+    auth: authSpec(draft),
+    acquisition: acquisitionPolicy(draft.mode),
+    quality_mode: draft.mode,
+    language_hints: languageHints,
+    sampling_plan: serializeSamplingPlan(draft),
+    include_screenshots: draft.includeScreenshots,
+    generate_pdf: draft.generatePdf,
+    report_spec: {
+      preset: draft.reportPreset,
+      language: reportLanguage,
+      include_screenshots: draft.includeScreenshots,
+      output_formats: draft.generatePdf
+        ? ['markdown', 'html', 'pdf']
+        : ['markdown', 'html'],
+    },
+  }
+}
 
 const pipelineStages = [
   'source.acquire',
@@ -354,31 +475,118 @@ const stageGroups: Record<string, readonly string[]> = {
   render: ['render.outputs'],
 }
 
+interface NamedStageRecord {
+  backendName: string
+  record: ApiStageRecord
+}
+
+const stageMetrics = (records: NamedStageRecord[]): Record<string, TelemetryValue> => {
+  if (records.length === 1) return { ...records[0].record.metrics }
+  return Object.fromEntries(
+    records.flatMap(({ backendName, record }) =>
+      Object.entries(record.metrics).map(([key, value]) => [`${backendName}.${key}`, value]),
+    ),
+  )
+}
+
+const stageOutputArtifacts = (records: NamedStageRecord[]): StageOutputArtifact[] =>
+  records.flatMap(({ backendName, record }) =>
+    record.outputs.map((output: ApiArtifactRef) => ({
+      stage: record.stage_name || backendName,
+      kind: output.kind,
+      relativePath: output.relative_path,
+      sha256: output.sha256,
+      sizeBytes: output.size_bytes,
+      mediaType: output.media_type,
+      createdAt: output.created_at,
+    })),
+  )
+
+const mapSupportingMaterial = (material: ApiRunMaterial): SupportingMaterial => ({
+  id: material.id,
+  runId: material.run_id,
+  kind: material.kind,
+  title: material.title,
+  originalName: material.original_name,
+  mediaType: material.media_type,
+  artifact: {
+    kind: material.artifact.kind,
+    relativePath: material.artifact.relative_path,
+    sha256: material.artifact.sha256,
+    sizeBytes: material.artifact.size_bytes,
+    mediaType: material.artifact.media_type ?? null,
+    createdAt: material.artifact.created_at,
+  },
+  sha256: material.sha256,
+  sizeBytes: material.size_bytes,
+  textContent: material.text_content,
+  startUs: material.start_us,
+  endUs: material.end_us,
+  status: material.status,
+  createdAt: material.created_at,
+  deletedAt: material.deleted_at,
+  storage: 'run-artifact',
+})
+
+const mapTelemetrySample = (event: ApiJobEvent): TelemetrySample => ({
+  sequence: event.sequence,
+  runId: event.run_id,
+  state: event.state,
+  stage: event.stage,
+  progress: event.progress,
+  message: event.message,
+  metrics: { ...event.metrics },
+  createdAt: event.created_at,
+})
+
+const telemetryFromJob = (job?: ApiJobSnapshot): TelemetrySample[] =>
+  mergeTelemetry([], job?.events.map(mapTelemetrySample) ?? [])
+
+const mergeTelemetry = (
+  existing: readonly TelemetrySample[],
+  incoming: readonly TelemetrySample[],
+): TelemetrySample[] => {
+  const bySequence = new Map<number, TelemetrySample>()
+  for (const sample of existing) bySequence.set(sample.sequence, sample)
+  for (const sample of incoming) bySequence.set(sample.sequence, sample)
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
 const mapStages = (run: ApiRunManifest, job?: ApiJobSnapshot): TaskStage[] =>
   makeStages(0).map(stage => {
     const backendNames = stageGroups[stage.id] ?? []
     const records = backendNames
-      .map(name => run.stages[name])
-      .filter((record): record is NonNullable<typeof record> => Boolean(record))
-    const failed = records.some(record => record.status === 'failed')
-    const cancelled = records.some(record => record.status === 'cancelled')
+      .map(backendName => {
+        const record = run.stages[backendName]
+        return record ? { backendName, record } : undefined
+      })
+      .filter((record): record is NamedStageRecord => Boolean(record))
+    const failed = records.some(({ record }) => record.status === 'failed')
+    const cancelled = records.some(({ record }) => record.status === 'cancelled')
     const active = Boolean(job && backendNames.includes(job.stage) && job.state === 'running')
     const completed =
       records.length === backendNames.length &&
       records.length > 0 &&
-      records.every(record => record.status === 'completed')
+      records.every(({ record }) => record.status === 'completed')
     const status: TaskStage['status'] =
       failed || cancelled ? 'failed' : active ? 'running' : completed ? 'completed' : 'pending'
+    const durations = records
+      .map(({ record }) => record.wall_time_seconds)
+      .filter((value): value is number => value !== undefined)
+    const metrics = stageMetrics(records)
+    const warnings = records.flatMap(({ record }) => record.warnings)
+    const outputArtifacts = stageOutputArtifacts(records)
     return {
       ...stage,
       status,
-      progress: completed ? 100 : active ? Math.round((job?.progress ?? 0.05) * 100) : 0,
-      durationSeconds: records.reduce(
-        (sum, record) => sum + (record.wall_time_seconds ?? 0),
-        0,
-      ),
-      artifactCount: records.reduce((sum, record) => sum + record.outputs.length, 0),
-      metric: active ? job?.message : records.flatMap(record => record.warnings)[0],
+      progress: completed ? 100 : active ? Math.round((job?.progress ?? 0) * 100) : 0,
+      durationSeconds:
+        durations.length > 0 ? durations.reduce((sum, value) => sum + value, 0) : undefined,
+      artifactCount: outputArtifacts.length,
+      metrics,
+      warnings,
+      outputArtifacts,
+      metric: active ? job?.message : warnings[0],
     }
   })
 
@@ -452,6 +660,127 @@ const mapEvidence = (item: ApiEvidenceSpan): EvidenceItem => ({
   confidence: item.confidence ?? 1,
   provider: [item.provider, item.model].filter(Boolean).join(' · ') || item.modality,
 })
+
+const mapReworkOperation = (record: ApiRunOperation): ReworkOperation => ({
+  id: record.operation_id,
+  runId: record.run_id,
+  kind: record.request.kind,
+  status: record.status,
+  source: 'backend',
+  startSeconds: record.request.range.start_us / MICROSECONDS_PER_SECOND,
+  endSeconds: record.request.range.end_us / MICROSECONDS_PER_SECOND,
+  samplingMode: record.request.sampling?.mode,
+  intervalSeconds:
+    record.request.sampling?.mode === 'fixed_interval'
+      ? record.request.sampling.interval_us / MICROSECONDS_PER_SECOND
+      : undefined,
+  runOcr:
+    record.request.kind === 'vision_rescan'
+      ? record.request.run_ocr
+      : undefined,
+  languageHints: [...(record.request.language_hints ?? [])],
+  evidenceId: record.request.evidence_id ?? undefined,
+  newText: record.request.new_text ?? undefined,
+  reason: record.request.reason ?? undefined,
+  createdAt: record.created_at,
+  finishedAt: record.finished_at,
+  revisionId: record.revision_id ?? undefined,
+  artifactPaths: [...record.artifact_paths],
+  replacedEvidenceIds: [...record.replaced_evidence_ids],
+  newEvidenceIds: [...record.new_evidence_ids],
+  visualStateCount: record.visual_state_count,
+  errorType: record.error_type ?? undefined,
+  detail: record.detail ?? undefined,
+})
+
+const mapReportRevision = (record: ApiReportRevision): ReportRevision => ({
+  id: record.id,
+  runId: record.run_id,
+  preset: record.report_spec.preset,
+  createdAt: record.created_at,
+  formats: [...record.report_spec.output_formats],
+  fallback: record.used_deterministic_fallback,
+  warnings: [...record.warnings],
+  evidenceRevisionId: record.evidence_revision_id ?? 'base-evidence',
+  materialIds: [...record.material_ids],
+  artifactPaths: {
+    document: record.document.relative_path,
+    markdown: record.markdown.relative_path,
+    html: record.html.relative_path,
+    pdf: record.pdf?.relative_path,
+  },
+  source: 'backend',
+})
+
+const newestReportFirst = (
+  revisions: readonly ReportRevision[],
+): ReportRevision[] =>
+  [...revisions].sort(
+    (left, right) =>
+      Date.parse(right.createdAt) - Date.parse(left.createdAt),
+  )
+
+const upsertReworkOperation = (
+  operations: readonly ReworkOperation[],
+  operation: ReworkOperation,
+): ReworkOperation[] => [
+  ...operations.filter(existing => existing.id !== operation.id),
+  operation,
+]
+
+const includeReworkOperation = (
+  operations: ReworkOperation[],
+  operation: ReworkOperation,
+): ReworkOperation[] =>
+  operations.some(existing => existing.id === operation.id)
+    ? operations
+    : [...operations, operation]
+
+const makeDemoReworkOperation = (input: {
+  taskId: string
+  kind: ReworkOperation['kind']
+  status?: ReworkOperation['status']
+  startSeconds: number
+  endSeconds: number
+  samplingMode?: ReworkOperation['samplingMode']
+  intervalSeconds?: number
+  runOcr?: boolean
+  languageHints?: string[]
+  evidenceId?: string
+  newText?: string
+  reason?: string
+  replacedEvidenceIds?: string[]
+  newEvidenceIds?: string[]
+}): ReworkOperation => {
+  demoOperationSequence += 1
+  const now = new Date().toISOString()
+  return {
+    id: `operation-demo-${demoOperationSequence}`,
+    runId: input.taskId,
+    kind: input.kind,
+    status: input.status ?? 'demo-preview',
+    source: 'demo-memory',
+    startSeconds: input.startSeconds,
+    endSeconds: input.endSeconds,
+    samplingMode: input.samplingMode,
+    intervalSeconds: input.intervalSeconds,
+    runOcr: input.runOcr,
+    languageHints: [...(input.languageHints ?? [])],
+    evidenceId: input.evidenceId,
+    newText: input.newText,
+    reason: input.reason,
+    createdAt: now,
+    finishedAt: now,
+    artifactPaths: [],
+    replacedEvidenceIds: [...(input.replacedEvidenceIds ?? [])],
+    newEvidenceIds: [...(input.newEvidenceIds ?? [])],
+    visualStateCount: 0,
+    detail:
+      input.status === 'completed'
+        ? 'manual correction stored in demo memory'
+        : 'preview only; no model was executed',
+  }
+}
 
 const mapNote = (document: ApiNoteDocument): NoteDocument => {
   const facts = new Map(document.facts.map(fact => [fact.id, fact]))
@@ -532,6 +861,7 @@ const taskFromRun = (
   run: ApiRunManifest,
   job?: ApiJobSnapshot,
   sourceOverride?: SourceManifest,
+  runtimeWarnings: readonly string[] = [],
 ): ProcessingTask => {
   const source = sourceOverride || sourceByRun.get(run.run_id) || fallbackSource(run)
   const media = stageArtifact(run, 'media', undefined)
@@ -544,9 +874,13 @@ const taskFromRun = (
     etaSeconds: 0,
     createdAt: new Date(run.created_at).toLocaleString('zh-CN'),
     stages: mapStages(run, job),
+    telemetry: telemetryFromJob(job),
+    runtimeWarnings: [...runtimeWarnings],
+    materials: [],
+    operations: [],
     evidence: [],
     lastMessage: job?.message,
-    warnings: run.warnings,
+    warnings: [...run.warnings, ...runtimeWarnings],
     artifactPaths: {
       markdown: stageArtifact(run, 'note', '.md'),
       html: stageArtifact(run, 'render', '.html'),
@@ -655,15 +989,259 @@ const errorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : '本地操作失败。'
 }
 
+const reworkErrorMessage = (error: unknown): string => {
+  if (error instanceof Video2NotesApiError && error.status === 409) {
+    if (error.message.toLowerCase().includes('backend is not configured')) {
+      return '返工未执行：缺少所需的 ASR/OCR 模型后端。请先在模型设置中配置并绑定对应模型；现有证据保持不变。'
+    }
+    return `当前任务无法执行返工：${error.message}；现有证据保持不变。`
+  }
+  return `返工未执行：${errorMessage(error)}；现有证据保持不变。`
+}
+
+type OperationRangeValidation =
+  | {
+      ok: true
+      startUs: number
+      endUs: number
+    }
+  | {
+      ok: false
+      error: string
+    }
+
+const secondsToSafeMicroseconds = (
+  seconds: number,
+  label: string,
+): { ok: true; value: number } | { ok: false; error: string } => {
+  if (!Number.isFinite(seconds)) {
+    return { ok: false, error: `${label}必须是有限秒数。` }
+  }
+  if (seconds < 0) {
+    return { ok: false, error: `${label}不能为负数。` }
+  }
+  const scaled = seconds * MICROSECONDS_PER_SECOND
+  const rounded = Math.round(scaled)
+  const floatingPointTolerance = Math.min(
+    0.001,
+    Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4,
+  )
+  if (
+    !Number.isSafeInteger(rounded) ||
+    Math.abs(scaled - rounded) > floatingPointTolerance
+  ) {
+    return {
+      ok: false,
+      error: `${label}必须能精确、安全地转换为整数微秒（最多 6 位小数）。`,
+    }
+  }
+  return { ok: true, value: rounded }
+}
+
+const validateOperationRange = (
+  task: ProcessingTask,
+  startSeconds: number,
+  endSeconds: number,
+): OperationRangeValidation => {
+  const start = secondsToSafeMicroseconds(startSeconds, '开始时间')
+  if (!start.ok) return start
+  const end = secondsToSafeMicroseconds(endSeconds, '结束时间')
+  if (!end.ok) return end
+  if (end.value <= start.value) {
+    return { ok: false, error: '结束时间必须晚于开始时间。' }
+  }
+  if (task.source.durationSeconds > 0 && endSeconds > task.source.durationSeconds) {
+    return { ok: false, error: '返工区间不能超过视频时长。' }
+  }
+  return { ok: true, startUs: start.value, endUs: end.value }
+}
+
+const validateFixedInterval = (
+  startUs: number,
+  endUs: number,
+  intervalSeconds: number | undefined,
+):
+  | { ok: true; intervalUs: number; sampleCount: number }
+  | { ok: false; error: string } => {
+  if (intervalSeconds === undefined) {
+    return { ok: false, error: '固定间隔模式必须填写采样间隔。' }
+  }
+  const interval = secondsToSafeMicroseconds(intervalSeconds, '采样间隔')
+  if (!interval.ok) return interval
+  if (interval.value < MIN_OPERATION_INTERVAL_US) {
+    return { ok: false, error: '固定采样间隔不能小于 0.1 秒。' }
+  }
+  const sampleCount =
+    Math.floor((endUs - startUs - 1) / interval.value) + 1
+  if (sampleCount > MAX_OPERATION_FIXED_SAMPLES) {
+    return {
+      ok: false,
+      error: `该区间会采样 ${sampleCount} 帧，超过单次 5000 帧上限。`,
+    }
+  }
+  return { ok: true, intervalUs: interval.value, sampleCount }
+}
+
+interface ReworkRefreshResult {
+  operations?: ReworkOperation[]
+  evidence?: EvidenceItem[]
+  evidenceRevisionId?: string | null
+  operationsError?: unknown
+  evidenceError?: unknown
+}
+
+const fetchReworkState = async (
+  client: Video2NotesApi,
+  taskId: string,
+): Promise<ReworkRefreshResult> => {
+  const [operationsResult, evidenceResult] = await Promise.allSettled([
+    client.listOperations(taskId),
+    client.getEvidence(taskId),
+  ])
+  return {
+    operations:
+      operationsResult.status === 'fulfilled'
+        ? operationsResult.value.map(mapReworkOperation)
+        : undefined,
+    evidence:
+      evidenceResult.status === 'fulfilled'
+        ? evidenceResult.value.evidence.map(mapEvidence)
+        : undefined,
+    evidenceRevisionId:
+      evidenceResult.status === 'fulfilled'
+        ? evidenceResult.value.revision_id
+        : undefined,
+    operationsError:
+      operationsResult.status === 'rejected'
+        ? operationsResult.reason
+        : undefined,
+    evidenceError:
+      evidenceResult.status === 'rejected'
+        ? evidenceResult.reason
+        : undefined,
+  }
+}
+
+interface BackendReworkResult extends ReworkRefreshResult {
+  operation: ReworkOperation
+}
+
+const executeBackendRework = async (
+  client: Video2NotesApi,
+  taskId: string,
+  request: ApiRunOperationRequest,
+): Promise<BackendReworkResult> => {
+  const created = mapReworkOperation(
+    await client.createOperation(taskId, request),
+  )
+  if (created.status === 'failed') {
+    try {
+      const operations = includeReworkOperation(
+        (await client.listOperations(taskId)).map(mapReworkOperation),
+        created,
+      )
+      return { operation: created, operations }
+    } catch (operationsError) {
+      return { operation: created, operationsError }
+    }
+  }
+  const refreshed = await fetchReworkState(client, taskId)
+  return {
+    operation: created,
+    ...refreshed,
+    operations:
+      refreshed.operations === undefined
+        ? undefined
+        : includeReworkOperation(refreshed.operations, created),
+  }
+}
+
+const applyBackendRework = (
+  task: ProcessingTask,
+  result: BackendReworkResult,
+): ProcessingTask => ({
+  ...task,
+  operations:
+    result.operations ??
+    upsertReworkOperation(task.operations, result.operation),
+  evidence: result.evidence ?? task.evidence,
+  evidenceRevisionId:
+    result.evidenceRevisionId === undefined
+      ? task.evidenceRevisionId
+      : result.evidenceRevisionId ?? undefined,
+})
+
+const backendReworkNotice = (result: BackendReworkResult): string => {
+  if (result.operation.status === 'failed') {
+    const detail =
+      result.operation.detail ||
+      result.operation.errorType ||
+      '模型执行阶段返回失败'
+    return `返工执行失败：${detail}；现有证据保持不变，报告尚未重生成。`
+  }
+  if (result.evidence === undefined) {
+    return '返工已完成并保存 revision，但有效证据刷新失败；当前证据保持不变，报告尚未重生成。'
+  }
+  if (result.operations === undefined) {
+    return '返工已完成，有效证据已刷新；操作列表暂以本次返回补齐，报告尚未重生成。'
+  }
+  return `返工已完成，已刷新 ${result.evidence.length} 条有效证据；报告尚未重生成。`
+}
+
+const materialRangeError = (startUs?: number, endUs?: number): string | undefined => {
+  if ((startUs === undefined) !== (endUs === undefined)) {
+    return '材料时间范围必须同时提供开始和结束时间。'
+  }
+  if (startUs !== undefined && endUs !== undefined) {
+    if (!Number.isSafeInteger(startUs) || !Number.isSafeInteger(endUs)) {
+      return '材料时间范围必须使用整数微秒。'
+    }
+    if (startUs < 0 || endUs < 0) return '材料时间范围不能为负数。'
+    if (endUs <= startUs) return '材料结束时间必须晚于开始时间。'
+  }
+  return undefined
+}
+
 const hydrateTask = async (task: ProcessingTask): Promise<ProcessingTask> => {
-  if (!api || !task.realBackend) return task
+  const client = api
+  if (!client || !task.realBackend) return task
+  const materialsPromise = client
+    .listMaterials(task.id)
+    .then(materials => materials.map(mapSupportingMaterial))
+    .catch(() => task.materials)
+  const operationsPromise =
+    task.status === 'completed'
+      ? client
+          .listOperations(task.id)
+          .then(operations => operations.map(mapReworkOperation))
+          .catch(() => task.operations)
+      : Promise.resolve(task.operations)
+  const effectiveEvidencePromise =
+    task.status === 'completed'
+      ? client
+          .getEvidence(task.id)
+          .then(response => ({
+            evidence: response.evidence.map(mapEvidence),
+            revisionId: response.revision_id,
+          }))
+          .catch(() => undefined)
+      : Promise.resolve(undefined)
+  const reportRevisionsPromise =
+    task.status === 'completed'
+      ? client
+          .listReportRevisions(task.id)
+          .then(index =>
+            newestReportFirst(index.revisions.map(mapReportRevision)),
+          )
+          .catch(() => task.reportRevisions ?? [])
+      : Promise.resolve(task.reportRevisions ?? [])
   let note = task.note
   let evidence = task.evidence
   let source = task.source
   const notePath = task.artifactPaths?.noteDocument || 'notes/document.json'
   if (task.status === 'completed' && !note) {
     try {
-      const document = await api.artifactJson<ApiNoteDocument>(task.id, notePath)
+      const document = await client.artifactJson<ApiNoteDocument>(task.id, notePath)
       note = mapNote(document)
       evidence = document.evidence.map(mapEvidence)
       source = {
@@ -686,7 +1264,7 @@ const hydrateTask = async (task: ProcessingTask): Promise<ProcessingTask> => {
           try {
             const screenshotUrl =
               (await localArtifactUrl(task.id, section.screenshotPath)) ||
-              (await api?.artifactBlobUrl(task.id, section.screenshotPath))
+              (await client.artifactBlobUrl(task.id, section.screenshotPath))
             if (screenshotUrl) {
               objectUrls.set(`${task.id}:${section.screenshotPath}`, screenshotUrl)
             }
@@ -704,13 +1282,65 @@ const hydrateTask = async (task: ProcessingTask): Promise<ProcessingTask> => {
     try {
       mediaUrl =
         (await localArtifactUrl(task.id, mediaPath)) ||
-        (await api.artifactBlobUrl(task.id, mediaPath))
+        (await client.artifactBlobUrl(task.id, mediaPath))
       objectUrls.set(task.id, mediaUrl)
     } catch {
       // Notes remain readable when the media asset cannot be previewed.
     }
   }
-  return { ...task, source, note, evidence, mediaUrl }
+  const [materials, operations, effectiveEvidence, reportRevisions] =
+    await Promise.all([
+    materialsPromise,
+    operationsPromise,
+    effectiveEvidencePromise,
+    reportRevisionsPromise,
+  ])
+  return {
+    ...task,
+    source,
+    note,
+    evidence: effectiveEvidence?.evidence ?? evidence,
+    evidenceRevisionId:
+      effectiveEvidence === undefined
+        ? task.evidenceRevisionId
+        : effectiveEvidence.revisionId ?? undefined,
+    mediaUrl,
+    materials,
+    operations,
+    reportRevisions,
+  }
+}
+
+const loadRevisionNote = async (
+  client: Video2NotesApi,
+  taskId: string,
+  documentPath: string,
+): Promise<NoteDocument> => {
+  const document = await client.artifactJson<ApiNoteDocument>(
+    taskId,
+    documentPath,
+  )
+  const note = mapNote(document)
+  return {
+    ...note,
+    sections: await Promise.all(
+      note.sections.map(async section => {
+        if (!section.screenshotPath) return section
+        try {
+          const screenshotUrl =
+            (await localArtifactUrl(taskId, section.screenshotPath)) ||
+            (await client.artifactBlobUrl(taskId, section.screenshotPath))
+          objectUrls.set(
+            `${taskId}:${documentPath}:${section.screenshotPath}`,
+            screenshotUrl,
+          )
+          return { ...section, screenshotUrl }
+        } catch {
+          return section
+        }
+      }),
+    ),
+  }
 }
 
 export const useStudioStore = create<StudioStore>()((set, get) => ({
@@ -828,18 +1458,46 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         const merged = existing.map(task => {
           const response = responseById.get(task.id)
           const job = jobById.get(task.id)
-          if (!response) return task
+          if (!response) {
+            return job
+              ? {
+                  ...task,
+                  lastMessage: job.message ?? task.lastMessage,
+                  telemetry: mergeTelemetry(task.telemetry, telemetryFromJob(job)),
+                }
+              : task
+          }
+          const next = taskFromRun(
+            response.run,
+            job ?? response.job,
+            task.source,
+            response.runtime_warnings,
+          )
           return {
-            ...taskFromRun(response.run, job, task.source),
+            ...next,
             note: task.note,
             evidence: task.evidence,
             mediaUrl: task.mediaUrl,
-            warnings: [...response.run.warnings, ...response.runtime_warnings],
+            materials: task.materials,
+            operations: task.operations,
+            evidenceRevisionId: task.evidenceRevisionId,
+            reportRevisions: task.reportRevisions,
+            telemetry: mergeTelemetry(
+              mergeTelemetry(task.telemetry, next.telemetry),
+              telemetryFromJob(response.job),
+            ),
           }
         })
         for (const response of responseById.values()) {
           if (!merged.some(task => task.id === response.run.run_id)) {
-            merged.unshift(taskFromRun(response.run, response.job))
+            merged.unshift(
+              taskFromRun(
+                response.run,
+                response.job,
+                undefined,
+                response.runtime_warnings,
+              ),
+            )
           }
         }
         const hydrated = await Promise.all(
@@ -911,6 +1569,43 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     set(state => ({ draft: { ...state.draft, includeScreenshots } })),
   setGeneratePdf: generatePdf =>
     set(state => ({ draft: { ...state.draft, generatePdf } })),
+  setSamplingMode: samplingMode =>
+    set(state => ({ draft: { ...state.draft, samplingMode } })),
+  setSamplingIntervalSeconds: samplingIntervalSeconds =>
+    set(state => ({ draft: { ...state.draft, samplingIntervalSeconds } })),
+  addSamplingOverride: () =>
+    set(state => {
+      samplingOverrideSequence += 1
+      const override = nextSamplingOverride(
+        state.draft.samplingOverrides,
+        state.draft.manifest?.durationSeconds,
+        `sampling-${samplingOverrideSequence}`,
+      )
+      return {
+        draft: {
+          ...state.draft,
+          samplingOverrides: [...state.draft.samplingOverrides, override],
+        },
+      }
+    }),
+  updateSamplingOverride: (id, patch) =>
+    set(state => ({
+      draft: {
+        ...state.draft,
+        samplingOverrides: state.draft.samplingOverrides.map(override =>
+          override.id === id ? { ...override, ...patch } : override,
+        ),
+      },
+    })),
+  removeSamplingOverride: id =>
+    set(state => ({
+      draft: {
+        ...state.draft,
+        samplingOverrides: state.draft.samplingOverrides.filter(override => override.id !== id),
+      },
+    })),
+  setReportPreset: reportPreset =>
+    set(state => ({ draft: { ...state.draft, reportPreset } })),
 
   probeSource: () => {
     const draft = get().draft
@@ -1064,6 +1759,13 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       }))
       return
     }
+    const samplingValidation = validateSamplingDraft(draft)
+    if (samplingValidation.errors.length > 0) {
+      set({
+        notice: `无法开始任务：${samplingValidation.errors[0]}`,
+      })
+      return
+    }
     if (get().backend.mode === 'demo') {
       const taskId = `task-${Date.now().toString(36)}`
       const task: ProcessingTask = {
@@ -1075,6 +1777,10 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         etaSeconds: draft.mode === 'fast' ? 520 : draft.mode === 'balanced' ? 780 : 1140,
         createdAt: '刚刚',
         stages: makeStages(0),
+        telemetry: makeDemoTelemetry(0, taskId),
+        runtimeWarnings: [...demoRuntimeWarnings],
+        materials: makeDemoMaterials(taskId),
+        operations: [],
         evidence: evidenceFixture.slice(0, 3),
       }
       set(state => ({
@@ -1089,14 +1795,19 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set({ notice: '本地后端尚未连接。' })
       return
     }
-    const submission = submissionForDraft(draft)
+    const submission = buildPipelineSubmission(draft)
     set(state => ({ draft: { ...state.draft, status: 'submitting', error: undefined } }))
     void api
       .submitJob(submission)
       .then(response => {
         sourceByRun.set(response.run.run_id, draft.manifest!)
         submissionByRun.set(response.run.run_id, submission)
-        const task = taskFromRun(response.run, response.job, draft.manifest)
+        const task = taskFromRun(
+          response.run,
+          response.job,
+          draft.manifest,
+          response.runtime_warnings,
+        )
         set(state => ({
           draft: { ...state.draft, status: 'ready' },
           tasks: [task, ...state.tasks],
@@ -1131,6 +1842,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           status: completed ? 'completed' : 'running',
           etaSeconds: completed ? 0 : Math.max(0, task.etaSeconds - 1),
           stages: makeStages(progress),
+          telemetry: makeDemoTelemetry(progress, task.id),
           evidence:
             progress > 55 && task.evidence.length < evidenceFixture.length
               ? evidenceFixture.slice(
@@ -1186,7 +1898,13 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .then(snapshot =>
         set(state => ({
           tasks: state.tasks.map(task =>
-            task.id === taskId ? { ...task, lastMessage: snapshot.message } : task,
+            task.id === taskId
+              ? {
+                  ...task,
+                  lastMessage: snapshot.message,
+                  telemetry: mergeTelemetry(task.telemetry, telemetryFromJob(snapshot)),
+                }
+              : task,
           ),
         })),
       )
@@ -1203,6 +1921,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
                 progress: 0,
                 etaSeconds: task.mode === 'fast' ? 520 : 1140,
                 stages: makeStages(0),
+                telemetry: makeDemoTelemetry(0, task.id),
+                runtimeWarnings: [...demoRuntimeWarnings],
                 note: undefined,
               }
             : task,
@@ -1222,13 +1942,731 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         const source = get().tasks.find(task => task.id === taskId)?.source
         if (source) sourceByRun.set(response.run.run_id, source)
         submissionByRun.set(response.run.run_id, previous)
-        const next = taskFromRun(response.run, response.job, source)
+        const next = taskFromRun(
+          response.run,
+          response.job,
+          source,
+          response.runtime_warnings,
+        )
         set(state => ({
           tasks: [next, ...state.tasks],
           activeTaskId: next.id,
           notice: '已创建新的可追溯重试任务；原任务 artifact 保持不变。',
         }))
       })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+
+  refreshOperations: taskId => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要刷新的任务。' })
+      return
+    }
+    if (!task.realBackend) {
+      set({
+        notice: '演示返工记录仅保存在当前内存中；没有向本地后端发起请求。',
+      })
+      return
+    }
+    const client = api
+    if (!client || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法刷新返工记录。' })
+      return
+    }
+    void fetchReworkState(client, taskId).then(result => {
+      let notice: string
+      if (result.operations !== undefined && result.evidence !== undefined) {
+        notice = `已同步 ${result.operations.length} 条返工记录与 ${result.evidence.length} 条有效证据；报告尚未重生成。`
+      } else if (result.operations !== undefined) {
+        notice = `已同步 ${result.operations.length} 条返工记录，但有效证据刷新失败：${errorMessage(result.evidenceError)}；当前证据保持不变。`
+      } else if (result.evidence !== undefined) {
+        notice = `已刷新 ${result.evidence.length} 条有效证据，但返工记录刷新失败：${errorMessage(result.operationsError)}；报告尚未重生成。`
+      } else {
+        notice = `返工记录与有效证据均刷新失败：${errorMessage(result.operationsError ?? result.evidenceError)}；当前数据保持不变。`
+      }
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? {
+                ...item,
+                operations: result.operations ?? item.operations,
+                evidence: result.evidence ?? item.evidence,
+                evidenceRevisionId:
+                  result.evidenceRevisionId === undefined
+                    ? item.evidenceRevisionId
+                    : result.evidenceRevisionId ?? undefined,
+              }
+            : item,
+        ),
+        notice,
+      }))
+    }).catch(error =>
+      set({
+        notice: `返工状态刷新失败：${errorMessage(error)}；当前数据保持不变。`,
+      }),
+    )
+  },
+
+  runVisionRework: (taskId, input) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要执行视觉返工的任务。' })
+      return
+    }
+    if (task.status !== 'completed') {
+      set({ notice: '只有已完成的任务可以执行局部视觉返工。' })
+      return
+    }
+    const range = validateOperationRange(
+      task,
+      input.startSeconds,
+      input.endSeconds,
+    )
+    if (!range.ok) {
+      set({ notice: range.error })
+      return
+    }
+    let sampling: Extract<
+      ApiRunOperationRequest,
+      { kind: 'vision_rescan' }
+    >['sampling']
+    if (input.mode === 'fixed_interval') {
+      const interval = validateFixedInterval(
+        range.startUs,
+        range.endUs,
+        input.intervalSeconds,
+      )
+      if (!interval.ok) {
+        set({ notice: interval.error })
+        return
+      }
+      sampling = {
+        mode: 'fixed_interval',
+        interval_us: interval.intervalUs,
+      }
+    } else {
+      if (input.intervalSeconds !== undefined) {
+        set({ notice: '自适应视觉返工不接受固定采样间隔。' })
+        return
+      }
+      sampling = { mode: 'adaptive' }
+    }
+    if (!task.realBackend) {
+      const operation = makeDemoReworkOperation({
+        taskId,
+        kind: 'vision_rescan',
+        startSeconds: range.startUs / MICROSECONDS_PER_SECOND,
+        endSeconds: range.endUs / MICROSECONDS_PER_SECOND,
+        samplingMode: input.mode,
+        intervalSeconds:
+          sampling.mode === 'fixed_interval'
+            ? sampling.interval_us / MICROSECONDS_PER_SECOND
+            : undefined,
+        runOcr: input.runOcr,
+      })
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? { ...item, operations: [...item.operations, operation] }
+            : item,
+        ),
+        notice:
+          '已记录视觉返工演示预览；演示不执行模型、不修改证据，也未重生成报告。',
+      }))
+      return
+    }
+    const client = api
+    if (!client || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法执行视觉返工。' })
+      return
+    }
+    const request: ApiRunOperationRequest = {
+      kind: 'vision_rescan',
+      range: { start_us: range.startUs, end_us: range.endUs },
+      sampling,
+      run_ocr: input.runOcr,
+    }
+    void executeBackendRework(client, taskId, request)
+      .then(result =>
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId ? applyBackendRework(item, result) : item,
+          ),
+          notice: backendReworkNotice(result),
+        })),
+      )
+      .catch(error => set({ notice: reworkErrorMessage(error) }))
+  },
+
+  runAsrRework: (taskId, input) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要执行语音返工的任务。' })
+      return
+    }
+    if (task.status !== 'completed') {
+      set({ notice: '只有已完成的任务可以执行局部语音返工。' })
+      return
+    }
+    const range = validateOperationRange(
+      task,
+      input.range.startSeconds,
+      input.range.endSeconds,
+    )
+    if (!range.ok) {
+      set({ notice: range.error })
+      return
+    }
+    if (!Array.isArray(input.languageHints)) {
+      set({ notice: '语言提示必须是字符串列表。' })
+      return
+    }
+    const languageHints = [
+      ...new Set(input.languageHints.map(value => value.trim()).filter(Boolean)),
+    ]
+    if (languageHints.length > 8) {
+      set({ notice: '语音返工最多接受 8 个去重后的语言提示。' })
+      return
+    }
+    if (!task.realBackend) {
+      const operation = makeDemoReworkOperation({
+        taskId,
+        kind: 'asr_retranscribe',
+        startSeconds: range.startUs / MICROSECONDS_PER_SECOND,
+        endSeconds: range.endUs / MICROSECONDS_PER_SECOND,
+        languageHints,
+      })
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? { ...item, operations: [...item.operations, operation] }
+            : item,
+        ),
+        notice:
+          '已记录语音返工演示预览；演示不执行模型、不修改证据，也未重生成报告。',
+      }))
+      return
+    }
+    const client = api
+    if (!client || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法执行语音返工。' })
+      return
+    }
+    const request: ApiRunOperationRequest = {
+      kind: 'asr_retranscribe',
+      range: { start_us: range.startUs, end_us: range.endUs },
+      language_hints: languageHints,
+    }
+    void executeBackendRework(client, taskId, request)
+      .then(result =>
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId ? applyBackendRework(item, result) : item,
+          ),
+          notice: backendReworkNotice(result),
+        })),
+      )
+      .catch(error => set({ notice: reworkErrorMessage(error) }))
+  },
+
+  correctEvidence: (taskId, input) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要修正证据的任务。' })
+      return
+    }
+    if (task.status !== 'completed') {
+      set({ notice: '只有已完成的任务可以修正证据。' })
+      return
+    }
+    const evidenceId = input.evidenceId.trim()
+    const target = task.evidence.find(item => item.id === evidenceId)
+    if (!target) {
+      set({ notice: '没有找到要修正的有效证据。' })
+      return
+    }
+    const newText = input.newText.trim()
+    const reason = input.reason?.trim() || undefined
+    if (!newText) {
+      set({ notice: '人工修正文本不能为空。' })
+      return
+    }
+    if (newText.length > 200_000) {
+      set({ notice: '人工修正文本不能超过 200000 个字符。' })
+      return
+    }
+    if (reason && reason.length > 2_000) {
+      set({ notice: '修正原因不能超过 2000 个字符。' })
+      return
+    }
+    const start = secondsToSafeMicroseconds(target.startSeconds, '证据开始时间')
+    if (!start.ok) {
+      set({ notice: start.error })
+      return
+    }
+    const end = secondsToSafeMicroseconds(target.endSeconds, '证据结束时间')
+    if (!end.ok) {
+      set({ notice: end.error })
+      return
+    }
+    const endUs =
+      end.value > start.value
+        ? end.value
+        : start.value < Number.MAX_SAFE_INTEGER
+          ? start.value + 1
+          : undefined
+    if (endUs === undefined) {
+      set({ notice: '证据时间点无法安全转换为非空微秒区间。' })
+      return
+    }
+    if (!task.realBackend) {
+      const operation = makeDemoReworkOperation({
+        taskId,
+        kind: 'evidence_correct',
+        status: 'completed',
+        startSeconds: start.value / MICROSECONDS_PER_SECOND,
+        endSeconds: endUs / MICROSECONDS_PER_SECOND,
+        evidenceId,
+        newText,
+        reason,
+        replacedEvidenceIds: [evidenceId],
+        newEvidenceIds: [evidenceId],
+      })
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? {
+                ...item,
+                operations: [...item.operations, operation],
+                evidenceRevisionId: `demo-${operation.id}`,
+                evidence: item.evidence.map(evidence =>
+                  evidence.id === evidenceId
+                    ? {
+                        ...evidence,
+                        rawText: newText,
+                        provider: 'user/demo-memory',
+                      }
+                    : evidence,
+                ),
+              }
+            : item,
+        ),
+        notice:
+          '人工修正已写入演示内存并标记为 user/demo-memory；原时间与置信度保持不变，报告尚未重生成。',
+      }))
+      return
+    }
+    const client = api
+    if (!client || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法修正证据。' })
+      return
+    }
+    const request: ApiRunOperationRequest = {
+      kind: 'evidence_correct',
+      range: { start_us: start.value, end_us: endUs },
+      evidence_id: evidenceId,
+      new_text: newText,
+      ...(reason ? { reason } : {}),
+    }
+    void executeBackendRework(client, taskId, request)
+      .then(result =>
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId ? applyBackendRework(item, result) : item,
+          ),
+          notice: backendReworkNotice(result),
+        })),
+      )
+      .catch(error => set({ notice: reworkErrorMessage(error) }))
+  },
+
+  refreshReportRevisions: async taskId => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      const error = new Error('没有找到要刷新的任务。')
+      set({ notice: error.message })
+      throw error
+    }
+    if (!task.realBackend) {
+      set({
+        notice: '演示报告 revision 仅保存在当前内存中；没有请求本地后端。',
+      })
+      return
+    }
+    const client = api
+    if (!client || get().backend.mode !== 'real') {
+      const error = new Error('本地后端尚未连接，无法刷新报告 revision。')
+      set({ notice: error.message })
+      throw error
+    }
+    try {
+      const index = await client.listReportRevisions(taskId)
+      const revisions = newestReportFirst(
+        index.revisions.map(mapReportRevision),
+      )
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId ? { ...item, reportRevisions: revisions } : item,
+        ),
+        notice: `已同步 ${revisions.length} 份不可变报告 revision。`,
+      }))
+    } catch (error) {
+      set({ notice: errorMessage(error) })
+      throw error
+    }
+  },
+
+  generateReportRevision: async (taskId, input) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      const error = new Error('没有找到要生成报告的任务。')
+      set({ notice: error.message })
+      throw error
+    }
+    if (task.status !== 'completed') {
+      const error = new Error('只有已完成的任务可以重新生成报告。')
+      set({ notice: error.message })
+      throw error
+    }
+    if (!task.realBackend) {
+      const now = new Date().toISOString()
+      const formats: ReportRevisionFormat[] = input.includePdf
+        ? ['markdown', 'html', 'pdf']
+        : ['markdown', 'html']
+      const revision: ReportRevision = {
+        id: `revision-demo-${Date.now()}`,
+        runId: taskId,
+        preset: input.preset,
+        createdAt: now,
+        formats,
+        fallback: false,
+        warnings: ['演示 revision：未调用 LLM，也未写入本地 artifact。'],
+        evidenceRevisionId: task.evidenceRevisionId ?? 'base-evidence',
+        materialIds: task.materials.map(material => material.id),
+        artifactPaths: {},
+        source: 'demo-memory',
+      }
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? {
+                ...item,
+                reportRevisions: newestReportFirst([
+                  ...(item.reportRevisions ?? []),
+                  revision,
+                ]),
+              }
+            : item,
+        ),
+        notice:
+          '已创建明确标记的演示报告 revision；未执行模型、未写入文件。',
+      }))
+      return
+    }
+    const client = api
+    if (!client || get().backend.mode !== 'real') {
+      const error = new Error('本地后端尚未连接，无法生成报告 revision。')
+      set({ notice: error.message })
+      throw error
+    }
+    try {
+      const created = await client.createReportRevision(taskId, {
+        preset: input.preset,
+        language: 'zh-CN',
+        include_screenshots: input.includeScreenshots,
+        output_formats: input.includePdf
+          ? ['markdown', 'html', 'pdf']
+          : ['markdown', 'html'],
+      })
+      const revision = mapReportRevision(created)
+      let generatedNote: NoteDocument | undefined
+      try {
+        generatedNote = await loadRevisionNote(
+          client,
+          taskId,
+          revision.artifactPaths.document ?? '',
+        )
+      } catch {
+        generatedNote = undefined
+      }
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? {
+                ...item,
+                note: generatedNote ?? item.note,
+                reportRevisions: newestReportFirst([
+                  ...(item.reportRevisions ?? []).filter(
+                    existing => existing.id !== revision.id,
+                  ),
+                  revision,
+                ]),
+                artifactPaths: {
+                  ...item.artifactPaths,
+                  markdown: revision.artifactPaths.markdown,
+                  html: revision.artifactPaths.html,
+                  pdf: revision.artifactPaths.pdf,
+                  noteDocument: revision.artifactPaths.document,
+                },
+              }
+            : item,
+        ),
+        notice: generatedNote
+          ? `已生成 ${input.preset} 报告，并切换阅读区到 ${revision.id}。`
+          : `报告 ${revision.id} 已生成，但阅读预览刷新失败；产物仍可下载。`,
+      }))
+    } catch (error) {
+      set({ notice: errorMessage(error) })
+      throw error
+    }
+  },
+
+  downloadReportRevisionArtifact: (taskId, relativePath, format) => {
+    if (!relativePath || !api) {
+      set({ notice: `该报告没有可下载的 ${format.toUpperCase()} 产物。` })
+      return
+    }
+    void api
+      .artifactBlobUrl(taskId, relativePath)
+      .then(url => {
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download =
+          relativePath.split('/').at(-1) || `note.${format}`
+        anchor.click()
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+        set({ notice: `已导出报告 revision 的 ${anchor.download}。` })
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+
+  refreshMaterials: taskId => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要刷新的任务。' })
+      return
+    }
+    if (!task.realBackend) {
+      set({ notice: '演示材料仅保存在当前内存中；没有向本地后端发起请求。' })
+      return
+    }
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法刷新补充材料。' })
+      return
+    }
+    void api
+      .listMaterials(taskId)
+      .then(materials =>
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId
+              ? { ...item, materials: materials.map(mapSupportingMaterial) }
+              : item,
+          ),
+          notice: `已同步 ${materials.length} 条补充材料。`,
+        })),
+      )
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+
+  addTextMaterial: (taskId, input) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要添加材料的任务。' })
+      return
+    }
+    const title = input.title.trim()
+    const content = input.content.trim()
+    if (!title || !content) {
+      set({ notice: '补充文字的标题和内容都不能为空。' })
+      return
+    }
+    const rangeError = materialRangeError(input.startUs, input.endUs)
+    if (rangeError) {
+      set({ notice: rangeError })
+      return
+    }
+    if (!task.realBackend) {
+      demoMaterialSequence += 1
+      const material: SupportingMaterial = {
+        id: `material-demotext${demoMaterialSequence}`,
+        runId: taskId,
+        kind: 'text',
+        title,
+        originalName: null,
+        mediaType: 'text/markdown; charset=utf-8',
+        artifact: null,
+        sha256: null,
+        sizeBytes: new TextEncoder().encode(content).byteLength,
+        textContent: content,
+        startUs: input.startUs ?? null,
+        endUs: input.endUs ?? null,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        deletedAt: null,
+        storage: 'demo-memory',
+      }
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? { ...item, materials: [...item.materials, material] }
+            : item,
+        ),
+        notice: '演示文字材料已加入当前内存；没有上传或写入后端。',
+      }))
+      return
+    }
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法保存补充文字。' })
+      return
+    }
+    void api
+      .addTextMaterial(taskId, {
+        title,
+        content,
+        ...(input.startUs !== undefined ? { start_us: input.startUs } : {}),
+        ...(input.endUs !== undefined ? { end_us: input.endUs } : {}),
+      })
+      .then(created => {
+        const material = mapSupportingMaterial(created)
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId
+              ? {
+                  ...item,
+                  materials: [
+                    ...item.materials.filter(existing => existing.id !== material.id),
+                    material,
+                  ],
+                }
+              : item,
+          ),
+          notice: `补充文字“${material.title}”已保存到本地任务。`,
+        }))
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+
+  addFileMaterial: (taskId, file, options = {}) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要添加材料的任务。' })
+      return
+    }
+    const rangeError = materialRangeError(options.startUs, options.endUs)
+    if (rangeError) {
+      set({ notice: rangeError })
+      return
+    }
+    if (!task.realBackend) {
+      const supportedTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
+      if (!supportedTypes.has(file.type)) {
+        set({ notice: '演示材料只接受 PNG、JPEG 或 WebP 图片元数据。' })
+        return
+      }
+      demoMaterialSequence += 1
+      const material: SupportingMaterial = {
+        id: `material-demoimage${demoMaterialSequence}`,
+        runId: taskId,
+        kind: 'image',
+        title: options.title?.trim() || file.name || '补充图片',
+        originalName: file.name || null,
+        mediaType: file.type,
+        artifact: null,
+        sha256: null,
+        sizeBytes: file.size,
+        textContent: null,
+        startUs: options.startUs ?? null,
+        endUs: options.endUs ?? null,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        deletedAt: null,
+        storage: 'demo-memory',
+      }
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? { ...item, materials: [...item.materials, material] }
+            : item,
+        ),
+        notice: '演示图片仅保存名称与元数据；没有读取内容或伪造后端上传。',
+      }))
+      return
+    }
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法上传补充图片。' })
+      return
+    }
+    void api
+      .addFileMaterial(taskId, file, {
+        ...(options.title !== undefined ? { title: options.title.trim() } : {}),
+        ...(options.startUs !== undefined ? { start_us: options.startUs } : {}),
+        ...(options.endUs !== undefined ? { end_us: options.endUs } : {}),
+      })
+      .then(created => {
+        const material = mapSupportingMaterial(created)
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId
+              ? {
+                  ...item,
+                  materials: [
+                    ...item.materials.filter(existing => existing.id !== material.id),
+                    material,
+                  ],
+                }
+              : item,
+          ),
+          notice: `补充图片“${material.title}”已保存到本地任务。`,
+        }))
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+
+  deleteMaterial: (taskId, materialId) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task) {
+      set({ notice: '没有找到要删除材料的任务。' })
+      return
+    }
+    if (!task.materials.some(material => material.id === materialId)) {
+      set({ notice: '没有找到这条补充材料。' })
+      return
+    }
+    if (!task.realBackend) {
+      set(state => ({
+        tasks: state.tasks.map(item =>
+          item.id === taskId
+            ? {
+                ...item,
+                materials: item.materials.filter(material => material.id !== materialId),
+              }
+            : item,
+        ),
+        notice: '演示材料已从当前内存移除；没有调用后端删除接口。',
+      }))
+      return
+    }
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '本地后端尚未连接，无法删除补充材料。' })
+      return
+    }
+    void api
+      .deleteMaterial(taskId, materialId)
+      .then(() =>
+        set(state => ({
+          tasks: state.tasks.map(item =>
+            item.id === taskId
+              ? {
+                  ...item,
+                  materials: item.materials.filter(material => material.id !== materialId),
+                }
+              : item,
+          ),
+          notice: '补充材料已从当前任务中删除。',
+        })),
+      )
       .catch(error => set({ notice: errorMessage(error) }))
   },
 
@@ -1456,6 +2894,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   resetDemo: () => {
     api = undefined
     registry = undefined
+    demoOperationSequence = 0
+    samplingOverrideSequence = 0
     sourceByRun.clear()
     submissionByRun.clear()
     for (const url of objectUrls.values()) URL.revokeObjectURL(url)

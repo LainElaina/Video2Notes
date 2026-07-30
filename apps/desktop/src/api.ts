@@ -32,6 +32,66 @@ export interface ApiAcquisitionPolicy {
   prefer_hardlink: boolean
 }
 
+export interface ApiSamplingSpec {
+  mode: 'adaptive' | 'fixed_interval' | 'skip'
+  interval_us?: number
+}
+
+export interface ApiSamplingOverride {
+  range: {
+    start_us: number
+    end_us: number
+  }
+  sampling: ApiSamplingSpec
+}
+
+export interface ApiSamplingPlan {
+  default: ApiSamplingSpec
+  overrides: ApiSamplingOverride[]
+}
+
+export interface ApiReportSpec {
+  preset: 'concise' | 'detailed' | 'professional' | 'beginner' | 'executive'
+  language: string
+  include_screenshots: boolean
+  output_formats: Array<'markdown' | 'html' | 'pdf'>
+}
+
+export interface ApiResolvedReportSpec extends ApiReportSpec {
+  audience: string
+  editorial_goal: string
+  max_sections: number
+  max_facts_per_section: number
+  max_takeaways: number
+  include_glossary: boolean
+  include_evidence_index: boolean
+  template_version: string
+  max_output_tokens: number
+}
+
+export interface ApiReportRevision {
+  id: string
+  run_id: string
+  created_at: string
+  report_spec: ApiResolvedReportSpec
+  evidence_revision_id: string | null
+  material_ids: string[]
+  document: ApiArtifactRef
+  markdown: ApiArtifactRef
+  html: ApiArtifactRef
+  pdf: ApiArtifactRef | null
+  invocations: unknown[]
+  warnings: string[]
+  used_deterministic_fallback: boolean
+}
+
+export interface ApiReportRevisionIndex {
+  schema_version: number
+  run_id: string
+  latest_revision_id: string | null
+  revisions: ApiReportRevision[]
+}
+
 export interface ApiFormatInfo {
   format_id: string
   width?: number
@@ -64,8 +124,48 @@ export interface ApiArtifactRef {
   relative_path: string
   sha256: string
   size_bytes: number
-  media_type?: string
+  media_type?: string | null
   created_at: string
+}
+
+export interface ApiRunMaterialArtifact {
+  kind: string
+  relative_path: string
+  sha256: string
+  size_bytes: number
+  media_type: string | null
+  created_at: string
+}
+
+export interface ApiRunMaterial {
+  id: string
+  run_id: string
+  kind: 'text' | 'image'
+  title: string
+  original_name: string | null
+  media_type: string
+  artifact: ApiRunMaterialArtifact
+  sha256: string
+  size_bytes: number
+  text_content: string | null
+  start_us: number | null
+  end_us: number | null
+  status: 'active' | 'deleted'
+  created_at: string
+  deleted_at: string | null
+}
+
+export interface ApiTextMaterialRequest {
+  title: string
+  content: string
+  start_us?: number
+  end_us?: number
+}
+
+export interface ApiFileMaterialOptions {
+  title?: string
+  start_us?: number
+  end_us?: number
 }
 
 export interface ApiStageRecord {
@@ -149,6 +249,85 @@ export interface ApiEvidenceSpan {
   confidence?: number
   provider?: string
   model?: string
+}
+
+export interface ApiOperationTimeRange {
+  start_us: number
+  end_us: number
+}
+
+export type ApiOperationSampling =
+  | {
+      mode: 'adaptive'
+      interval_us?: null
+    }
+  | {
+      mode: 'fixed_interval'
+      interval_us: number
+    }
+
+export interface ApiVisionRescanRequest {
+  kind: 'vision_rescan'
+  range: ApiOperationTimeRange
+  sampling: ApiOperationSampling
+  run_ocr: boolean
+  language_hints?: string[]
+  evidence_id?: null
+  new_text?: null
+  reason?: string | null
+}
+
+export interface ApiAsrRetranscribeRequest {
+  kind: 'asr_retranscribe'
+  range: ApiOperationTimeRange
+  sampling?: null
+  run_ocr?: true
+  language_hints: string[]
+  evidence_id?: null
+  new_text?: null
+  reason?: string | null
+}
+
+export interface ApiEvidenceCorrectRequest {
+  kind: 'evidence_correct'
+  range: ApiOperationTimeRange
+  sampling?: null
+  run_ocr?: true
+  language_hints?: []
+  evidence_id: string
+  new_text: string
+  reason?: string | null
+}
+
+export type ApiRunOperationRequest =
+  | ApiVisionRescanRequest
+  | ApiAsrRetranscribeRequest
+  | ApiEvidenceCorrectRequest
+
+export interface ApiRunOperation {
+  schema_version: number
+  operation_id: string
+  run_id: string
+  request: ApiRunOperationRequest
+  status: 'completed' | 'failed'
+  created_at: string
+  finished_at: string
+  revision_id: string | null
+  artifact_paths: string[]
+  replaced_evidence_ids: string[]
+  new_evidence_ids: string[]
+  visual_state_count: number
+  error_type: string | null
+  detail: string | null
+}
+
+export interface ApiEvidenceRevisionResponse {
+  schema_version: number
+  run_id: string
+  revision_id: string | null
+  operation_id: string | null
+  evidence: ApiEvidenceSpan[]
+  superseded_evidence_ids: string[]
 }
 
 export interface ApiNoteDocument {
@@ -264,8 +443,10 @@ export interface PipelineSubmission {
   quality_mode: 'fast' | 'balanced' | 'accurate'
   title_override?: string
   language_hints: string[]
+  sampling_plan: ApiSamplingPlan
   include_screenshots: boolean
   generate_pdf: boolean
+  report_spec: ApiReportSpec
 }
 
 export class Video2NotesApiError extends Error {
@@ -373,7 +554,9 @@ export class Video2NotesApi {
   ): Promise<T> {
     const headers = new Headers(init.headers)
     if (!allowUnauthenticated) headers.set('X-Video2Notes-Token', this.token)
-    if (init.body !== undefined && !headers.has('Content-Type')) {
+    const isFormData =
+      typeof FormData !== 'undefined' && init.body instanceof FormData
+    if (init.body !== undefined && !isFormData && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json')
     }
     let response: Response
@@ -457,6 +640,91 @@ export class Video2NotesApi {
 
   jobResult(runId: string): Promise<ApiProcessingRun> {
     return this.request(`/api/jobs/${encodeURIComponent(runId)}/result`)
+  }
+
+  listOperations(runId: string): Promise<ApiRunOperation[]> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/operations`)
+  }
+
+  createOperation(
+    runId: string,
+    request: ApiRunOperationRequest,
+  ): Promise<ApiRunOperation> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/operations`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+
+  getEvidence(
+    runId: string,
+    revision?: string,
+  ): Promise<ApiEvidenceRevisionResponse> {
+    const query = new URLSearchParams()
+    if (revision !== undefined) query.set('revision', revision)
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/evidence${suffix}`)
+  }
+
+  listReportRevisions(runId: string): Promise<ApiReportRevisionIndex> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/report-revisions`,
+    )
+  }
+
+  createReportRevision(
+    runId: string,
+    request: ApiReportSpec,
+  ): Promise<ApiReportRevision> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/report-revisions`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+      },
+    )
+  }
+
+  listMaterials(runId: string): Promise<ApiRunMaterial[]> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/materials`)
+  }
+
+  addTextMaterial(
+    runId: string,
+    request: ApiTextMaterialRequest,
+  ): Promise<ApiRunMaterial> {
+    return this.request(`/api/runs/${encodeURIComponent(runId)}/materials/text`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+
+  addFileMaterial(
+    runId: string,
+    file: File,
+    options: ApiFileMaterialOptions = {},
+  ): Promise<ApiRunMaterial> {
+    const query = new URLSearchParams()
+    if (options.title !== undefined) query.set('title', options.title)
+    if (options.start_us !== undefined) query.set('start_us', String(options.start_us))
+    if (options.end_us !== undefined) query.set('end_us', String(options.end_us))
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    const body = new FormData()
+    body.append('file', file, file.name)
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/materials/files${suffix}`,
+      {
+        method: 'POST',
+        body,
+      },
+    )
+  }
+
+  deleteMaterial(runId: string, materialId: string): Promise<ApiRunMaterial> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/materials/${encodeURIComponent(materialId)}`,
+      { method: 'DELETE' },
+    )
   }
 
   cancelJob(runId: string): Promise<ApiJobSnapshot> {

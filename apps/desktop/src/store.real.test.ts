@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ApiJobSnapshot, ApiRunManifest } from './api'
+import type {
+  ApiEvidenceSpan,
+  ApiJobSnapshot,
+  ApiRunManifest,
+  ApiRunMaterial,
+  ApiRunOperation,
+  ApiRunOperationRequest,
+} from './api'
 import { useStudioStore } from './store'
 
 const json = (value: unknown, status = 200): Response =>
@@ -9,6 +16,54 @@ const json = (value: unknown, status = 200): Response =>
   })
 
 const createdAt = '2026-07-28T12:00:00Z'
+const runtimeWarnings = ['CUDA OCR unavailable; CPU fallback selected.']
+const textMaterial: ApiRunMaterial = {
+  id: 'material-text001',
+  run_id: 'run-real-01',
+  kind: 'text',
+  title: '评论区补充资料',
+  original_name: null,
+  media_type: 'text/markdown; charset=utf-8',
+  artifact: {
+    kind: 'supporting',
+    relative_path: 'supporting/files/material-text001/text.md',
+    sha256: 'a'.repeat(64),
+    size_bytes: 24,
+    media_type: null,
+    created_at: createdAt,
+  },
+  sha256: 'a'.repeat(64),
+  size_bytes: 24,
+  text_content: '一条需要一起整理的资料。',
+  start_us: 1_000_000,
+  end_us: 2_000_000,
+  status: 'active',
+  created_at: createdAt,
+  deleted_at: null,
+}
+
+const baseEffectiveEvidence: ApiEvidenceSpan[] = [
+  {
+    id: 'evidence-early',
+    modality: 'asr',
+    start_us: 1_000_000,
+    end_us: 2_000_000,
+    raw_text: 'Early section context.',
+    confidence: 0.82,
+    provider: 'base-asr',
+    model: 'base-model',
+  },
+  {
+    id: 'evidence-late',
+    modality: 'asr',
+    start_us: 9_000_000,
+    end_us: 10_000_000,
+    raw_text: 'Late fact evidence.',
+    confidence: 0.91,
+    provider: 'base-asr',
+    model: 'base-model',
+  },
+]
 
 const registryPayload = {
   schema_version: 1,
@@ -45,7 +100,7 @@ const registryPayload = {
   },
 }
 
-const runningJob = {
+const runningJob: ApiJobSnapshot = {
   run_id: 'run-real-01',
   state: 'running' as const,
   stage: 'audio.asr',
@@ -53,10 +108,39 @@ const runningJob = {
   message: '正在校准语音时间戳',
   queued_at: createdAt,
   started_at: createdAt,
-  events: [],
+  events: [
+    {
+      sequence: 1,
+      run_id: 'run-real-01',
+      state: 'queued' as const,
+      stage: 'queued',
+      metrics: {},
+      created_at: '2026-07-28T12:00:00Z',
+    },
+    {
+      sequence: 2,
+      run_id: 'run-real-01',
+      state: 'running' as const,
+      stage: 'source.acquire',
+      progress: 0.5,
+      message: '正在下载媒体',
+      metrics: { downloaded_bytes: 2_048, total_bytes: 4_096, speed_bps: null },
+      created_at: '2026-07-28T12:00:01Z',
+    },
+    {
+      sequence: 3,
+      run_id: 'run-real-01',
+      state: 'running' as const,
+      stage: 'audio.asr',
+      progress: 0.45,
+      message: '正在校准语音时间戳',
+      metrics: { processed_seconds: 41.2, realtime_factor: 0.24 },
+      created_at: '2026-07-28T12:00:02Z',
+    },
+  ],
 }
 
-const runningRun = {
+const runningRun: ApiRunManifest = {
   run_id: 'run-real-01',
   source: {
     kind: 'url',
@@ -74,9 +158,52 @@ const runningRun = {
     'source.acquire': {
       stage_name: 'source.acquire',
       status: 'completed' as const,
-      outputs: [],
+      outputs: [
+        {
+          kind: 'media',
+          relative_path: 'source/source.mp4',
+          sha256: 'source-sha256',
+          size_bytes: 4_096,
+          media_type: 'video/mp4',
+          created_at: createdAt,
+        },
+      ],
+      wall_time_seconds: 1.25,
+      warnings: ['Source selected a lower authenticated format.'],
+      metrics: { downloaded_bytes: 4_096, speed_bps: null, used_browser_profile: true },
+    },
+    'audio.extract': {
+      stage_name: 'audio.extract',
+      status: 'completed' as const,
+      outputs: [
+        {
+          kind: 'audio',
+          relative_path: 'audio/mono.wav',
+          sha256: 'audio-sha256',
+          size_bytes: 2_048,
+          media_type: 'audio/wav',
+          created_at: createdAt,
+        },
+      ],
+      wall_time_seconds: 2.5,
       warnings: [],
-      metrics: {},
+      metrics: { segment_count: 1, sample_rate_hz: 16_000 },
+    },
+    'audio.asr': {
+      stage_name: 'audio.asr',
+      status: 'running' as const,
+      outputs: [
+        {
+          kind: 'evidence',
+          relative_path: 'speech/asr-evidence.json',
+          sha256: 'asr-sha256',
+          size_bytes: 8_192,
+          media_type: 'application/json',
+          created_at: createdAt,
+        },
+      ],
+      warnings: ['Primary ASR retained one low-confidence segment.'],
+      metrics: { segment_count: 24, secondary_window_count: 2 },
     },
   },
   warnings: [],
@@ -84,9 +211,24 @@ const runningRun = {
 
 describe('studio store against the real loopback API contract', () => {
   const fetchMock = vi.fn()
-  const requests: Array<{ url: string; method: string; body?: string; token?: string }> = []
+  const requests: Array<{
+    url: string
+    method: string
+    body?: string
+    rawBody?: BodyInit | null
+    token?: string
+  }> = []
   let currentJob: ApiJobSnapshot = runningJob
   let currentRun: ApiRunManifest = runningRun
+  let currentMaterials: ApiRunMaterial[] = [textMaterial]
+  let materialListFails = false
+  let currentOperations: ApiRunOperation[] = []
+  let effectiveEvidence: ApiEvidenceSpan[] = structuredClone(baseEffectiveEvidence)
+  let operationListFails = false
+  let evidenceListFails = false
+  let conflictingOperationKind: ApiRunOperationRequest['kind'] | undefined
+  let failedOperationKind: ApiRunOperationRequest['kind'] | undefined
+  let operationSequence = 0
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -95,6 +237,15 @@ describe('studio store against the real loopback API contract', () => {
     requests.length = 0
     currentJob = runningJob
     currentRun = runningRun
+    currentMaterials = [textMaterial]
+    materialListFails = false
+    currentOperations = []
+    effectiveEvidence = structuredClone(baseEffectiveEvidence)
+    operationListFails = false
+    evidenceListFails = false
+    conflictingOperationKind = undefined
+    failedOperationKind = undefined
+    operationSequence = 0
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -104,6 +255,7 @@ describe('studio store against the real loopback API contract', () => {
         url: `${url.pathname}${url.search}`,
         method,
         body: typeof init?.body === 'string' ? init.body : undefined,
+        rawBody: init?.body,
         token: headers.get('X-Video2Notes-Token') ?? undefined,
       })
 
@@ -186,11 +338,170 @@ describe('studio store against the real loopback API contract', () => {
         )
       }
       if (url.pathname === '/api/jobs' && method === 'POST') {
-        return Promise.resolve(json({ run: currentRun, job: currentJob, runtime_warnings: [] }))
+        return Promise.resolve(
+          json({ run: currentRun, job: currentJob, runtime_warnings: runtimeWarnings }),
+        )
       }
       if (url.pathname === '/api/jobs' && method === 'GET') return Promise.resolve(json([currentJob]))
       if (url.pathname === '/api/jobs/run-real-01/result') {
-        return Promise.resolve(json({ run: currentRun, job: currentJob, runtime_warnings: [] }))
+        return Promise.resolve(
+          json({ run: currentRun, job: currentJob, runtime_warnings: runtimeWarnings }),
+        )
+      }
+      if (
+        url.pathname === '/api/runs/run-real-01/operations' &&
+        method === 'GET'
+      ) {
+        return Promise.resolve(
+          operationListFails
+            ? json({ detail: 'operation index temporarily unavailable' }, 500)
+            : json(currentOperations),
+        )
+      }
+      if (
+        url.pathname === '/api/runs/run-real-01/operations' &&
+        method === 'POST'
+      ) {
+        const payload = JSON.parse(
+          String(init?.body),
+        ) as ApiRunOperationRequest
+        if (payload.kind === conflictingOperationKind) {
+          return Promise.resolve(
+            json(
+              {
+                detail:
+                  payload.kind === 'asr_retranscribe'
+                    ? 'ASR backend is not configured'
+                    : 'OCR backend is not configured',
+              },
+              409,
+            ),
+          )
+        }
+        operationSequence += 1
+        const executionFailed = payload.kind === failedOperationKind
+        const operation: ApiRunOperation = {
+          schema_version: 1,
+          operation_id: `operation-${operationSequence}`,
+          run_id: 'run-real-01',
+          request: payload,
+          status: executionFailed ? 'failed' : 'completed',
+          created_at: `2026-07-28T12:20:0${operationSequence}Z`,
+          finished_at: `2026-07-28T12:20:0${operationSequence}Z`,
+          revision_id: executionFailed ? null : `revision-${operationSequence}`,
+          artifact_paths: executionFailed ? [] : ['operations/evidence.json'],
+          replaced_evidence_ids: executionFailed
+            ? []
+            : effectiveEvidence.map(item => item.id),
+          new_evidence_ids: executionFailed
+            ? []
+            : [`evidence-operation-${operationSequence}`],
+          visual_state_count:
+            !executionFailed && payload.kind === 'vision_rescan' ? 4 : 0,
+          error_type: executionFailed ? 'RuntimeError' : null,
+          detail: executionFailed ? 'worker exited before producing evidence' : null,
+        }
+        currentOperations = [...currentOperations, operation]
+        if (!executionFailed && payload.kind === 'vision_rescan') {
+          effectiveEvidence = [
+            {
+              id: `evidence-operation-${operationSequence}`,
+              modality: 'ocr',
+              start_us: payload.range.start_us,
+              end_us: payload.range.end_us,
+              raw_text: '视觉返工刷新后的屏幕文字。',
+              confidence: 0.94,
+              provider: 'vision-provider',
+              model: 'vision-v2',
+            },
+          ]
+        }
+        return Promise.resolve(json(operation))
+      }
+      if (
+        url.pathname === '/api/runs/run-real-01/evidence' &&
+        method === 'GET'
+      ) {
+        return Promise.resolve(
+          evidenceListFails
+            ? json({ detail: 'effective evidence temporarily unavailable' }, 500)
+            : json({
+                schema_version: 1,
+                run_id: 'run-real-01',
+                revision_id: currentOperations.at(-1)?.revision_id ?? null,
+                operation_id: currentOperations.at(-1)?.operation_id ?? null,
+                evidence: effectiveEvidence,
+                superseded_evidence_ids: [],
+              }),
+        )
+      }
+      if (url.pathname === '/api/runs/run-real-01/materials' && method === 'GET') {
+        return Promise.resolve(
+          materialListFails
+            ? json({ detail: 'material index temporarily unavailable' }, 500)
+            : json(currentMaterials),
+        )
+      }
+      if (url.pathname === '/api/runs/run-real-01/materials/text' && method === 'POST') {
+        const payload = JSON.parse(String(init?.body)) as {
+          title: string
+          content: string
+          start_us?: number
+          end_us?: number
+        }
+        const created: ApiRunMaterial = {
+          ...textMaterial,
+          id: 'material-addedtext',
+          title: payload.title,
+          text_content: payload.content,
+          start_us: payload.start_us ?? null,
+          end_us: payload.end_us ?? null,
+        }
+        currentMaterials = [...currentMaterials, created]
+        return Promise.resolve(json(created))
+      }
+      if (url.pathname === '/api/runs/run-real-01/materials/files' && method === 'POST') {
+        const form = init?.body as FormData
+        const file = form.get('file') as File
+        const created: ApiRunMaterial = {
+          ...textMaterial,
+          id: 'material-addedimage',
+          kind: 'image',
+          title: url.searchParams.get('title') || file.name,
+          original_name: file.name,
+          media_type: file.type,
+          artifact: {
+            kind: 'supporting',
+            relative_path: 'supporting/files/material-addedimage/image.png',
+            sha256: 'b'.repeat(64),
+            size_bytes: file.size,
+            media_type: file.type,
+            created_at: createdAt,
+          },
+          sha256: 'b'.repeat(64),
+          size_bytes: file.size,
+          text_content: null,
+          start_us: Number(url.searchParams.get('start_us')),
+          end_us: Number(url.searchParams.get('end_us')),
+        }
+        currentMaterials = [...currentMaterials, created]
+        return Promise.resolve(json(created))
+      }
+      if (
+        url.pathname.startsWith('/api/runs/run-real-01/materials/') &&
+        method === 'DELETE'
+      ) {
+        const materialId = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
+        const existing = currentMaterials.find(material => material.id === materialId)
+        if (!existing) return Promise.resolve(json({ detail: 'material not found' }, 404))
+        currentMaterials = currentMaterials.filter(material => material.id !== materialId)
+        return Promise.resolve(
+          json({
+            ...existing,
+            status: 'deleted',
+            deleted_at: '2026-07-28T12:10:00Z',
+          }),
+        )
       }
       if (url.pathname === '/api/runs/run-real-01/artifact') {
         return Promise.resolve(
@@ -276,6 +587,10 @@ describe('studio store against the real loopback API contract', () => {
         languageHints: '',
         includeScreenshots: true,
         generatePdf: true,
+        samplingMode: 'adaptive',
+        samplingIntervalSeconds: 0.5,
+        samplingOverrides: [],
+        reportPreset: 'detailed',
       },
     })
   })
@@ -297,6 +612,15 @@ describe('studio store against the real loopback API contract', () => {
     store.setDraftBrowser('edge')
     store.setDraftProfile('Default')
     store.setLanguageHints('zh-CN, en')
+    store.addSamplingOverride()
+    const overrideId = useStudioStore.getState().draft.samplingOverrides[0].id
+    store.updateSamplingOverride(overrideId, {
+      startSeconds: 1.25,
+      endSeconds: 2.75,
+      mode: 'fixed_interval',
+      intervalSeconds: 0.1,
+    })
+    store.setReportPreset('professional')
     store.probeSource()
     await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
 
@@ -316,6 +640,21 @@ describe('studio store against the real loopback API contract', () => {
       language_hints: ['zh-CN', 'en'],
       include_screenshots: true,
       generate_pdf: true,
+      sampling_plan: {
+        default: { mode: 'adaptive' },
+        overrides: [
+          {
+            range: { start_us: 1_250_000, end_us: 2_750_000 },
+            sampling: { mode: 'fixed_interval', interval_us: 100_000 },
+          },
+        ],
+      },
+      report_spec: {
+        preset: 'professional',
+        language: 'zh-CN',
+        include_screenshots: true,
+        output_formats: ['markdown', 'html', 'pdf'],
+      },
     })
 
     useStudioStore.getState().refreshTasks()
@@ -329,8 +668,145 @@ describe('studio store against the real loopback API contract', () => {
       id: 'run-real-01',
       status: 'running',
       lastMessage: '正在校准语音时间戳',
+      runtimeWarnings,
       realBackend: true,
     })
+    const runningTask = useStudioStore.getState().tasks[0]
+    expect(runningTask.telemetry.map(sample => sample.sequence)).toEqual([1, 2, 3])
+    expect(runningTask.telemetry[1]).toEqual({
+      sequence: 2,
+      runId: 'run-real-01',
+      state: 'running',
+      stage: 'source.acquire',
+      progress: 0.5,
+      message: '正在下载媒体',
+      metrics: { downloaded_bytes: 2_048, total_bytes: 4_096, speed_bps: null },
+      createdAt: '2026-07-28T12:00:01Z',
+    })
+    expect(runningTask.stages.find(stage => stage.id === 'acquire')).toMatchObject({
+      durationSeconds: 1.25,
+      artifactCount: 1,
+      metrics: { downloaded_bytes: 4_096, speed_bps: null, used_browser_profile: true },
+      warnings: ['Source selected a lower authenticated format.'],
+      outputArtifacts: [
+        {
+          stage: 'source.acquire',
+          kind: 'media',
+          relativePath: 'source/source.mp4',
+          sha256: 'source-sha256',
+          sizeBytes: 4_096,
+          mediaType: 'video/mp4',
+          createdAt,
+        },
+      ],
+    })
+    expect(runningTask.stages.find(stage => stage.id === 'speech')).toMatchObject({
+      durationSeconds: 2.5,
+      artifactCount: 2,
+      metrics: {
+        'audio.extract.segment_count': 1,
+        'audio.extract.sample_rate_hz': 16_000,
+        'audio.asr.segment_count': 24,
+        'audio.asr.secondary_window_count': 2,
+      },
+      warnings: ['Primary ASR retained one low-confidence segment.'],
+    })
+
+    useStudioStore.getState().refreshMaterials('run-real-01')
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.materials).toHaveLength(1),
+    )
+    expect(useStudioStore.getState().tasks[0]?.materials[0]).toEqual({
+      id: 'material-text001',
+      runId: 'run-real-01',
+      kind: 'text',
+      title: '评论区补充资料',
+      originalName: null,
+      mediaType: 'text/markdown; charset=utf-8',
+      artifact: {
+        kind: 'supporting',
+        relativePath: 'supporting/files/material-text001/text.md',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 24,
+        mediaType: null,
+        createdAt,
+      },
+      sha256: 'a'.repeat(64),
+      sizeBytes: 24,
+      textContent: '一条需要一起整理的资料。',
+      startUs: 1_000_000,
+      endUs: 2_000_000,
+      status: 'active',
+      createdAt,
+      deletedAt: null,
+      storage: 'run-artifact',
+    })
+
+    useStudioStore.getState().addTextMaterial('run-real-01', {
+      title: '手工文字',
+      content: '补充事实',
+      startUs: 3_000_000,
+      endUs: 4_000_000,
+    })
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.materials).toHaveLength(2),
+    )
+    const textRequest = requests.find(
+      request =>
+        request.url === '/api/runs/run-real-01/materials/text' &&
+        request.method === 'POST',
+    )
+    expect(JSON.parse(textRequest?.body ?? '{}')).toEqual({
+      title: '手工文字',
+      content: '补充事实',
+      start_us: 3_000_000,
+      end_us: 4_000_000,
+    })
+
+    const image = new File([new Uint8Array([1, 2, 3, 4])], 'reference.png', {
+      type: 'image/png',
+    })
+    useStudioStore.getState().addFileMaterial('run-real-01', image, {
+      title: '手工图片',
+      startUs: 5_000_000,
+      endUs: 6_000_000,
+    })
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.materials).toHaveLength(3),
+    )
+    const fileRequest = requests.find(request =>
+      request.url.startsWith('/api/runs/run-real-01/materials/files?'),
+    )
+    const fileUrl = new URL(`http://local${fileRequest?.url}`)
+    expect(Object.fromEntries(fileUrl.searchParams)).toEqual({
+      title: '手工图片',
+      start_us: '5000000',
+      end_us: '6000000',
+    })
+    const fileBody = fileRequest?.rawBody as FormData
+    expect((fileBody.get('file') as File).name).toBe('reference.png')
+    expect(
+      useStudioStore
+        .getState()
+        .tasks[0]?.materials.find(material => material.id === 'material-addedimage'),
+    ).toMatchObject({
+      kind: 'image',
+      originalName: 'reference.png',
+      storage: 'run-artifact',
+      artifact: { mediaType: 'image/png' },
+    })
+
+    useStudioStore.getState().deleteMaterial('run-real-01', 'material-text001')
+    await vi.waitFor(() =>
+      expect(
+        useStudioStore
+          .getState()
+          .tasks[0]?.materials.some(material => material.id === 'material-text001'),
+      ).toBe(false),
+    )
+    materialListFails = true
+    operationListFails = true
+    evidenceListFails = true
     // refreshTasks releases its in-flight guard after applying the merged run.
     await new Promise(resolve => window.setTimeout(resolve, 0))
 
@@ -341,6 +817,19 @@ describe('studio store against the real loopback API contract', () => {
       progress: 1,
       message: '笔记已完成',
       finished_at: createdAt,
+      events: [
+        runningJob.events[2],
+        {
+          sequence: 4,
+          run_id: 'run-real-01',
+          state: 'completed',
+          stage: 'completed',
+          progress: 1,
+          message: '笔记已完成',
+          metrics: { artifact_count: 4 },
+          created_at: '2026-07-28T12:00:03Z',
+        },
+      ],
     }
     currentRun = {
       ...runningRun,
@@ -371,6 +860,141 @@ describe('studio store against the real loopback API contract', () => {
       timeSeconds: 9,
       evidenceIds: ['evidence-late'],
     })
+    expect(useStudioStore.getState().tasks[0]).toBeDefined()
+    expect(useStudioStore.getState().tasks[0]?.materials).toHaveLength(2)
+    expect(useStudioStore.getState().tasks[0]?.operations).toEqual([])
+    expect(useStudioStore.getState().tasks[0]?.evidence).toHaveLength(2)
+    expect(
+      requests.some(
+        request =>
+          request.url === '/api/runs/run-real-01/materials' &&
+          request.method === 'GET',
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        request =>
+          request.url === '/api/runs/run-real-01/operations' &&
+          request.method === 'GET',
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        request =>
+          request.url === '/api/runs/run-real-01/evidence' &&
+          request.method === 'GET',
+      ),
+    ).toBe(true)
+    expect(
+      useStudioStore.getState().tasks[0]?.telemetry.map(sample => sample.sequence),
+    ).toEqual([1, 2, 3, 4])
+    expect(useStudioStore.getState().tasks[0]?.telemetry.at(-1)).toMatchObject({
+      sequence: 4,
+      state: 'completed',
+      metrics: { artifact_count: 4 },
+    })
+    const composedStage = useStudioStore
+      .getState()
+      .tasks[0]?.stages.find(stage => stage.id === 'draft')
+    expect(composedStage?.metrics).toEqual({})
+    expect(composedStage?.durationSeconds).toBeUndefined()
+
+    operationListFails = false
+    evidenceListFails = false
+    useStudioStore.getState().runVisionRework('run-real-01', {
+      startSeconds: 1.25,
+      endSeconds: 2.5,
+      mode: 'fixed_interval',
+      intervalSeconds: 0.25,
+      runOcr: true,
+    })
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.operations).toHaveLength(1),
+    )
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.evidence[0]?.id).toBe(
+        'evidence-operation-1',
+      ),
+    )
+    const visionReworkRequest = requests.find(
+      request =>
+        request.url === '/api/runs/run-real-01/operations' &&
+        request.method === 'POST',
+    )
+    expect(JSON.parse(visionReworkRequest?.body ?? '{}')).toEqual({
+      kind: 'vision_rescan',
+      range: { start_us: 1_250_000, end_us: 2_500_000 },
+      sampling: { mode: 'fixed_interval', interval_us: 250_000 },
+      run_ocr: true,
+    })
+    expect(useStudioStore.getState().tasks[0]?.operations[0]).toMatchObject({
+      id: 'operation-1',
+      kind: 'vision_rescan',
+      source: 'backend',
+      status: 'completed',
+      startSeconds: 1.25,
+      endSeconds: 2.5,
+      intervalSeconds: 0.25,
+      revisionId: 'revision-1',
+    })
+    expect(useStudioStore.getState().tasks[0]?.evidence[0]).toEqual({
+      id: 'evidence-operation-1',
+      kind: 'ocr',
+      startSeconds: 1.25,
+      endSeconds: 2.5,
+      label: '屏幕文字',
+      rawText: '视觉返工刷新后的屏幕文字。',
+      confidence: 0.94,
+      provider: 'vision-provider · vision-v2',
+    })
+    expect(useStudioStore.getState().notice).toContain('报告尚未重生成')
+
+    const evidenceBeforeFailedRecord = structuredClone(
+      useStudioStore.getState().tasks[0]!.evidence,
+    )
+    failedOperationKind = 'vision_rescan'
+    useStudioStore.getState().runVisionRework('run-real-01', {
+      startSeconds: 5,
+      endSeconds: 6,
+      mode: 'adaptive',
+      runOcr: false,
+    })
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.operations).toHaveLength(2),
+    )
+    expect(useStudioStore.getState().tasks[0]?.operations.at(-1)).toMatchObject({
+      id: 'operation-2',
+      status: 'failed',
+      errorType: 'RuntimeError',
+      detail: 'worker exited before producing evidence',
+    })
+    expect(useStudioStore.getState().tasks[0]?.evidence).toEqual(
+      evidenceBeforeFailedRecord,
+    )
+    expect(useStudioStore.getState().notice).toContain('返工执行失败')
+    failedOperationKind = undefined
+
+    const evidenceBeforeConflict = structuredClone(
+      useStudioStore.getState().tasks[0]!.evidence,
+    )
+    const operationCountBeforeConflict =
+      useStudioStore.getState().tasks[0]!.operations.length
+    conflictingOperationKind = 'asr_retranscribe'
+    useStudioStore.getState().runAsrRework('run-real-01', {
+      range: { startSeconds: 3, endSeconds: 4.5 },
+      languageHints: ['zh-CN', 'en'],
+    })
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().notice).toContain(
+        '缺少所需的 ASR/OCR 模型后端',
+      ),
+    )
+    expect(useStudioStore.getState().tasks[0]?.evidence).toEqual(
+      evidenceBeforeConflict,
+    )
+    expect(useStudioStore.getState().tasks[0]?.operations).toHaveLength(
+      operationCountBeforeConflict,
+    )
 
     useStudioStore.getState().saveProviderSecret('cloud-one', 'new-local-credential')
     await vi.waitFor(() =>

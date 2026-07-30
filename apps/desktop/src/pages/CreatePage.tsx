@@ -12,8 +12,10 @@ import {
   Timer,
   Upload,
 } from 'lucide-react'
+import { CreateProcessingOptions } from '../components/CreateProcessingOptions'
 import { formatTime, platformLabel } from '../domain'
 import type { ProcessingMode } from '../domain'
+import { validateSamplingDraft } from '../sampling'
 import { useStudioStore } from '../store'
 
 const modeCopy: Record<
@@ -28,22 +30,22 @@ const modeCopy: Record<
 > = {
   fast: {
     label: 'Fast',
-    description: '快速获得结构化、带时间戳的可靠笔记',
-    estimate: '预计 8–12 分钟',
+    description: '预期精度：语音主线可靠，减少视觉复核与截图密度',
+    estimate: '预计耗时约视频时长的 0.35–0.65×',
     bullets: ['平台字幕优先', '单路本地 ASR', '精选关键画面'],
     icon: Gauge,
   },
   balanced: {
     label: 'Balanced',
-    description: '日常默认：在速度、视觉密度与证据校验之间取平衡',
-    estimate: '预计 12–20 分钟',
+    description: '预期精度：高，平衡视觉密度、冲突复核与资源消耗',
+    estimate: '预计耗时约视频时长的 0.55–1.0×',
     bullets: ['字幕 + 本地 ASR', '冲突片段复核', '每章精选截图'],
     icon: Timer,
   },
   accurate: {
     label: 'Accurate',
-    description: '把更多算力集中在低置信与内容变化处',
-    estimate: '预计 20–31 分钟',
+    description: '预期精度：最高，把额外算力集中在低置信与内容变化处',
+    estimate: '预计耗时约视频时长的 0.9–1.7×',
     bullets: ['选择性二次识别', '更细视觉与 OCR', '事实支持度验证'],
     icon: Sparkles,
   },
@@ -66,9 +68,8 @@ export function CreatePage() {
   const setDraftProfile = useStudioStore(state => state.setDraftProfile)
   const setDraftCookieFile = useStudioStore(state => state.setDraftCookieFile)
   const setLanguageHints = useStudioStore(state => state.setLanguageHints)
-  const setIncludeScreenshots = useStudioStore(state => state.setIncludeScreenshots)
-  const setGeneratePdf = useStudioStore(state => state.setGeneratePdf)
   const [dragActive, setDragActive] = useState(false)
+  const samplingValidation = validateSamplingDraft(draft)
 
   const handleFile = (file?: File) => {
     if (!file) return
@@ -250,7 +251,17 @@ export function CreatePage() {
         <summary>
           <span>
             高级选项
-            <small>语言提示、截图预算和阶段角色覆盖</small>
+            <small
+              className={
+                samplingValidation.errors.length > 0
+                  ? 'create-advanced-error-summary'
+                  : undefined
+              }
+            >
+              {samplingValidation.errors.length > 0
+                ? `采样计划有 ${samplingValidation.errors.length} 项错误，修正后才能开始`
+                : '身份、语言、画面采样计划与报告输出'}
+            </small>
           </span>
           <ChevronDown size={17} aria-hidden="true" />
         </summary>
@@ -318,23 +329,8 @@ export function CreatePage() {
               />
             </label>
           )}
-          <label className="advanced-check">
-            <input
-              type="checkbox"
-              checked={draft.includeScreenshots}
-              onChange={event => setIncludeScreenshots(event.target.checked)}
-            />
-            将证据筛选出的关键帧嵌入笔记
-          </label>
-          <label className="advanced-check">
-            <input
-              type="checkbox"
-              checked={draft.generatePdf}
-              onChange={event => setGeneratePdf(event.target.checked)}
-            />
-            同时生成离线 PDF
-          </label>
         </div>
+        <CreateProcessingOptions />
       </details>
 
       <footer className="create-actions">
@@ -346,7 +342,7 @@ export function CreatePage() {
           className="button button-primary button-large"
           type="button"
           onClick={createTask}
-          disabled={draft.status !== 'ready'}
+          disabled={draft.status !== 'ready' || samplingValidation.errors.length > 0}
         >
           {draft.status === 'submitting' ? '正在提交…' : '开始处理'}
           <ArrowRight size={17} aria-hidden="true" />

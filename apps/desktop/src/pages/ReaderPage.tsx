@@ -4,18 +4,30 @@ import {
   Download,
   Eye,
   FileCode2,
+  FileOutput,
   FileText,
   Focus,
   Image,
+  Paperclip,
   Printer,
   Search,
   Sparkles,
+  Wrench,
 } from 'lucide-react'
+import { DetailedEvidenceStudio } from '../components/DetailedEvidenceStudio'
 import { EvidenceRail } from '../components/EvidenceRail'
+import {
+  ReportRevisionDrawer,
+  type ReportRevisionGenerateRequest,
+  type ReportRevisionSummary,
+} from '../components/ReportRevisionDrawer'
+import { ReworkDrawer } from '../components/ReworkDrawer'
+import { SupportingMaterialsDrawer } from '../components/SupportingMaterialsDrawer'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import type { EvidenceKind, NoteDocument, ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
 import { useStudioStore } from '../store'
+import { useUiPreferences } from '../stores/uiPreferences'
 
 const buildMarkdown = (task: ProcessingTask, note: NoteDocument) => {
   const sections = note.sections
@@ -59,9 +71,28 @@ export function ReaderPage() {
   const selectEvidence = useStudioStore(state => state.selectEvidence)
   const toggleContext = useStudioStore(state => state.toggleContext)
   const downloadArtifact = useStudioStore(state => state.downloadArtifact)
+  const refreshReportRevisions = useStudioStore(
+    state => state.refreshReportRevisions,
+  )
+  const generateReportRevision = useStudioStore(
+    state => state.generateReportRevision,
+  )
+  const downloadReportRevisionArtifact = useStudioStore(
+    state => state.downloadReportRevisionArtifact,
+  )
+  const workspaceMode = useUiPreferences(state => state.workspaceMode)
   const [query, setQuery] = useState('')
   const [evidenceFilter, setEvidenceFilter] = useState<EvidenceKind | 'all'>('all')
   const [exportOpen, setExportOpen] = useState(false)
+  const [materialsOpen, setMaterialsOpen] = useState(false)
+  const [reworkOpen, setReworkOpen] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportBusy, setReportBusy] = useState(false)
+  const [reportError, setReportError] = useState<string>()
+  const [reworkRange, setReworkRange] = useState<{
+    startSeconds: number
+    endSeconds: number
+  }>()
 
   const activeTask = tasks.find(task => task.id === activeTaskId)
   const task = activeTask?.note ? activeTask : tasks.find(item => item.note)
@@ -111,6 +142,57 @@ export function ReaderPage() {
       'text/html;charset=utf-8',
     )
   }
+  const openRework = () => {
+    const startSeconds =
+      selectedEvidence?.startSeconds ?? Math.max(0, currentTimeSeconds)
+    const endSeconds =
+      selectedEvidence?.endSeconds ??
+      Math.min(task.source.durationSeconds, startSeconds + 60)
+    setReworkRange({
+      startSeconds,
+      endSeconds:
+        endSeconds > startSeconds
+          ? endSeconds
+          : Math.min(task.source.durationSeconds, startSeconds + 0.1),
+    })
+    setReworkOpen(true)
+  }
+  const openReport = () => {
+    setReportOpen(true)
+    setReportError(undefined)
+    if (!task.realBackend) return
+    setReportBusy(true)
+    void refreshReportRevisions(task.id)
+      .catch(error =>
+        setReportError(
+          error instanceof Error ? error.message : '报告历史刷新失败。',
+        ),
+      )
+      .finally(() => setReportBusy(false))
+  }
+  const generateReport = (request: ReportRevisionGenerateRequest) => {
+    setReportBusy(true)
+    setReportError(undefined)
+    void generateReportRevision(task.id, request)
+      .catch(error =>
+        setReportError(
+          error instanceof Error ? error.message : '报告生成失败。',
+        ),
+      )
+      .finally(() => setReportBusy(false))
+  }
+  const reportRevisions: ReportRevisionSummary[] = (
+    task.reportRevisions ?? []
+  ).map(revision => ({
+    id: revision.id,
+    preset: revision.preset,
+    createdAt: revision.createdAt,
+    formats: revision.formats,
+    fallback: revision.fallback,
+    warnings: revision.warnings,
+    evidenceRevisionId: revision.evidenceRevisionId,
+    artifactPaths: revision.artifactPaths,
+  }))
 
   return (
     <div className="reader-page">
@@ -125,6 +207,33 @@ export function ReaderPage() {
           />
         </label>
         <div className="reader-toolbar-actions">
+          <button
+            className="button button-quiet"
+            type="button"
+            onClick={openRework}
+          >
+            <Wrench size={15} aria-hidden="true" />
+            局部返工
+          </button>
+          <button
+            className="button button-quiet"
+            type="button"
+            onClick={() => setMaterialsOpen(true)}
+          >
+            <Paperclip size={15} aria-hidden="true" />
+            补充资料
+            {task.materials.length > 0 && (
+              <span className="button-count">{task.materials.length}</span>
+            )}
+          </button>
+          <button
+            className="button button-quiet"
+            type="button"
+            onClick={openReport}
+          >
+            <FileOutput size={15} aria-hidden="true" />
+            生成报告
+          </button>
           <button className="button button-quiet" type="button" onClick={toggleContext}>
             <Focus size={15} aria-hidden="true" />
             专注阅读
@@ -166,7 +275,23 @@ export function ReaderPage() {
         </div>
       </div>
 
-      <div className="reader-split">
+      {workspaceMode === 'detailed' ? (
+        <DetailedEvidenceStudio
+          task={task}
+          note={note}
+          currentTimeSeconds={currentTimeSeconds}
+          selectedEvidenceId={selectedEvidenceId}
+          onSeek={setCurrentTime}
+          onSelectEvidence={selectEvidence}
+          onRequestRework={(startSeconds, endSeconds) =>
+            {
+              setReworkRange({ startSeconds, endSeconds })
+              setReworkOpen(true)
+            }
+          }
+        />
+      ) : (
+        <div className="reader-split">
         <article className="note-paper">
           <header className="note-title-block" id="note-overview">
             <span className="section-kicker">VERIFIED NOTE / {note.generatedAt}</span>
@@ -346,7 +471,45 @@ export function ReaderPage() {
             <Sparkles size={15} aria-hidden="true" />
           </div>
         </aside>
-      </div>
+        </div>
+      )}
+      {materialsOpen && (
+        <SupportingMaterialsDrawer
+          task={task}
+          initialStartSeconds={reworkRange?.startSeconds}
+          initialEndSeconds={reworkRange?.endSeconds}
+          onClose={() => setMaterialsOpen(false)}
+        />
+      )}
+      {reworkOpen && (
+        <ReworkDrawer
+          task={task}
+          initialStartSeconds={reworkRange?.startSeconds}
+          initialEndSeconds={reworkRange?.endSeconds}
+          selectedEvidenceId={selectedEvidenceId}
+          onClose={() => setReworkOpen(false)}
+        />
+      )}
+      {reportOpen && (
+        <ReportRevisionDrawer
+          taskTitle={task.source.title}
+          materialsCount={task.materials.length}
+          activeEvidenceRevisionId={
+            task.evidenceRevisionId ?? 'base-evidence'
+          }
+          revisions={reportRevisions}
+          busy={reportBusy}
+          error={reportError}
+          onClose={() => setReportOpen(false)}
+          onGenerate={generateReport}
+          onDownload={(revision, format) => {
+            const path = revision.artifactPaths[format]
+            if (path) {
+              downloadReportRevisionArtifact(task.id, path, format)
+            }
+          }}
+        />
+      )}
     </div>
   )
 }

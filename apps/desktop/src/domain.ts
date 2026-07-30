@@ -1,10 +1,13 @@
 export type ViewId = 'create' | 'tasks' | 'reader' | 'models'
 export type SourcePlatform = 'bilibili' | 'youtube' | 'x' | 'local'
 export type ProcessingMode = 'fast' | 'balanced' | 'accurate'
+export type SamplingMode = 'adaptive' | 'fixed_interval' | 'skip'
+export type ReportPreset = 'concise' | 'detailed' | 'professional' | 'beginner' | 'executive'
 export type TaskStatus = 'running' | 'paused' | 'cancelled' | 'completed' | 'failed'
 export type StageStatus = 'pending' | 'running' | 'completed' | 'failed'
 export type EvidenceKind = 'asr' | 'ocr' | 'visual' | 'chapter'
 export type ProviderStatus = 'connected' | 'disconnected' | 'testing'
+export type TelemetryValue = string | number | boolean | null
 
 export interface SourceManifest {
   id: string
@@ -28,7 +31,111 @@ export interface TaskStage {
   progress: number
   durationSeconds?: number
   artifactCount: number
+  metrics: Record<string, TelemetryValue>
+  warnings: string[]
+  outputArtifacts: StageOutputArtifact[]
   metric?: string
+}
+
+export interface StageOutputArtifact {
+  stage: string
+  kind: string
+  relativePath: string
+  sha256: string
+  sizeBytes: number
+  mediaType?: string | null
+  createdAt: string
+}
+
+export interface SupportingMaterialArtifact {
+  kind: string
+  relativePath: string
+  sha256: string
+  sizeBytes: number
+  mediaType: string | null
+  createdAt: string
+}
+
+export interface SupportingMaterial {
+  id: string
+  runId: string
+  kind: 'text' | 'image'
+  title: string
+  originalName: string | null
+  mediaType: string
+  artifact: SupportingMaterialArtifact | null
+  sha256: string | null
+  sizeBytes: number
+  textContent: string | null
+  startUs: number | null
+  endUs: number | null
+  status: 'active' | 'deleted'
+  createdAt: string
+  deletedAt: string | null
+  storage: 'run-artifact' | 'demo-memory'
+}
+
+export type ReworkOperationKind =
+  | 'vision_rescan'
+  | 'asr_retranscribe'
+  | 'evidence_correct'
+
+export interface ReworkOperation {
+  id: string
+  runId: string
+  kind: ReworkOperationKind
+  status: 'completed' | 'failed' | 'demo-preview'
+  source: 'backend' | 'demo-memory'
+  startSeconds: number
+  endSeconds: number
+  samplingMode?: 'adaptive' | 'fixed_interval'
+  intervalSeconds?: number
+  runOcr?: boolean
+  languageHints: string[]
+  evidenceId?: string
+  newText?: string
+  reason?: string
+  createdAt: string
+  finishedAt: string
+  revisionId?: string
+  artifactPaths: string[]
+  replacedEvidenceIds: string[]
+  newEvidenceIds: string[]
+  visualStateCount: number
+  errorType?: string
+  detail?: string
+}
+
+export type ReportRevisionFormat = 'markdown' | 'html' | 'pdf'
+
+export interface ReportRevision {
+  id: string
+  runId: string
+  preset: ReportPreset
+  createdAt: string
+  formats: ReportRevisionFormat[]
+  fallback: boolean
+  warnings: string[]
+  evidenceRevisionId: string
+  materialIds: string[]
+  artifactPaths: {
+    document?: string
+    markdown?: string
+    html?: string
+    pdf?: string
+  }
+  source: 'backend' | 'demo-memory'
+}
+
+export interface TelemetrySample {
+  sequence: number
+  runId: string
+  state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  stage: string
+  progress?: number
+  message?: string
+  metrics: Record<string, TelemetryValue>
+  createdAt: string
 }
 
 export interface EvidenceItem {
@@ -80,6 +187,12 @@ export interface ProcessingTask {
   etaSeconds: number
   createdAt: string
   stages: TaskStage[]
+  telemetry: TelemetrySample[]
+  runtimeWarnings: string[]
+  materials: SupportingMaterial[]
+  operations: ReworkOperation[]
+  evidenceRevisionId?: string
+  reportRevisions?: ReportRevision[]
   evidence: EvidenceItem[]
   note?: NoteDocument
   lastMessage?: string
@@ -146,6 +259,14 @@ export interface BackendProfile {
   dataRoot?: string
 }
 
+export interface SamplingOverrideDraft {
+  id: string
+  startSeconds: number
+  endSeconds: number
+  mode: SamplingMode
+  intervalSeconds: number
+}
+
 export interface DraftState {
   input: string
   mode: ProcessingMode
@@ -160,6 +281,10 @@ export interface DraftState {
   languageHints: string
   includeScreenshots: boolean
   generatePdf: boolean
+  samplingMode: SamplingMode
+  samplingIntervalSeconds: number
+  samplingOverrides: SamplingOverrideDraft[]
+  reportPreset: ReportPreset
 }
 
 export const formatTime = (seconds: number): string => {

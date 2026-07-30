@@ -1,11 +1,48 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import App from './App'
 import { useStudioStore } from './store'
+import {
+  DEFAULT_UI_PREFERENCES,
+  UI_PREFERENCES_STORAGE_KEY,
+  useUiPreferences,
+} from './stores/uiPreferences'
 
 describe('desktop workflow', () => {
   beforeEach(() => {
+    window.localStorage.clear()
+    useUiPreferences.setState(DEFAULT_UI_PREFERENCES)
     useStudioStore.getState().resetDemo()
+  })
+
+  it('defaults to the precision-light simple shell and persists UI choices', () => {
+    render(<App />)
+
+    const shell = screen.getByRole('main').closest('.app-shell')
+    expect(shell).toHaveAttribute('data-theme', 'precision-light')
+    expect(shell).toHaveAttribute('data-workspace-mode', 'simple')
+    expect(screen.getByRole('button', { name: '简约视图' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '详细视图' }))
+    fireEvent.change(screen.getByLabelText('主题预置'), {
+      target: { value: 'studio-graphite' },
+    })
+
+    expect(shell).toHaveAttribute('data-theme', 'studio-graphite')
+    expect(shell).toHaveAttribute('data-workspace-mode', 'detailed')
+    expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
+      workspaceMode: 'detailed',
+      themePreset: 'studio-graphite',
+    })
   })
 
   it('probes a source and starts an Accurate task from the workbench', () => {
@@ -19,6 +56,41 @@ describe('desktop workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: /开始处理/ }))
     expect(screen.getByText(/EVIDENCE BUILD-UP/)).toBeInTheDocument()
     expect(useStudioStore.getState().tasks[0].mode).toBe('accurate')
+  })
+
+  it('adds and edits a fixed sampling override in advanced options', () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '探测来源' }))
+    const details = document.querySelector<HTMLDetailsElement>('.advanced-options')
+    const summary = details?.querySelector('summary')
+    expect(summary).not.toBeNull()
+    fireEvent.click(summary!)
+    fireEvent.click(screen.getByRole('button', { name: '添加时间段' }))
+
+    fireEvent.change(screen.getByLabelText('时间段 1 开始时间（秒）'), {
+      target: { value: '12.5' },
+    })
+    fireEvent.change(screen.getByLabelText('时间段 1 结束时间（秒）'), {
+      target: { value: '22.5' },
+    })
+    fireEvent.change(screen.getByLabelText('时间段 1 采样方式'), {
+      target: { value: 'fixed_interval' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: '时间段 1 固定采样间隔（秒）设为 0.1 秒',
+      }),
+    )
+
+    expect(useStudioStore.getState().draft.samplingOverrides).toEqual([
+      expect.objectContaining({
+        startSeconds: 12.5,
+        endSeconds: 22.5,
+        mode: 'fixed_interval',
+        intervalSeconds: 0.1,
+      }),
+    ])
   })
 
   it('pauses and resumes a running task with visible controls', () => {
@@ -44,5 +116,53 @@ describe('desktop workflow', () => {
       'model-funasr',
     )
     expect(screen.getByRole('status')).toHaveTextContent('主要语音识别 已绑定到 FunASR Paraformer')
+  })
+
+  it('opens the detailed evidence, local rework, materials, and report workbenches', async () => {
+    useStudioStore.setState({
+      view: 'reader',
+      activeTaskId: 'task-complete',
+    })
+    useUiPreferences.setState({ workspaceMode: 'detailed' })
+    render(<App />)
+
+    expect(screen.getByText('EVIDENCE TIMELINE')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '局部返工' }))
+    expect(screen.getByRole('heading', { name: '局部返工' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '画面' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: '关闭局部返工面板',
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /补充资料/ }))
+    expect(screen.getByRole('heading', { name: '补充资料' })).toBeInTheDocument()
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: '关闭补充资料面板',
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '生成报告' }))
+    expect(
+      screen.getByRole('heading', { name: '重新生成报告' }),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByText('领导', { selector: 'strong' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成新 revision' }))
+
+    await waitFor(() =>
+      expect(
+        useStudioStore
+          .getState()
+          .tasks.find(task => task.id === 'task-complete')?.reportRevisions,
+      ).toHaveLength(1),
+    )
+    expect(screen.getByText('历史报告 · 1')).toBeInTheDocument()
+    expect(screen.queryByText('安全回退版本')).not.toBeInTheDocument()
   })
 })
