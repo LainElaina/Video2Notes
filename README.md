@@ -4,6 +4,8 @@
 
 当前版本已经是一条可运行的本地流水线，而不是“把字幕直接交给模型”的演示：支持本地视频、Bilibili、YouTube 与 X 链接；支持已登录的本机 Chrome/Edge/Firefox profile 或用户自有 `cookies.txt`；任务可取消、逐阶段落盘、重启后可读取结果。桌面壳使用 React 19 + Tauri 2；开发模式连接同一套 Python loopback API，Windows 安装包会自动启动随包携带的隔离后端和 FFmpeg，不需要另开终端。
 
+桌面工作台现有两种亮色阅读视图：**简约版**突出视频、目录与正文，**详细版**增加语音、屏幕文字、视觉变化、置信度、阶段指标和统一时间线。两者读取同一份真实任务数据；内置演示数据会明确标为 Demo，不会伪装成实际模型输出。界面已预留并持久化亮/暗色切换，但当前设计验收基线是亮色，暗色色板与细节尚未精修。
+
 > 仅处理用户有权访问、下载和分析的内容。项目不托管 Cookie、不接收账号信息，也不会尝试规避 DRM、访问控制或平台限制。受限内容应使用对应平台允许的方式和你自己的已登录会话。
 
 ## 它解决的问题
@@ -12,12 +14,14 @@
 媒体/链接
   → 下载或本地导入（保留实际格式与可用字幕）
   → ffprobe + PTS 统一时间原点
-  → 自适应视觉粗扫/局部精扫，找稳定关键帧
+  → 自适应 / 固定间隔 / 跳过视觉采样，可按时间段覆盖
   → 平台字幕 + 本地 ASR + 选择性二次 ASR
   → 本地 PaddleOCR（仅对候选关键帧）
   → 时间重叠融合、冲突保留、证据编号
-  → 事实提取 / 草稿 / 校验（可选角色化 LLM）
-  → notes/note.md + render/note.html + render/note.pdf（可选）
+  → 可选局部视觉重扫 / ASR 重转写 / 人工证据修订
+  → 绑定用户补充的文字与图片资料
+  → 按报告 preset 做事实提取 / 草稿 / 校验（可选角色化 LLM）
+  → Markdown + HTML + 可选 PDF；后续重生成保留不可变 revision
 ```
 
 与把视频直接交给通用助手相比，优势在于：下载、解码和模型调用可以在本机复用；画面不是机械地“每 N 秒截一帧”；每个结论能回到其时间段、文字/语音证据或截图；低置信与跨来源冲突会留下警告，而不是被无依据地润色掉。它不是对所有视频都自动保证更准确的黑盒替代品——模型、语言、源清晰度和视频内容仍会决定结果。
@@ -66,6 +70,10 @@ data/
    ├─ render/note.html        # 可离线打开
    ├─ render/note.pdf         # 若本机存在 Edge/Chrome 且未 --no-pdf
    ├─ evidence/timeline.json  # 所有融合后的证据
+   ├─ supporting/             # 用户绑定的文字/图片补充资料与索引
+   ├─ operations/             # 局部返工请求、结果与局部产物
+   ├─ revisions/evidence/     # 返工产生的不可变证据 revision
+   ├─ revisions/notes/        # 后续重生成的不可变报告 revision
    ├─ vision/                 # 视觉状态、关键帧与变化事件
    ├─ asr/、ocr/、subtitles/、audio/、media/
    └─ manifest.json           # 任务、阶段哈希、警告与产物清单
@@ -123,6 +131,29 @@ data/
 | `accurate` | 1080px；6 / 24 fps | 对低置信、缺失、字幕/语言不确定或冲突窗口选择性复核 | 更细候选窗口和 OCR；保留更多独特状态 | 文字密集、需要复核的材料 |
 
 模式不硬编码具体模型文件；`asr.primary`、`asr.secondary`、OCR 和笔记角色分别绑定模型。硬件档位按可检测的显存分为 CPU/iGPU、约 8 GB、约 12 GB、24 GB 以上。`GET /api/system` 返回硬件快照与各模式执行计划；`POST /api/estimate` 再结合输入时长、分辨率和帧率返回**宽耗时区间**，不是虚假的精确 ETA。网络下载、API 排队、画面变化密度与模型本身会显著改变实际耗时。
+
+## 采样计划、局部返工与报告 revision
+
+质量模式决定整条流水线的默认预算；画面采样计划则允许进一步指定**某一段视频如何取帧**。新建任务时可选：
+
+- `adaptive`：默认方式，基于画面状态和文字变化寻找稳定关键帧；
+- `fixed_interval`：按固定间隔取帧，界面提供 0.1、0.5、1 秒快捷值，也可输入不小于 0.1 秒的值；
+- `skip`：该段不做视觉取样，仍可继续处理音频、字幕等来源；
+- 时间段覆盖：在全局默认方式之上，为互不重叠的时间段单独指定上述模式。
+
+固定间隔是针对已知高信息密度片段的可控工具，不是默认的“无脑全片抽帧”。计划使用整数微秒落盘并按媒体真实时长校验；单个任务的固定取样预算上限为 5,000 帧，防止 0.1 秒间隔误用于长视频而失控。
+
+已完成的 run 可以只返工选中区间，而不重跑整条任务：
+
+- 视觉重扫：选择自适应或固定间隔，并可决定是否同时重跑 OCR；
+- ASR 重转写：只提取并识别所选音频区间，可提供语言提示；
+- 人工证据修订：对当前有效 evidence 写入新文本，不覆盖原记录。
+
+成功操作会生成完整、不可变的 evidence revision，并把指定区间/模态的新结果设为当前有效视图；被替代证据仍保留用于审计。失败操作会留下失败记录，但不会激活半成品 revision。返工完成后报告**不会静默自动重写**，阅读器会提示用户显式重生成报告。
+
+每个 run 还可绑定来自评论区、网页或本地研究的补充文字和 PNG/JPEG/WebP 图片，并可选绑定到精确时间段。资料保存在本机 run 目录，删除采用状态化记录；生成新报告时，活动资料会进入受 evidence 约束的内容组织和“补充资料”附录。
+
+报告提供五种 preset：`concise`（简洁）、`detailed`（详细）、`professional`（专业）、`beginner`（入门）和 `executive`（领导/决策）。它们改变受众、章节/要点预算、术语解释和编辑目标，不降低“只能引用现有证据与补充资料”的约束。Markdown 是不可关闭的 canonical 输出；HTML 同源渲染，PDF 可选。对完成任务再次生成报告时，服务会读取当前 active evidence revision 并重新融合有效证据，将该 evidence revision ID 与活动资料 ID 一起写入报告记录；产物发布到 `revisions/notes/<revision-id>/` 并原子切换 `latest` 指针，不覆盖最初的 `notes/` 与 `render/` 产物。
 
 ## 配置本地模型、OpenAI-compatible 与 Ollama
 
@@ -234,7 +265,12 @@ $env:VIDEO2NOTES_TOKEN = "请使用至少16字符的随机本地令牌"
 - `POST /api/sources/probe`、`POST /api/estimate`
 - `GET/PUT /api/providers`、`POST /api/providers/{id}/test` 及 provider secret 状态/写入/删除
 - `POST /api/jobs`、`GET /api/jobs/{run_id}`、`GET /api/jobs/{run_id}/result`、`POST /api/jobs/{run_id}/cancel`
+- `GET/POST /api/runs/{run_id}/operations`、`GET /api/runs/{run_id}/evidence`
+- `GET /api/runs/{run_id}/materials`、`POST .../materials/text`、`POST .../materials/files`、`DELETE .../materials/{material_id}`
+- `GET/POST /api/runs/{run_id}/report-revisions`，以及 `GET .../latest`、`GET .../{revision_id}`
 - `GET /api/runs` 与受路径校验保护的 `GET /api/runs/{run_id}/artifact?path=...`
+
+桌面 UI 的简约版与详细版只是两种信息密度，不是两套数据：切换视图不会复制 run 或重跑模型。真实任务的阶段指标、警告、证据、补充资料和 operation 记录都由 API 驱动；如果当前是内置演示任务，界面会持续显示 Demo 标记。项目定位为个人本地工具，资料、网站会话引用、媒体和结果不会由本项目上传到 Video2Notes 云服务（本项目也不提供该云服务）；若用户配置第三方模型 API，实际发送范围仍取决于对应 provider 与所绑定角色。
 
 推荐从仓库根目录使用组合脚本：
 
@@ -304,6 +340,7 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 - **显存峰值目前为空。** stage manifest 已有 `peak_vram_bytes` 字段，但通用 CPU/Paddle/faster-whisper 路径尚未接统一显存采样器；因此 benchmark 不虚报 0 B。
 - **当前本地安装包未做 Authenticode 签名。** 个人本机安装不影响功能，但 Windows SmartScreen 可能显示未知发布者；公开分发前应配置受信任的代码签名证书。
 - **HTML 的 `video2notes://seek/...` 链接是桌面集成协议。** 在普通浏览器中仍可阅读 HTML，但该自定义跳转需要宿主应用实现；截图是实验性、按证据预算选择的附加信息。
+- **暗色主题尚未达到亮色主题的设计完成度。** 切换入口和偏好持久化已经存在，当前优先保证亮色简约版/详细版的一致性；暗色色板、图表对比度和长时间阅读细节仍需单独视觉验收。
 
 ## 参考与版权
 

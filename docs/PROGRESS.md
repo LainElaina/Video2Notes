@@ -2,6 +2,34 @@
 
 本文件记录已经存在于仓库、测试输出或本地验证产物中的检查点。它不使用“完成百分比”，也不把规划功能写成已交付功能。
 
+## 2026-07-30：可编辑证据工作台与多形态报告
+
+### 已落地能力
+
+| 模块 | 当前已交付行为 |
+| --- | --- |
+| 亮色双视图 | React 工作台提供简约版和详细版。简约版突出视频、目录与笔记；详细版在同一真实 run 上展开语音、屏幕文字、视觉变化、置信度、阶段指标与对齐时间线。视图偏好本地持久化。 |
+| 主题状态 | 已提供亮/暗切换入口和主题偏好持久化；当前完成度基线是亮色。暗色色板、图表对比度和阅读细节尚未精修，不能写成已完成的暗色设计。 |
+| 分段采样 | `SamplingPlan` 支持 `adaptive`、`fixed_interval`、`skip` 三种模式以及互不重叠的时间段覆盖。固定间隔最小 0.1 秒，总预算最多 5,000 帧；计划按真实媒体时长编译为连续、不重叠的微秒区间。解码结果以真实 PTS 去重。 |
+| 局部返工 | 完成后的 run 可执行区间视觉重扫（自适应/固定，可选 OCR）、区间 ASR 重转写或人工 evidence 文本修订。成功操作写出完整不可变 evidence revision 并激活；失败只保留操作记录，不激活半成品。 |
+| 补充资料 | 每个 run 可绑定文字和 PNG/JPEG/WebP 图片，可选精确时间范围。内容与索引都保存在本机 run 目录；文件有类型、尺寸、路径和哈希校验，删除保留状态记录。 |
+| 报告契约 | `concise`、`detailed`、`professional`、`beginner`、`executive` 五种 preset 已进入任务合同和 composer。preset 改变受众、编辑目标及章节/要点预算，不允许模型越过 evidence 与补充资料补造事实。 |
+| 输出与 revision | Markdown 是不可关闭的 canonical 输出；同一 `NoteDocument` 生成 HTML 和可选 PDF。完成任务可另建不可变报告 revision；服务使用当前 active evidence revision 重新融合有效证据，并记录 evidence revision/material IDs。发布采用 staging→目录发布→原子更新索引/latest，不覆盖原始 `notes/`、`render/`。 |
+| 真实数据边界 | 真实任务的 telemetry、warnings、artifacts、materials、operations 和 evidence 由 loopback API 返回；内置演示仍可离线查看，但 UI 和 fixture 明确标记 Demo，不把演示数值冒充实测。 |
+
+### 当前交互边界
+
+- 返工会更新当前有效 evidence 视图，但不会静默改写已经生成的报告；用户需要显式创建新的报告 revision。
+- 补充资料只在新建/重生成报告时进入内容组织；添加资料不会回写旧版报告。
+- 项目仍是个人本地应用，不提供 Video2Notes 云端账号托管、多人空间或网站登录信息收集。用户主动配置第三方模型 API 时，其数据处理边界由 provider 配置与所绑定角色决定。
+- 暗色只保留可切换预置，后续需单独做色系、图表和长文阅读视觉验收。
+
+### 本轮验证范围
+
+- Python 已增加分段采样、真实 PTS、局部 operation/evidence revision、补充资料、报告 preset、补充资料参与 composition/render 及不可变报告 revision 的定向测试。
+- React 已增加采样计划序列化与校验、真实 materials/operations/report revisions API/store、主题与视图偏好、Demo 内存路径等测试。
+- 亮色简约版、详细版、局部返工、补充资料、报告 revision 与创建页处理合同已纳入 1440×900、1180×760 与窄窗口 Playwright 截图检查；最终发布前仍应以当前合并头重新执行 `scripts/verify.ps1 -Strict`。
+
 ## 2026-07-28：从研究基线到可运行的本地流水线
 
 ### 仓库与可追溯性
