@@ -336,7 +336,6 @@ foreach ($path in @($DistRoot, $WorkRoot, $SpecRoot)) {
 }
 
 $PyInstallerArguments = @(
-    "-m", "PyInstaller",
     # --onedir keeps the service as the process Tauri starts and stops. A
     # one-file bundle forks an unpacked child on Windows, which would make
     # Tauri observe the parent exiting while the API child remains orphaned.
@@ -392,8 +391,32 @@ else {
     }
 }
 $PyInstallerArguments += (Join-Path $PSScriptRoot "sidecar_entry.py")
-& $VenvPython @PyInstallerArguments
-Assert-LastExitCode "Building the PyInstaller backend sidecar"
+$pyInstallerDriver = @'
+import json
+import os
+
+from PyInstaller.__main__ import run
+
+run(json.loads(os.environ["VIDEO2NOTES_BUILD_PYINSTALLER_ARGS"]))
+'@
+$pyInstallerArgumentsJson = ConvertTo-Json @($PyInstallerArguments) -Compress
+$previousPyInstallerArguments = $env:VIDEO2NOTES_BUILD_PYINSTALLER_ARGS
+$hadPreviousPyInstallerArguments = Test-Path Env:VIDEO2NOTES_BUILD_PYINSTALLER_ARGS
+try {
+    # Preserve the argument array as JSON.  PowerShell 5's native-command
+    # quoting can otherwise collapse repeated options after nested launches.
+    $env:VIDEO2NOTES_BUILD_PYINSTALLER_ARGS = $pyInstallerArgumentsJson
+    $pyInstallerDriver | & $VenvPython -
+    Assert-LastExitCode "Building the PyInstaller backend sidecar"
+}
+finally {
+    if ($hadPreviousPyInstallerArguments) {
+        $env:VIDEO2NOTES_BUILD_PYINSTALLER_ARGS = $previousPyInstallerArguments
+    }
+    else {
+        Remove-Item Env:VIDEO2NOTES_BUILD_PYINSTALLER_ARGS -ErrorAction SilentlyContinue
+    }
+}
 
 $BuiltSidecarDirectory = Join-Path $DistRoot "video2notes"
 $BuiltSidecar = Join-Path $BuiltSidecarDirectory "video2notes.exe"
