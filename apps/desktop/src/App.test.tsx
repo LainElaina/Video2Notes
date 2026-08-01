@@ -21,26 +21,26 @@ describe('desktop workflow', () => {
     useStudioStore.getState().resetDemo()
   })
 
-  it('defaults to the precision-light simple shell and persists UI choices', () => {
+  it('defaults to the precision-light guided shell and persists UI choices', () => {
     render(<App />)
 
     const shell = screen.getByRole('main').closest('.app-shell')
     expect(shell).toHaveAttribute('data-theme', 'precision-light')
-    expect(shell).toHaveAttribute('data-workspace-mode', 'simple')
-    expect(screen.getByRole('button', { name: '简约视图' })).toHaveAttribute(
+    expect(shell).toHaveAttribute('data-workspace-mode', 'guided')
+    expect(screen.getByRole('button', { name: '引导模式' })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '详细视图' }))
+    fireEvent.click(screen.getByRole('button', { name: '专业模式' }))
     fireEvent.change(screen.getByLabelText('主题预置'), {
       target: { value: 'studio-graphite' },
     })
 
     expect(shell).toHaveAttribute('data-theme', 'studio-graphite')
-    expect(shell).toHaveAttribute('data-workspace-mode', 'detailed')
+    expect(shell).toHaveAttribute('data-workspace-mode', 'professional')
     expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
-      workspaceMode: 'detailed',
+      workspaceMode: 'professional',
       themePreset: 'studio-graphite',
     })
   })
@@ -123,7 +123,7 @@ describe('desktop workflow', () => {
       view: 'reader',
       activeTaskId: 'task-complete',
     })
-    useUiPreferences.setState({ workspaceMode: 'detailed' })
+    useUiPreferences.setState({ workspaceMode: 'professional' })
     render(<App />)
 
     expect(screen.getByText('EVIDENCE TIMELINE')).toBeInTheDocument()

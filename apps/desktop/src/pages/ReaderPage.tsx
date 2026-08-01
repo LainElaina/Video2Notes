@@ -275,7 +275,7 @@ export function ReaderPage() {
         </div>
       </div>
 
-      {workspaceMode === 'detailed' ? (
+      {workspaceMode === 'professional' ? (
         <DetailedEvidenceStudio
           task={task}
           note={note}

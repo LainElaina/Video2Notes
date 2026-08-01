@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_UI_PREFERENCES,
+  LEGACY_UI_PREFERENCES_STORAGE_KEY,
   UI_PREFERENCES_STORAGE_KEY,
   useUiPreferences,
 } from './uiPreferences'
@@ -11,16 +12,16 @@ describe('UI preferences', () => {
     useUiPreferences.setState(DEFAULT_UI_PREFERENCES)
   })
 
-  it('starts in the light precision theme and simple workspace mode', () => {
+  it('starts in the light precision theme and guided workspace mode', () => {
     expect(useUiPreferences.getState()).toMatchObject(DEFAULT_UI_PREFERENCES)
   })
 
   it('persists and restores the selected theme and workspace mode', () => {
-    useUiPreferences.getState().setWorkspaceMode('detailed')
+    useUiPreferences.getState().setWorkspaceMode('professional')
     useUiPreferences.getState().setThemePreset('studio-graphite')
 
     expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
-      workspaceMode: 'detailed',
+      workspaceMode: 'professional',
       themePreset: 'studio-graphite',
     })
 
@@ -28,7 +29,7 @@ describe('UI preferences', () => {
     useUiPreferences.getState().hydratePreferences()
 
     expect(useUiPreferences.getState()).toMatchObject({
-      workspaceMode: 'detailed',
+      workspaceMode: 'professional',
       themePreset: 'studio-graphite',
     })
   })
@@ -42,7 +43,37 @@ describe('UI preferences', () => {
     useUiPreferences.getState().hydratePreferences()
 
     expect(useUiPreferences.getState()).toMatchObject({
-      workspaceMode: 'simple',
+      workspaceMode: 'guided',
+      themePreset: 'paper-light',
+    })
+  })
+
+  it('migrates v1 simple and detailed modes to the v2 experience modes', () => {
+    window.localStorage.setItem(
+      LEGACY_UI_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({ workspaceMode: 'detailed', themePreset: 'studio-graphite' }),
+    )
+
+    useUiPreferences.getState().hydratePreferences()
+
+    expect(useUiPreferences.getState()).toMatchObject({
+      workspaceMode: 'professional',
+      themePreset: 'studio-graphite',
+    })
+    expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
+      workspaceMode: 'professional',
+      themePreset: 'studio-graphite',
+    })
+
+    window.localStorage.clear()
+    window.localStorage.setItem(
+      LEGACY_UI_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({ workspaceMode: 'simple', themePreset: 'paper-light' }),
+    )
+    useUiPreferences.getState().hydratePreferences()
+
+    expect(useUiPreferences.getState()).toMatchObject({
+      workspaceMode: 'guided',
       themePreset: 'paper-light',
     })
   })

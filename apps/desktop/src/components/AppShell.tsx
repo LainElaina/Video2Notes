@@ -47,6 +47,13 @@ const themeOptions: Array<{ value: ThemePreset; label: string }> = [
   { value: 'studio-graphite', label: '工作室石墨' },
 ]
 
+const preferredScrollBehavior = (): ScrollBehavior =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 'auto'
+    : 'smooth'
+
 function TopNavigation() {
   const view = useStudioStore(state => state.view)
   const navigate = useStudioStore(state => state.navigate)
@@ -100,22 +107,22 @@ function TopNavigation() {
         })}
       </nav>
       <div className="top-navigation-controls">
-        <div className="workspace-mode-switch" role="group" aria-label="界面信息密度">
+        <div className="workspace-mode-switch" role="group" aria-label="界面工作模式">
           <button
             type="button"
-            aria-label="简约视图"
-            aria-pressed={workspaceMode === 'simple'}
-            onClick={() => setWorkspaceMode('simple')}
+            aria-label="引导模式"
+            aria-pressed={workspaceMode === 'guided'}
+            onClick={() => setWorkspaceMode('guided')}
           >
-            简约
+            引导模式
           </button>
           <button
             type="button"
-            aria-label="详细视图"
-            aria-pressed={workspaceMode === 'detailed'}
-            onClick={() => setWorkspaceMode('detailed')}
+            aria-label="专业模式"
+            aria-pressed={workspaceMode === 'professional'}
+            onClick={() => setWorkspaceMode('professional')}
           >
-            详细
+            专业模式
           </button>
         </div>
         <label className="theme-preset-control">
@@ -227,7 +234,11 @@ function ReaderContents() {
     <div className="contents-list">
       <button
         type="button"
-        onClick={() => document.getElementById('note-overview')?.scrollIntoView({ behavior: 'smooth' })}
+        onClick={() =>
+          document
+            .getElementById('note-overview')
+            ?.scrollIntoView({ behavior: preferredScrollBehavior() })
+        }
       >
         <span>摘要</span>
         <span>00:00</span>
@@ -240,7 +251,9 @@ function ReaderContents() {
             key={section.id}
             onClick={() => {
               setCurrentTime(time)
-              document.getElementById(section.id)?.scrollIntoView({ behavior: 'smooth' })
+              document
+                .getElementById(section.id)
+                ?.scrollIntoView({ behavior: preferredScrollBehavior() })
             }}
           >
             <span>
@@ -387,21 +400,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const clearNotice = useStudioStore(state => state.clearNotice)
   const workspaceMode = useUiPreferences(state => state.workspaceMode)
   const themePreset = useUiPreferences(state => state.themePreset)
-  const detailedReader = view === 'reader' && workspaceMode === 'detailed'
+  const professionalReader = view === 'reader' && workspaceMode === 'professional'
 
   return (
     <div
       className={`app-shell ${contextCollapsed ? 'context-is-collapsed' : ''} ${
-        detailedReader ? 'detail-workspace' : ''
+        professionalReader ? 'detail-workspace' : ''
       }`}
       data-theme={themePreset}
       data-workspace-mode={workspaceMode}
     >
       <TopNavigation />
-      {!contextCollapsed && !detailedReader && <ContextPanel />}
+      {!contextCollapsed && !professionalReader && <ContextPanel />}
       <section className="workspace">
         <WorkspaceHeader />
-        {contextCollapsed && !detailedReader && (
+        {contextCollapsed && !professionalReader && (
           <button
             type="button"
             className="context-expand"

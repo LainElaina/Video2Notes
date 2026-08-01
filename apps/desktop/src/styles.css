@@ -1,39 +1,52 @@
 :root {
   color-scheme: light;
-  font-family:
-    "Noto Sans SC Variable", "Microsoft YaHei UI", "Segoe UI Variable", system-ui, sans-serif;
+  --font-body:
+    "Segoe UI Variable Text", "Noto Sans SC Variable", "Microsoft YaHei UI", system-ui,
+    sans-serif;
+  font-family: var(--font-body);
+  font-size: 16px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --desk: #f1f3f1;
+  --desk: #f4f6f3;
   --paper: #ffffff;
-  --ink: #171a18;
-  --muted: #68716c;
-  --lens: #07855a;
-  --playhead: #07855a;
-  --rule: rgb(23 26 24 / 13%);
-  --rule-strong: rgb(23 26 24 / 24%);
-  --lens-soft: rgb(7 133 90 / 9%);
-  --playhead-soft: rgb(7 133 90 / 9%);
-  --success: #07855a;
+  --ink: #1c2420;
+  --muted: #5f6b64;
+  --lens: #167457;
+  --playhead: #167457;
+  --rule: rgb(28 36 32 / 12%);
+  --rule-strong: rgb(28 36 32 / 21%);
+  --line: var(--rule);
+  --line-strong: var(--rule-strong);
+  --lens-soft: rgb(22 116 87 / 10%);
+  --playhead-soft: rgb(22 116 87 / 10%);
+  --success: #167457;
   --warning: #9a671d;
   --danger: #b74431;
-  --shadow-float: 0 18px 42px rgb(23 26 24 / 11%);
+  --shadow-float: 0 20px 48px rgb(36 57 47 / 12%);
   --on-accent: #ffffff;
-  --accent-hover: #056f4b;
-  --chrome-bg: #111412;
-  --chrome-ink: #f5f7f5;
-  --chrome-muted: rgb(245 247 245 / 58%);
-  --chrome-rule: rgb(245 247 245 / 13%);
-  --chrome-hover: rgb(245 247 245 / 7%);
-  --chrome-active: rgb(245 247 245 / 10%);
+  --accent-hover: #105f47;
+  --chrome-bg: rgb(255 255 255 / 94%);
+  --chrome-ink: #1c2420;
+  --chrome-muted: rgb(28 36 32 / 62%);
+  --chrome-rule: rgb(28 36 32 / 11%);
+  --chrome-hover: rgb(22 116 87 / 7%);
+  --chrome-active: rgb(22 116 87 / 11%);
   --surface-tint: rgb(255 255 255 / 64%);
   --workspace-header-bg: rgb(255 255 255 / 94%);
-  --inverse-bg: #111412;
+  --inverse-bg: #18231e;
   --inverse-ink: #f5f7f5;
   --font-display:
-    "Segoe UI Variable Display", "IBM Plex Sans Condensed", "Arial Narrow",
-    "Noto Sans SC Variable", sans-serif;
+    "Segoe UI Variable Display", "Noto Sans SC Variable", "Microsoft YaHei UI", sans-serif;
   --font-data: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --radius-shell: 20px;
+  --radius-panel: 16px;
+  --radius-control: 11px;
+  --radius-compact: 8px;
+  --motion-fast: 140ms;
+  --motion-base: 220ms;
+  --motion-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0.75, 0.25, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 :root[data-theme="paper-light"],
@@ -111,6 +124,7 @@ body {
   background: var(--desk);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+  line-height: 1.5;
 }
 
 button,
@@ -203,7 +217,9 @@ button:disabled {
   grid-template-columns: 228px minmax(360px, 1fr) auto;
   border-bottom: 1px solid var(--chrome-rule);
   background: var(--chrome-bg);
+  box-shadow: 0 8px 28px rgb(36 57 47 / 7%);
   color: var(--chrome-ink);
+  backdrop-filter: blur(18px) saturate(1.15);
 }
 
 .topbar-brand {
@@ -218,6 +234,9 @@ button:disabled {
   background: transparent;
   color: inherit;
   text-align: left;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
 
 .topbar-brand:hover {
@@ -244,7 +263,7 @@ button:disabled {
 .brand-copy small {
   color: var(--chrome-muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: 10px;
   letter-spacing: 0.12em;
 }
 
@@ -260,7 +279,7 @@ button:disabled {
   width: 17px;
   height: 17px;
   border: 1.5px solid currentColor;
-  border-radius: 3px;
+  border-radius: 5px;
 }
 
 .brand-frame-back {
@@ -305,10 +324,14 @@ button:disabled {
   border-right: 1px solid var(--chrome-rule);
   background: transparent;
   color: var(--chrome-muted);
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-emphasized);
 }
 
 .top-navigation-button span {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 620;
   white-space: nowrap;
 }
@@ -316,6 +339,10 @@ button:disabled {
 .top-navigation-button:hover {
   background: var(--chrome-hover);
   color: var(--chrome-ink);
+}
+
+.top-navigation-button:active {
+  transform: scale(0.98);
 }
 
 .top-navigation-button[aria-current="page"] {
@@ -349,18 +376,23 @@ button:disabled {
   grid-template-columns: repeat(2, 1fr);
   overflow: hidden;
   border: 1px solid var(--chrome-rule);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
+  background: var(--chrome-hover);
 }
 
 .workspace-mode-switch button {
-  min-width: 48px;
-  height: 30px;
-  padding: 0 10px;
+  min-width: 76px;
+  height: 34px;
+  padding: 0 12px;
   border: 0;
   border-right: 1px solid var(--chrome-rule);
   background: transparent;
   color: var(--chrome-muted);
-  font-size: 10px;
+  font-size: 12px;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-emphasized);
 }
 
 .workspace-mode-switch button:last-child {
@@ -378,6 +410,10 @@ button:disabled {
   font-weight: 680;
 }
 
+.workspace-mode-switch button:active {
+  transform: scale(0.97);
+}
+
 .theme-preset-control {
   display: flex;
   height: 32px;
@@ -385,8 +421,11 @@ button:disabled {
   gap: 5px;
   padding: 0 7px;
   border: 1px solid var(--chrome-rule);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   color: var(--chrome-muted);
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
 
 .theme-preset-control:focus-within,
@@ -402,7 +441,7 @@ button:disabled {
   outline: 0;
   background: transparent;
   color: inherit;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .theme-preset-control option {
@@ -419,10 +458,10 @@ button:disabled {
   gap: 5px;
   padding: 0 9px;
   border: 1px solid var(--chrome-rule);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   color: var(--chrome-muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -462,7 +501,7 @@ button:disabled {
   display: block;
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.12em;
 }
@@ -477,27 +516,36 @@ button:disabled {
 .context-helper {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
 .icon-button {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
   place-items: center;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-emphasized);
 }
 
 .icon-button:hover {
   border-color: var(--rule);
   background: var(--paper);
   color: var(--ink);
+}
+
+.icon-button:not(:disabled):active {
+  transform: scale(0.96);
 }
 
 .context-body {
@@ -519,9 +567,9 @@ button:disabled {
 }
 
 .context-search {
-  height: 38px;
+  height: 42px;
   padding: 0 11px;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
 
 .context-search input,
@@ -551,8 +599,12 @@ button:disabled {
 .context-task {
   overflow: hidden;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   background: var(--surface-tint);
+  transition:
+    background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-emphasized);
 }
 
 .context-task:hover {
@@ -611,7 +663,7 @@ button:disabled {
 
 .context-task-copy strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -621,7 +673,7 @@ button:disabled {
 .context-task-meta {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .context-task-meta {
@@ -716,13 +768,13 @@ button:disabled {
 }
 
 .provider-context-list strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .provider-context-list small {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .provider-dot {
@@ -775,7 +827,7 @@ button:disabled {
   max-width: min(680px, 54vw);
   margin: 2px 0 0;
   overflow: hidden;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 680;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -799,37 +851,37 @@ button:disabled {
 .machine-status strong {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .machine-status small {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 11px;
 }
 
-.app-shell[data-workspace-mode="simple"] .context-header {
+.app-shell[data-workspace-mode="guided"] .context-header {
   min-height: 104px;
   padding-top: 19px;
   padding-bottom: 14px;
 }
 
-.app-shell[data-workspace-mode="simple"] .context-header h2 {
+.app-shell[data-workspace-mode="guided"] .context-header h2 {
   margin-top: 6px;
 }
 
-.app-shell[data-workspace-mode="simple"] .context-header p,
-.app-shell[data-workspace-mode="simple"] .context-task-meta,
-.app-shell[data-workspace-mode="simple"] .workspace-title .eyebrow,
-.app-shell[data-workspace-mode="simple"] .machine-status small {
+.app-shell[data-workspace-mode="guided"] .context-header p,
+.app-shell[data-workspace-mode="guided"] .context-task-meta,
+.app-shell[data-workspace-mode="guided"] .workspace-title .eyebrow,
+.app-shell[data-workspace-mode="guided"] .machine-status small {
   display: none;
 }
 
-.app-shell[data-workspace-mode="simple"] .workspace-header {
+.app-shell[data-workspace-mode="guided"] .workspace-header {
   min-height: 56px;
 }
 
-.app-shell[data-workspace-mode="simple"] .context-expand {
+.app-shell[data-workspace-mode="guided"] .context-expand {
   top: 66px;
 }
 
@@ -853,14 +905,14 @@ button:disabled {
 .notice-bar {
   z-index: 8;
   display: flex;
-  min-height: 34px;
+  min-height: 40px;
   align-items: center;
   gap: 7px;
   padding: 6px 16px;
   border-bottom: 1px solid var(--lens);
   background: var(--lens-soft);
   color: var(--lens);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .notice-bar span {
@@ -892,20 +944,20 @@ button:disabled {
 
 .button {
   display: inline-flex;
-  min-height: 36px;
+  min-height: 40px;
   align-items: center;
   justify-content: center;
   gap: 7px;
   padding: 0 13px;
   border: 1px solid transparent;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
   font-weight: 650;
   transition:
-    background-color 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease,
-    transform 140ms ease;
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-emphasized);
 }
 
 .button:not(:disabled):active {
@@ -970,7 +1022,7 @@ button:disabled {
 .panel-heading p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* New task */
@@ -1344,6 +1396,10 @@ button:disabled {
   font-weight: 400;
 }
 
+.advanced-options summary svg {
+  transition: transform var(--motion-base) var(--ease-emphasized);
+}
+
 .advanced-options[open] summary svg {
   transform: rotate(180deg);
 }
@@ -1477,7 +1533,6 @@ button:disabled {
   height: 100%;
   border-radius: inherit;
   background: var(--lens);
-  transition: width 300ms ease;
 }
 
 .run-actions {
@@ -3136,8 +3191,9 @@ button:disabled {
   }
 
   .workspace-mode-switch button {
-    min-width: 40px;
-    padding: 0 7px;
+    min-width: 66px;
+    padding: 0 8px;
+    font-size: 11px;
   }
 
   .theme-preset-control select {
@@ -5947,6 +6003,6 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .report-revision-spinner {
-    animation-duration: 1.8s;
+    animation: none !important;
   }
 }
