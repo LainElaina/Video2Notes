@@ -123,7 +123,10 @@ print(json.dumps(inventory, separators=(",", ":")))
         if ($hadPreviousSpecs) { $env:VIDEO2NOTES_BUILD_COMPONENT_SPECS = $previousSpecs }
         else { Remove-Item Env:VIDEO2NOTES_BUILD_COMPONENT_SPECS -ErrorAction SilentlyContinue }
     }
-    $inventory = @($inventoryJson | ConvertFrom-Json)
+    # Windows PowerShell 5.1 can preserve a JSON array as one nested Object[]
+    # when it crosses a function return boundary.  Re-enumerate it explicitly.
+    $parsedInventory = $inventoryJson | ConvertFrom-Json
+    $inventory = @($parsedInventory | ForEach-Object { $_ })
     $missing = @(
         $inventory | Where-Object {
             $_.id -in $RequiredComponentIds -and
@@ -155,7 +158,8 @@ print(json.dumps(sorted(installed & known, key=str.casefold), separators=(",", "
 '@
     $metadataJson = ($metadataScript | & $Python - | Out-String).Trim()
     Assert-LastExitCode "Inspecting installed PaddleX dependency metadata"
-    return @($metadataJson | ConvertFrom-Json)
+    $parsedMetadata = $metadataJson | ConvertFrom-Json
+    return @($parsedMetadata | ForEach-Object { [string]$_ })
 }
 
 function Invoke-FrozenRuntimeProbe {
@@ -397,7 +401,12 @@ import os
 
 from PyInstaller.__main__ import run
 
-run(json.loads(os.environ["VIDEO2NOTES_BUILD_PYINSTALLER_ARGS"]))
+arguments = json.loads(os.environ["VIDEO2NOTES_BUILD_PYINSTALLER_ARGS"])
+if not isinstance(arguments, list) or not all(
+    isinstance(argument, str) and argument for argument in arguments
+):
+    raise TypeError("PyInstaller arguments must be a non-empty string list")
+run(arguments)
 '@
 $pyInstallerArgumentsJson = ConvertTo-Json @($PyInstallerArguments) -Compress
 $previousPyInstallerArguments = $env:VIDEO2NOTES_BUILD_PYINSTALLER_ARGS
