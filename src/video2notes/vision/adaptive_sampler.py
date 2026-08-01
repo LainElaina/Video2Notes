@@ -50,6 +50,7 @@ class AdaptiveScanConfig:
     fine_fps: float = 12.0
     analysis_width: int = 640
     analysis_height: int = 360
+    decode_threads: int = 1
 
     hard_cut_threshold: float = 0.135
     state_change_threshold: float = 0.030
@@ -73,6 +74,8 @@ class AdaptiveScanConfig:
             raise ValueError("fine_fps must be greater than or equal to coarse_fps")
         if self.analysis_width < 64 or self.analysis_height < 64:
             raise ValueError("analysis dimensions are too small")
+        if self.decode_threads < 1:
+            raise ValueError("decode_threads must be positive")
         if self.analysis_width % 2 or self.analysis_height % 2:
             raise ValueError("analysis dimensions must be even for FFmpeg")
         for name in (
@@ -749,6 +752,7 @@ class AdaptiveVideoScanner:
                 self.config.analysis_width,
                 self.config.analysis_height,
             ),
+            decode_threads=self.config.decode_threads,
         ):
             self._check_cancelled()
             yield FrameObservation(
@@ -773,6 +777,7 @@ class AdaptiveVideoScanner:
                 self.config.analysis_width,
                 self.config.analysis_height,
             ),
+            decode_threads=self.config.decode_threads,
         )
         return FrameObservation(
             timestamp=decoded.timestamp,

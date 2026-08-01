@@ -107,6 +107,20 @@ class PerformanceOverrides(ProfileModel):
             and self.expensive_scan_fps < self.cheap_scan_fps
         ):
             raise ValueError("expensive_scan_fps must be at least cheap_scan_fps")
+        unsupported = {
+            "decode_backend": self.decode_backend,
+            "ocr_model_class": self.ocr_model_class,
+            "ocr_batch_size": self.ocr_batch_size,
+            "asr_model_class": self.asr_model_class,
+            "asr_batch_size": self.asr_batch_size,
+            "learned_scene_detector": self.learned_scene_detector,
+        }
+        selected = [name for name, value in unsupported.items() if value is not None]
+        if selected:
+            raise ValueError(
+                "these overrides are unavailable until their execution adapter is "
+                f"installed: {', '.join(selected)}"
+            )
         return self
 
 
@@ -143,21 +157,21 @@ _HARDWARE_BUDGETS: dict[HardwareTier, _HardwareBudget] = {
         asr_compute_type="int8",
     ),
     HardwareTier.GPU_8GB: _HardwareBudget(
-        decode_backend="auto_hw",
+        decode_backend="software",
         concurrent_gpu_stages=1,
         analysis_width_cap=768,
         ocr_model_cap="mobile",
         asr_compute_type="int8_float16",
     ),
     HardwareTier.GPU_12GB: _HardwareBudget(
-        decode_backend="auto_hw",
+        decode_backend="software",
         concurrent_gpu_stages=1,
         analysis_width_cap=960,
         ocr_model_cap="medium",
         asr_compute_type="float16",
     ),
     HardwareTier.GPU_24GB_PLUS: _HardwareBudget(
-        decode_backend="auto_hw",
+        decode_backend="software",
         concurrent_gpu_stages=3,
         analysis_width_cap=1280,
         ocr_model_cap="medium",
@@ -202,7 +216,7 @@ _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
         secondary_asr=SecondaryAsrPolicy.UNCERTAIN_AND_CONFLICTS,
         verification_passes=2,
         screenshot_budget_per_section=4,
-        learned_scene_detector=True,
+        learned_scene_detector=False,
         asr_beam_size=5,
         max_fixed_samples=5_000,
     ),
@@ -299,9 +313,7 @@ def build_execution_plan(
     ocr_cap = hardware.ocr_model_cap
     if budget.memory_budget_bytes is not None and budget.memory_budget_bytes < 4 * GIB:
         ocr_cap = "mobile"
-    ocr_model = requested_ocr
     if requested_ocr == "medium" and ocr_cap == "mobile":
-        ocr_model = "mobile"
         notes.append(
             "Medium OCR exceeds the concurrent memory budget; use mobile OCR "
             "for the first pass and medium/cloud OCR only for uncertain crops."
@@ -312,11 +324,17 @@ def build_execution_plan(
         if overrides is not None and overrides.decode_backend is not None
         else hardware.decode_backend
     )
-    if decode_backend == "auto_hw" and not snapshot.ffmpeg_hwaccels:
+    if decode_backend == "auto_hw":
         decode_backend = "software"
-        notes.append("FFmpeg reports no hardware decoder; software decoding will be used.")
+        notes.append(
+            "Hardware video decode is not exposed by the current PTS-preserving "
+            "PyAV adapter; software decoding is used."
+        )
 
-    safe_gpu_stages = min(hardware.concurrent_gpu_stages, budget.gpu_stage_slots)
+    # The current pipeline runs ASR and OCR serially and owns one local engine
+    # lease per task. More than one simultaneous GPU stage would overstate the
+    # implemented scheduler even on a large GPU.
+    safe_gpu_stages = min(hardware.concurrent_gpu_stages, budget.gpu_stage_slots, 1)
     requested_gpu_stages = (
         overrides.concurrent_gpu_stages
         if overrides is not None and overrides.concurrent_gpu_stages is not None
@@ -381,7 +399,9 @@ def build_execution_plan(
         notes,
     )
 
-    safe_batch_size = _safe_batch_size(budget)
+    # The installed faster-whisper and Paddle adapters are single-item APIs.
+    # Keep the effective batch at one until a real batched adapter is selected.
+    safe_batch_size = 1
     requested_ocr_batch = (
         overrides.ocr_batch_size
         if overrides is not None and overrides.ocr_batch_size is not None
@@ -492,14 +512,16 @@ def build_execution_plan(
         analysis_width=min(requested_width, width_cap),
         cheap_scan_fps=cheap_scan_fps,
         expensive_scan_fps=expensive_scan_fps,
-        ocr_model_class=ocr_model,
+        ocr_model_class=(
+            "mobile"
+            if tier in {HardwareTier.CPU_IGPU, HardwareTier.GPU_8GB}
+            else "server"
+        ),
         ocr_device=ocr_device,
         ocr_batch_size=ocr_batch,
         ocr_cpu_threads=ocr_threads,
         asr_model_class=(
-            overrides.asr_model_class
-            if overrides is not None and overrides.asr_model_class is not None
-            else quality.asr_model_class
+            "small" if tier is HardwareTier.CPU_IGPU else "large-v3"
         ),
         asr_device=asr_device,
         asr_compute_type=asr_compute_type,

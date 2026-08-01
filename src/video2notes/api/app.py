@@ -274,6 +274,7 @@ class ApiContext:
         self.config_root = self.data_root / "config"
         self.runs_root.mkdir(parents=True, exist_ok=True)
         self.config_root.mkdir(parents=True, exist_ok=True)
+        self.configuration_lock = threading.RLock()
         self.token = token or secrets.token_urlsafe(32)
         self.source_registry = source_registry or SourceRegistry.default()
         self.registry_path = self.config_root / "providers.json"
@@ -298,7 +299,10 @@ class ApiContext:
             self.save_performance_settings(self.performance_settings)
         self.secret_store = secret_store or KeyringSecretStore()
         self.component_manager = component_manager or ComponentManager(self.data_root)
-        self.job_manager = job_manager or JobManager(max_workers=2)
+        # One processing job at a time is the safe v1 default: local ASR/OCR
+        # models are large, lazily loaded native engines and must not be
+        # duplicated by two jobs that independently see the same GPU budget.
+        self.job_manager = job_manager or JobManager(max_workers=1)
         self._owns_job_manager = job_manager is None
         self._pipeline_is_injected = pipeline is not None or pipeline_runtime is not None
         self.pipeline: Video2NotesPipeline
@@ -328,20 +332,21 @@ class ApiContext:
         self,
         settings: PerformanceSettings,
     ) -> PerformanceSettings:
-        temporary = self.performance_path.with_name(
-            f".{self.performance_path.name}.{uuid.uuid4().hex}.tmp"
-        )
-        temporary.write_text(
-            json.dumps(
-                settings.model_dump(mode="json", exclude_none=True),
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        os.replace(temporary, self.performance_path)
-        self.performance_settings = settings
-        return settings
+        with self.configuration_lock:
+            temporary = self.performance_path.with_name(
+                f".{self.performance_path.name}.{uuid.uuid4().hex}.tmp"
+            )
+            temporary.write_text(
+                json.dumps(
+                    settings.model_dump(mode="json", exclude_none=True),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temporary, self.performance_path)
+            self.performance_settings = settings
+            return settings
 
     def list_runs(self) -> list[ArtifactManifest]:
         manifests: list[ArtifactManifest] = []
@@ -378,23 +383,30 @@ class ApiContext:
     def refresh_pipeline(self) -> None:
         """Rebuild lazy role backends without replacing an injected test runtime."""
 
-        if self._pipeline_is_injected:
-            return
-        result = build_pipeline_runtime(
-            self.model_registry,
-            secret_store=self.secret_store,
-            source_registry=self.source_registry,
-            hardware_disk_path=str(self.data_root),
-            experience_mode=self.performance_settings.experience_mode,
-            resource_preference=self.performance_settings.preference,
-            resource_reserve=self.performance_settings.reserve,
-            performance_overrides=self.performance_settings.overrides,
-        )
-        self.pipeline = Video2NotesPipeline(
-            self.runs_root,
-            runtime=result.runtime,
-        )
-        self.runtime_warnings = tuple(_sanitize_message(warning) for warning in result.warnings)
+        with self.configuration_lock:
+            if self._pipeline_is_injected:
+                return
+            result = build_pipeline_runtime(
+                self.model_registry,
+                secret_store=self.secret_store,
+                source_registry=self.source_registry,
+                hardware_disk_path=str(self.data_root),
+                experience_mode=self.performance_settings.experience_mode,
+                resource_preference=self.performance_settings.preference,
+                resource_reserve=self.performance_settings.reserve,
+                performance_overrides=self.performance_settings.overrides,
+            )
+            self.pipeline = Video2NotesPipeline(
+                self.runs_root,
+                runtime=result.runtime,
+            )
+            self.runtime_warnings = tuple(
+                _sanitize_message(warning) for warning in result.warnings
+            )
+
+    def pipeline_snapshot(self) -> tuple[Video2NotesPipeline, tuple[str, ...]]:
+        with self.configuration_lock:
+            return self.pipeline, self.runtime_warnings
 
     def store_result(self, result: PipelineOutcome) -> None:
         with self._results_lock:
@@ -468,7 +480,8 @@ def create_app(
     def system_report() -> SystemReport:
         hardware = detect_hardware(disk_path=context.data_root)
         tier = recommend_hardware_tier(hardware)
-        settings = context.performance_settings
+        with context.configuration_lock:
+            settings = context.performance_settings.model_copy(deep=True)
         recommendation = recommend_resources(
             hardware,
             experience_mode=settings.experience_mode,
@@ -500,7 +513,8 @@ def create_app(
         dependencies=protected,
     )
     def get_performance_settings() -> PerformanceSettings:
-        return context.performance_settings
+        with context.configuration_lock:
+            return context.performance_settings.model_copy(deep=True)
 
     @app.put(
         "/api/performance",
@@ -510,9 +524,10 @@ def create_app(
     def put_performance_settings(
         settings: PerformanceSettings,
     ) -> PerformanceSettings:
-        saved = context.save_performance_settings(settings)
-        context.refresh_pipeline()
-        return saved
+        with context.configuration_lock:
+            saved = context.save_performance_settings(settings)
+            context.refresh_pipeline()
+            return saved
 
     @app.post(
         "/api/estimate",
@@ -534,9 +549,10 @@ def create_app(
         dependencies=protected,
     )
     def runtime_status() -> RuntimeStatus:
+        _, warnings = context.pipeline_snapshot()
         return RuntimeStatus(
             injected=context.pipeline_is_injected,
-            warnings=[_sanitize_message(warning) for warning in context.runtime_warnings],
+            warnings=[_sanitize_message(warning) for warning in warnings],
         )
 
     @app.get(
@@ -577,8 +593,7 @@ def create_app(
                 and inventory.capabilities.get("asr")
                 and inventory.capabilities.get("ocr")
             ):
-                _activate_managed_local_models(context, tier)
-                activated = True
+                activated = _activate_managed_local_models(context, tier)
             report = _component_report(context, tier=tier)
         except ComponentManagerError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
@@ -651,19 +666,22 @@ def create_app(
 
     @app.get("/api/providers", response_model=ModelRegistry, dependencies=protected)
     def get_providers() -> ModelRegistry:
-        return context.model_registry
+        with context.configuration_lock:
+            return context.model_registry.model_copy(deep=True)
 
     @app.put("/api/providers", response_model=ModelRegistry, dependencies=protected)
     def put_providers(registry: ModelRegistry) -> ModelRegistry:
-        registry.save(context.registry_path)
-        context.model_registry = registry
-        context.refresh_pipeline()
-        return context.model_registry
+        with context.configuration_lock:
+            registry.save(context.registry_path)
+            context.model_registry = registry
+            context.refresh_pipeline()
+            return context.model_registry.model_copy(deep=True)
 
     @app.get("/api/providers/{provider_id}/secret", dependencies=protected)
     def provider_secret_status(provider_id: str) -> dict[str, str]:
-        _require_provider(context, provider_id)
-        status = context.secret_store.status(provider_id)
+        with context.configuration_lock:
+            _require_provider(context, provider_id)
+            status = context.secret_store.status(provider_id)
         return {"provider_id": provider_id, "status": status.value}
 
     @app.put("/api/providers/{provider_id}/secret", dependencies=protected)
@@ -671,14 +689,15 @@ def create_app(
         provider_id: str,
         request: ProviderSecretRequest,
     ) -> dict[str, str]:
-        provider = _require_provider(context, provider_id)
-        reference = context.secret_store.set(
-            provider_id,
-            request.secret.get_secret_value(),
-        )
-        provider.credential_ref = reference
-        context.model_registry.save(context.registry_path)
-        context.refresh_pipeline()
+        with context.configuration_lock:
+            provider = _require_provider(context, provider_id)
+            reference = context.secret_store.set(
+                provider_id,
+                request.secret.get_secret_value(),
+            )
+            provider.credential_ref = reference
+            context.model_registry.save(context.registry_path)
+            context.refresh_pipeline()
         return {
             "provider_id": provider_id,
             "status": SecretStatus.CONFIGURED.value,
@@ -686,11 +705,12 @@ def create_app(
 
     @app.delete("/api/providers/{provider_id}/secret", dependencies=protected)
     def delete_provider_secret(provider_id: str) -> dict[str, str]:
-        provider = _require_provider(context, provider_id)
-        context.secret_store.delete(provider_id)
-        provider.credential_ref = None
-        context.model_registry.save(context.registry_path)
-        context.refresh_pipeline()
+        with context.configuration_lock:
+            provider = _require_provider(context, provider_id)
+            context.secret_store.delete(provider_id)
+            provider.credential_ref = None
+            context.model_registry.save(context.registry_path)
+            context.refresh_pipeline()
         return {
             "provider_id": provider_id,
             "status": SecretStatus.NOT_CONFIGURED.value,
@@ -702,7 +722,8 @@ def create_app(
         dependencies=protected,
     )
     def test_provider(provider_id: str) -> ProviderConnectionResult:
-        provider = _require_provider(context, provider_id)
+        with context.configuration_lock:
+            provider = _require_provider(context, provider_id).model_copy(deep=True)
         if not provider.enabled:
             return ProviderConnectionResult(
                 provider_id=provider_id,
@@ -766,7 +787,8 @@ def create_app(
         dependencies=protected,
     )
     def discover_provider_models(provider_id: str) -> ProviderDiscoveryResult:
-        provider = _require_provider(context, provider_id)
+        with context.configuration_lock:
+            provider = _require_provider(context, provider_id).model_copy(deep=True)
         template = PROTOCOL_CATALOG[provider.protocol]
         if provider.base_url is None or template.discovery_path is None:
             raise HTTPException(
@@ -1077,10 +1099,10 @@ def create_app(
         dependencies=protected,
     )
     def submit_job(request: PipelineRequest) -> ProcessingRunResponse:
-        pipeline = context.pipeline
+        pipeline, runtime_warnings = context.pipeline_snapshot()
         try:
             workspace = pipeline.create_run(request)
-            safe_warnings = [_sanitize_message(warning) for warning in context.runtime_warnings]
+            safe_warnings = [_sanitize_message(warning) for warning in runtime_warnings]
             for warning in safe_warnings:
                 workspace.add_warning(warning)
             submitted_manifest = _safe_manifest(workspace.manifest)
@@ -1148,11 +1170,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found") from None
         except (FileNotFoundError, ValueError):
             raise HTTPException(status_code=404, detail="run not found") from None
+        _, runtime_warnings = context.pipeline_snapshot()
         return ProcessingRunResponse(
             run=_safe_manifest(workspace.manifest),
             job=_safe_job(snapshot),
             result=context.get_result(run_id),
-            runtime_warnings=[_sanitize_message(warning) for warning in context.runtime_warnings],
+            runtime_warnings=[_sanitize_message(warning) for warning in runtime_warnings],
         )
 
     @app.post(
@@ -1178,7 +1201,8 @@ def _operation_service(
     context: ApiContext,
     workspace: RunWorkspace,
 ) -> OperationService:
-    runtime = getattr(context.pipeline, "runtime", None)
+    pipeline, _ = context.pipeline_snapshot()
+    runtime = getattr(pipeline, "runtime", None)
     return OperationService(
         workspace,
         asr_backend=(runtime.asr_backend if runtime is not None else None),
@@ -1193,10 +1217,11 @@ def _report_revision_service(
     context: ApiContext,
     workspace: RunWorkspace,
 ) -> ReportRevisionService:
+    pipeline, _ = context.pipeline_snapshot()
     return ReportRevisionService(
         workspace,
-        composer=context.pipeline.runtime.note_composer,
-        pdf_browser_executable=context.pipeline.runtime.pdf_browser_executable,
+        composer=pipeline.runtime.note_composer,
+        pdf_browser_executable=pipeline.runtime.pdf_browser_executable,
     )
 
 
@@ -1225,7 +1250,7 @@ def _component_report(
 def _activate_managed_local_models(
     context: ApiContext,
     tier: HardwareTier,
-) -> None:
+) -> bool:
     try:
         settings = context.component_manager.local_adapter_settings(tier)
     except ComponentNotReadyError:
@@ -1233,46 +1258,64 @@ def _activate_managed_local_models(
             "recommended local ASR/OCR model payloads are not complete"
         ) from None
 
-    registry = context.model_registry.model_copy(deep=True)
-    defaults = ModelRegistry.with_local_defaults()
-    local_provider = registry.providers.get("local")
-    if local_provider is None:
-        registry.providers["local"] = defaults.providers["local"].model_copy(deep=True)
-    elif local_provider.protocol is not ProviderProtocol.LOCAL:
-        raise ComponentManagerError(
-            "provider ID 'local' is occupied by a non-local protocol"
-        )
-
-    for model_id, selected_settings in (
-        ("faster-whisper", settings.asr),
-        ("paddleocr", settings.ocr),
-    ):
-        default_model = defaults.models[model_id]
-        model = registry.models.get(model_id)
-        if model is None:
-            model = default_model.model_copy(deep=True)
-            registry.models[model_id] = model
-        elif model.provider_id != "local":
+    with context.configuration_lock:
+        registry = context.model_registry.model_copy(deep=True)
+        defaults = ModelRegistry.with_local_defaults()
+        local_provider = registry.providers.get("local")
+        if local_provider is None:
+            registry.providers["local"] = defaults.providers["local"].model_copy(deep=True)
+        elif local_provider.protocol is not ProviderProtocol.LOCAL:
             raise ComponentManagerError(
-                f"model ID '{model_id}' is occupied by a non-local provider"
+                "provider ID 'local' is occupied by a non-local protocol"
             )
-        model.capabilities.update(default_model.capabilities)
-        model.settings = dict(selected_settings)
-        model.enabled = True
+        else:
+            local_provider.enabled = True
 
-    for role, model_id in (
-        ("asr.primary", "faster-whisper"),
-        ("ocr.primary", "paddleocr"),
-        ("vision.text_detector", "paddleocr"),
-    ):
-        binding = registry.roles.get(role)
-        if binding is None or binding.primary_model_id == model_id:
-            registry.bind(role, model_id)
+        for model_id, selected_settings in (
+            ("faster-whisper", settings.asr),
+            ("paddleocr", settings.ocr),
+        ):
+            default_model = defaults.models[model_id]
+            model = registry.models.get(model_id)
+            if model is None:
+                model = default_model.model_copy(deep=True)
+                registry.models[model_id] = model
+            elif model.provider_id != "local":
+                raise ComponentManagerError(
+                    f"model ID '{model_id}' is occupied by a non-local provider"
+                )
+            model.capabilities.update(default_model.capabilities)
+            model.settings = dict(selected_settings)
+            model.enabled = True
 
-    validated = ModelRegistry.model_validate(registry.model_dump(mode="json"))
-    validated.save(context.registry_path)
-    context.model_registry = validated
-    context.refresh_pipeline()
+        for role, model_id in (
+            ("asr.primary", "faster-whisper"),
+            ("ocr.primary", "paddleocr"),
+            ("vision.text_detector", "paddleocr"),
+        ):
+            binding = registry.roles.get(role)
+            if binding is None:
+                registry.bind(role, model_id)
+
+        validated = ModelRegistry.model_validate(registry.model_dump(mode="json"))
+        validated.save(context.registry_path)
+        context.model_registry = validated
+        context.refresh_pipeline()
+        required_bindings = {
+            "asr.primary": "faster-whisper",
+            "ocr.primary": "paddleocr",
+            "vision.text_detector": "paddleocr",
+        }
+        bindings_active = all(
+            validated.roles.get(role) is not None
+            and validated.roles[role].primary_model_id == model_id
+            for role, model_id in required_bindings.items()
+        )
+        return (
+            bindings_active
+            and context.pipeline.runtime.asr_backend is not None
+            and context.pipeline.runtime.ocr_backend is not None
+        )
 
 
 def _provider_api_key(

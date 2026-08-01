@@ -135,9 +135,9 @@ class ExecutionProfileTests(unittest.TestCase):
         result = build_execution_plan(snapshot(vram_gib=24), QualityMode.FAST)
         self.assertEqual(result.hardware_tier, HardwareTier.GPU_24GB_PLUS)
         self.assertEqual(result.quality_mode, QualityMode.FAST)
-        self.assertEqual(result.asr_model_class, "small")
+        self.assertEqual(result.asr_model_class, "large-v3")
         self.assertEqual(result.secondary_asr, SecondaryAsrPolicy.OFF)
-        self.assertEqual(result.concurrent_gpu_stages, 3)
+        self.assertEqual(result.concurrent_gpu_stages, 1)
 
     def test_accurate_mode_on_cpu_preserves_intent_with_safe_escalation(self) -> None:
         result = build_execution_plan(
@@ -161,7 +161,6 @@ class ExecutionProfileTests(unittest.TestCase):
             QualityMode.BALANCED,
         )
         self.assertEqual(result.decode_backend, "software")
-        self.assertTrue(any("hardware decoder" in note for note in result.notes))
 
     def test_estimate_is_a_range_and_keeps_quality_separate(self) -> None:
         machine = snapshot(vram_gib=24)
@@ -260,8 +259,6 @@ class ExecutionProfileTests(unittest.TestCase):
             analysis_width=640,
             cheap_scan_fps=1.5,
             expensive_scan_fps=5,
-            ocr_batch_size=2,
-            asr_batch_size=2,
             asr_beam_size=8,
             verification_passes=3,
             screenshot_budget_per_section=6,
@@ -282,8 +279,8 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertEqual(plan.analysis_width, 640)
         self.assertEqual(plan.cheap_scan_fps, 1.5)
         self.assertEqual(plan.expensive_scan_fps, 5)
-        self.assertEqual(plan.ocr_batch_size, 2)
-        self.assertEqual(plan.asr_batch_size, 2)
+        self.assertEqual(plan.ocr_batch_size, 1)
+        self.assertEqual(plan.asr_batch_size, 1)
         self.assertEqual(plan.asr_beam_size, 8)
         self.assertEqual(plan.verification_passes, 3)
         self.assertEqual(plan.screenshot_budget_per_section, 6)
@@ -319,6 +316,10 @@ class ExecutionProfileTests(unittest.TestCase):
             ResourceReserve(cpu_reserve_ratio=0.95)
         with self.assertRaises(ValidationError):
             PerformanceOverrides(cheap_scan_fps=10, expensive_scan_fps=5)
+        with self.assertRaisesRegex(ValidationError, "execution adapter"):
+            PerformanceOverrides(asr_batch_size=2)
+        with self.assertRaisesRegex(ValidationError, "execution adapter"):
+            PerformanceOverrides(learned_scene_detector=True)
         with self.assertRaises(ValueError):
             build_execution_plan(
                 snapshot(vram_gib=24),

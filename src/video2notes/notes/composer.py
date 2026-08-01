@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -120,11 +121,14 @@ class EvidenceNoteComposer:
         supporting_materials: Sequence[RunMaterial | SupportingMaterial] = (),
         artifact_root: str | Path | None = None,
         verification_passes: int = 1,
+        max_model_concurrency: int = 1,
     ) -> NoteCompositionResult:
         if fusion.run_id != metadata.run_id:
             raise ValueError("note metadata and fusion result must belong to one run")
         if verification_passes < 0:
             raise ValueError("verification_passes cannot be negative")
+        if max_model_concurrency < 1:
+            raise ValueError("max_model_concurrency must be positive")
         resolved_report = (report_spec or ReportSpec()).resolve()
         metadata = metadata.model_copy(
             update={
@@ -151,7 +155,11 @@ class EvidenceNoteComposer:
         invocations: list[InvocationSummary] = []
         warnings: list[str] = []
         try:
-            facts = self._extract_facts(fusion, invocations)
+            facts = self._extract_facts(
+                fusion,
+                invocations,
+                max_model_concurrency=max_model_concurrency,
+            )
             draft = self._draft(
                 metadata,
                 fusion,
@@ -206,16 +214,18 @@ class EvidenceNoteComposer:
         self,
         fusion: FusionResult,
         invocations: list[InvocationSummary],
+        *,
+        max_model_concurrency: int,
     ) -> list[FactCard]:
         if self.fact_backend is None:
             raise RuntimeError("fact backend is not configured")
         evidence_by_id = {item.id: item for item in fusion.evidence}
-        facts: list[FactCard] = []
-        for window in fusion.windows:
-            if not window.evidence_ids:
-                continue
+        windows = [window for window in fusion.windows if window.evidence_ids]
+
+        def generate(window: EvidenceWindow) -> GenerationResult:
             payload = _window_prompt_payload(window, evidence_by_id)
-            result = self.fact_backend.generate(
+            assert self.fact_backend is not None
+            return self.fact_backend.generate(
                 GenerationRequest(
                     role="notes.fact_extractor",
                     system_prompt=_FACT_SYSTEM_PROMPT,
@@ -226,6 +236,19 @@ class EvidenceNoteComposer:
                     max_output_tokens=6_144,
                 )
             )
+
+        worker_count = min(max_model_concurrency, len(windows))
+        if worker_count > 1:
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="video2notes-facts",
+            ) as executor:
+                results = list(executor.map(generate, windows))
+        else:
+            results = [generate(window) for window in windows]
+
+        facts: list[FactCard] = []
+        for window, result in zip(windows, results, strict=True):
             invocations.append(_invocation_summary(result))
             envelope = FactExtractionEnvelope.model_validate(result.parsed)
             allowed = set(window.evidence_ids)

@@ -78,7 +78,14 @@ _OCR_MOBILE = ComponentManifest(
         "PP-OCRv5_mobile_rec@682f20538d8c086cb2128e5cfac775e6c4904e85"
     ),
     target_subdirectory="models/ocr/ppocrv5-mobile/1.0.0",
-    required_nonempty_directories=("detection", "recognition"),
+    required_files=(
+        "detection/inference.json",
+        "detection/inference.pdiparams",
+        "detection/inference.yml",
+        "recognition/inference.json",
+        "recognition/inference.pdiparams",
+        "recognition/inference.yml",
+    ),
 )
 
 _OCR_SERVER = ComponentManifest(
@@ -94,7 +101,14 @@ _OCR_SERVER = ComponentManifest(
         "PP-OCRv5_server_rec@b26c3587fda8da3c8ec0ce357214b4d661ff1558"
     ),
     target_subdirectory="models/ocr/ppocrv5-server/1.0.0",
-    required_nonempty_directories=("detection", "recognition"),
+    required_files=(
+        "detection/inference.json",
+        "detection/inference.pdiparams",
+        "detection/inference.yml",
+        "recognition/inference.json",
+        "recognition/inference.pdiparams",
+        "recognition/inference.yml",
+    ),
 )
 
 

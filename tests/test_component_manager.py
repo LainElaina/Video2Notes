@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from video2notes.components import (
     DEFAULT_COMPONENT_CATALOG,
     ComponentActionKind,
+    ComponentDownloader,
     ComponentDownloadError,
     ComponentManager,
     ComponentManifest,
@@ -85,8 +86,8 @@ class ComponentManagerTests(unittest.TestCase):
     def manager(
         self,
         *,
-        asr_downloader: FakeDownloader | None = None,
-        ocr_downloader: FakeDownloader | None = None,
+        asr_downloader: ComponentDownloader | None = None,
+        ocr_downloader: ComponentDownloader | None = None,
     ) -> ComponentManager:
         downloaders = {}
         if asr_downloader is not None:
@@ -190,6 +191,70 @@ class ComponentManagerTests(unittest.TestCase):
         self.assertFalse(item.ready)
         self.assertEqual(item.state, ComponentState.INCOMPLETE)
         self.assertIn("required model file", item.detail or "")
+
+    def test_completion_marker_rejects_truncated_or_modified_model_weights(self) -> None:
+        manager = self.manager(
+            asr_downloader=FakeDownloader(),
+            ocr_downloader=FakeDownloader(),
+        )
+        component_id = "asr-faster-whisper-small"
+        prepared = manager.prepare(component_id)
+        assert prepared.path is not None
+        model = Path(prepared.path) / "model.bin"
+        original = model.read_bytes()
+
+        model.write_bytes(b"")
+        truncated = next(
+            item
+            for item in manager.inventory(HardwareTier.CPU_IGPU).items
+            if item.id == component_id
+        )
+        self.assertFalse(truncated.ready)
+        self.assertIn("empty", truncated.detail or "")
+
+        repaired = manager.prepare(component_id)
+        assert repaired.path is not None
+        model = Path(repaired.path) / "model.bin"
+        model.write_bytes(b"x" * len(original))
+        modified = next(
+            item
+            for item in manager.inventory(HardwareTier.CPU_IGPU).items
+            if item.id == component_id
+        )
+        self.assertFalse(modified.ready)
+        self.assertIn("changed after preparation", modified.detail or "")
+
+    def test_ocr_cache_metadata_alone_is_not_a_model_payload(self) -> None:
+        class CacheOnlyDownloader:
+            def download(
+                self,
+                manifest: ComponentManifest,
+                destination: Path,
+                *,
+                resume: bool,
+            ) -> DownloadResult:
+                del manifest, resume
+                for role in ("detection", "recognition"):
+                    cache = destination / role / ".hf-cache"
+                    cache.mkdir(parents=True, exist_ok=True)
+                    (cache / "metadata.json").write_text("{}", encoding="utf-8")
+                return DownloadResult(source_revision="cache-only")
+
+        manager = self.manager(
+            asr_downloader=FakeDownloader(),
+            ocr_downloader=CacheOnlyDownloader(),
+        )
+        component_id = "ocr-paddle-ppocrv5-mobile"
+
+        result = manager.prepare(component_id)
+        item = next(
+            entry
+            for entry in manager.inventory(HardwareTier.CPU_IGPU).items
+            if entry.id == component_id
+        )
+
+        self.assertEqual(result.status, PrepareStatus.FAILED)
+        self.assertFalse(item.ready)
 
     def test_existing_incomplete_managed_target_is_recovered_not_deleted(self) -> None:
         manager = self.manager(

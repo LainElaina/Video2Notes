@@ -53,6 +53,7 @@ def iter_video_frames(
     start_us: int = 0,
     end_us: int | None = None,
     target_size: tuple[int, int] | None = None,
+    decode_threads: int | None = None,
 ) -> Iterator[DecodedVideoFrame]:
     """Decode video frames while retaining their source PTS.
 
@@ -77,11 +78,14 @@ def iter_video_frames(
         raise ValueError("sample_period_us must be positive")
     if sample_fps is not None and sample_period_us is not None:
         raise ValueError("provide sample_fps or sample_period_us, not both")
+    if decode_threads is not None and decode_threads < 1:
+        raise ValueError("decode_threads must be positive")
     _validate_target_size(target_size)
 
     av = _load_av()
     with av.open(str(source_path), mode="r") as container:
         stream = _select_video_stream(container, stream_index)
+        _configure_decode_threads(stream, decode_threads)
         if start_us > 0:
             _seek_to_canonical_time(
                 container,
@@ -140,6 +144,7 @@ def decode_video_frame_at(
     timeline_origin_us: int,
     stream_index: int | None = None,
     target_size: tuple[int, int] | None = None,
+    decode_threads: int | None = None,
 ) -> DecodedVideoFrame:
     """Decode the exact source frame identified by ``timestamp``.
 
@@ -150,6 +155,8 @@ def decode_video_frame_at(
 
     if timestamp.pts is None:
         raise ExactFrameNotFoundError("an exact frame requires a raw source PTS")
+    if decode_threads is not None and decode_threads < 1:
+        raise ValueError("decode_threads must be positive")
     _validate_target_size(target_size)
 
     source_path = Path(source).expanduser().resolve()
@@ -159,6 +166,7 @@ def decode_video_frame_at(
     av = _load_av()
     with av.open(str(source_path), mode="r") as container:
         stream = _select_video_stream(container, stream_index)
+        _configure_decode_threads(stream, decode_threads)
         stream_time_base = _fraction_for_time_base(stream.time_base)
         target_time_base = timestamp.time_base.fraction
         target_source_time = Fraction(timestamp.pts, 1) * target_time_base
@@ -227,6 +235,16 @@ def _select_video_stream(container: Any, stream_index: int | None) -> Any:
         if int(stream.index) == stream_index:
             return stream
     raise VideoDecodeError(f"video stream index {stream_index} does not exist")
+
+
+def _configure_decode_threads(stream: Any, decode_threads: int | None) -> None:
+    if decode_threads is None:
+        return
+    # PyAV forwards these settings to the bundled FFmpeg codec context. AUTO
+    # lets the codec choose frame/slice threading while the execution plan
+    # still owns the hard worker limit.
+    stream.thread_type = "AUTO"
+    stream.thread_count = decode_threads
 
 
 def _seek_to_canonical_time(

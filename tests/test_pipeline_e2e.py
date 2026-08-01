@@ -270,7 +270,7 @@ class PipelineEndToEndTests(unittest.TestCase):
             request = PipelineRequest(
                 source=SourceInput.local(source),
                 acquisition=AcquisitionPolicy(prefer_hardlink=False),
-                quality_mode=QualityMode.FAST,
+                quality_mode=QualityMode.BALANCED,
                 include_screenshots=True,
                 generate_pdf=False,
             )
@@ -311,7 +311,7 @@ class PipelineEndToEndTests(unittest.TestCase):
             request = PipelineRequest(
                 source=SourceInput.local(source),
                 acquisition=AcquisitionPolicy(prefer_hardlink=False),
-                quality_mode=QualityMode.FAST,
+                quality_mode=QualityMode.BALANCED,
                 language_hints=["zh"],
                 include_screenshots=True,
                 generate_pdf=False,

@@ -156,6 +156,7 @@ class ComponentCompletionMarker(ComponentModel):
     source_revision: str | None = None
     payload_file_count: int = Field(ge=1)
     payload_size_bytes: int = Field(ge=1)
+    required_file_sha256: dict[str, str]
 
 
 class PrepareResult(ComponentModel):

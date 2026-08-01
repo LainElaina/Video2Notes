@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import threading
+import time
 import unittest
 
 from video2notes.domain import EvidenceModality, EvidenceSpan
@@ -154,6 +157,111 @@ class NoteComposerTests(unittest.TestCase):
                 ("judge", "precise", "notes.verifier"),
             ],
         )
+
+    def test_fact_windows_use_the_configured_remote_concurrency(self) -> None:
+        evidence = [
+            EvidenceSpan(
+                id="speech-a",
+                run_id="parallel-run",
+                modality=EvidenceModality.ASR,
+                start_us=0,
+                end_us=1_000_000,
+                raw_text="第一段",
+                normalized_text="第一段",
+            ),
+            EvidenceSpan(
+                id="speech-b",
+                run_id="parallel-run",
+                modality=EvidenceModality.ASR,
+                start_us=5_000_000,
+                end_us=6_000_000,
+                raw_text="第二段",
+                normalized_text="第二段",
+            ),
+        ]
+        fusion = build_evidence_timeline(evidence)
+        self.assertEqual(len(fusion.windows), 2)
+        metadata = NoteMetadata(
+            title="并发事实提取",
+            run_id="parallel-run",
+            source_kind="local",
+            source_locator="parallel.mp4",
+            duration_us=6_000_000,
+            quality_mode="balanced",
+        )
+
+        class ConcurrentFactBackend:
+            provider_id = "parallel"
+            model_id = "facts"
+
+            def __init__(self) -> None:
+                self.active = 0
+                self.maximum_active = 0
+                self.lock = threading.Lock()
+
+            def generate(self, request: GenerationRequest) -> GenerationResult:
+                payload = json.loads(request.user_prompt)
+                evidence_id = payload["evidence"][0]["id"]
+                with self.lock:
+                    self.active += 1
+                    self.maximum_active = max(self.maximum_active, self.active)
+                time.sleep(0.03)
+                with self.lock:
+                    self.active -= 1
+                return GenerationResult(
+                    provider=self.provider_id,
+                    model=self.model_id,
+                    role=request.role,
+                    parsed={
+                        "facts": [
+                            {
+                                "claim": f"事实 {evidence_id}",
+                                "evidence_ids": [evidence_id],
+                            }
+                        ]
+                    },
+                    raw_text="{}",
+                    latency_seconds=0.03,
+                )
+
+        facts = ConcurrentFactBackend()
+        draft = FakeBackend(
+            "writer",
+            "draft",
+            {
+                "notes.drafter": {
+                    "abstract": "两段事实",
+                    "key_takeaways": ["第一段", "第二段"],
+                    "sections": [
+                        {
+                            "title": "内容",
+                            "start_us": 0,
+                            "end_us": 6_000_000,
+                            "summary": "两段内容",
+                            "body_markdown": "第一段；第二段。",
+                            "evidence_ids": ["speech-a", "speech-b"],
+                            "fact_ids": [
+                                "fact-window-00000-000",
+                                "fact-window-00001-000",
+                            ],
+                        }
+                    ],
+                    "glossary": {},
+                }
+            },
+        )
+
+        result = EvidenceNoteComposer(
+            fact_backend=facts,
+            draft_backend=draft,
+        ).compose(metadata, fusion, max_model_concurrency=2)
+
+        self.assertFalse(result.used_deterministic_fallback)
+        self.assertEqual(facts.maximum_active, 2)
+        self.assertEqual([item.id for item in result.note.facts], [
+            "fact-window-00000-000",
+            "fact-window-00001-000",
+        ])
 
     def test_unknown_evidence_from_model_triggers_safe_fallback(self) -> None:
         metadata, fusion = fixture()

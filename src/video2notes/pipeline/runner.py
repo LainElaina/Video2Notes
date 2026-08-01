@@ -520,6 +520,7 @@ class Video2NotesPipeline:
             fine_fps=float(execution_plan["expensive_scan_fps"]),
             analysis_width=analysis_width,
             analysis_height=analysis_height,
+            decode_threads=int(execution_plan["visual_decode_threads"]),
         )
         compiled_payload = [item.model_dump(mode="json") for item in segments]
         with workspace.stage(
@@ -586,6 +587,7 @@ class Video2NotesPipeline:
                             segment,
                             preview_dir=segment_dir,
                             max_fixed_samples=int(execution_plan["max_fixed_samples"]),
+                            decode_threads=int(execution_plan["visual_decode_threads"]),
                             cancel=cancel,
                         )
                         fixed_sample_count += len(segment_events)
@@ -1114,8 +1116,14 @@ class Video2NotesPipeline:
                     quality_warnings=list(dict.fromkeys(warnings)),
                 )
                 screenshots = (
-                    _screenshots_for_windows(workspace, fusion, ocr_bundle)
+                    _screenshots_for_windows(
+                        workspace,
+                        fusion,
+                        ocr_bundle,
+                        max_per_window=execution_plan.screenshot_budget_per_section,
+                    )
                     if resolved_report.include_screenshots
+                    and execution_plan.screenshot_budget_per_section > 0
                     else {}
                 )
                 composition = self.runtime.note_composer.compose(
@@ -1124,6 +1132,7 @@ class Video2NotesPipeline:
                     screenshots_by_window=screenshots,
                     report_spec=report_spec,
                     verification_passes=execution_plan.verification_passes,
+                    max_model_concurrency=execution_plan.remote_model_concurrency,
                 )
                 _write_model(document_path, composition.note)
                 _write_json(
@@ -1260,6 +1269,7 @@ def _fixed_interval_events(
     *,
     preview_dir: Path,
     max_fixed_samples: int,
+    decode_threads: int,
     cancel: CancellationToken,
 ) -> list[ChangeEvent]:
     """Decode and persist real source frames for one fixed-interval segment."""
@@ -1282,7 +1292,8 @@ def _fixed_interval_events(
             sample_period_us=interval_us,
             start_us=segment.start_us,
             end_us=segment.end_us,
-            target_size=None,
+        target_size=None,
+        decode_threads=decode_threads,
         )
     ):
         cancel.raise_if_cancelled()
@@ -1513,7 +1524,11 @@ def _screenshots_for_windows(
     workspace: RunWorkspace,
     fusion: FusionResult,
     ocr: OcrEvidenceBundle | None,
+    *,
+    max_per_window: int,
 ) -> dict[str, list[NoteScreenshot]]:
+    if max_per_window < 1:
+        return {}
     state_time = {state.id: state.stable_keyframe_us for state in fusion.visual_states}
     evidence_by_state: dict[str, list[str]] = {}
     text_by_state: dict[str, list[str]] = {}
@@ -1550,6 +1565,8 @@ def _screenshots_for_windows(
             None,
         )
         if window is None:
+            return
+        if len(result.get(window.id, [])) >= max_per_window:
             return
         source = workspace.root / artifact.relative_path
         if not source.is_file():

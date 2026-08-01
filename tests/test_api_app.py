@@ -19,9 +19,11 @@ from video2notes.components import (
 )
 from video2notes.providers import (
     AuthScheme,
+    Capability,
     KeyringSecretStore,
     Locality,
     ModelRegistry,
+    ModelSpec,
     ProviderKind,
     ProviderProtocol,
     ProviderSpec,
@@ -259,6 +261,69 @@ class ApiAppTests(unittest.TestCase):
         )
         self.assertIsNotNone(context.pipeline.runtime.asr_backend)
         self.assertIsNotNone(context.pipeline.runtime.ocr_backend)
+
+        registry = context.model_registry.model_copy(deep=True)
+        registry.models["custom-whisper"] = ModelSpec(
+            id="custom-whisper",
+            provider_id="local",
+            model_id="custom-whisper",
+            display_name="Custom Whisper",
+            capabilities={Capability.ASR, Capability.SEGMENT_TIMESTAMPS},
+            locality=Locality.LOCAL,
+            settings={},
+        )
+        registry.models["custom-ocr"] = ModelSpec(
+            id="custom-ocr",
+            provider_id="local",
+            model_id="custom-ocr",
+            display_name="Custom OCR",
+            capabilities={Capability.OCR, Capability.OCR_BOXES},
+            locality=Locality.LOCAL,
+            settings={},
+        )
+        registry.bind(
+            "asr.primary",
+            "faster-whisper",
+            fallback_model_ids=["custom-whisper"],
+            escalation_rule="keep-user-fallback",
+        )
+        registry.save(context.registry_path)
+        context.model_registry = registry
+        context.refresh_pipeline()
+
+        reused = client.post(
+            "/api/components/prepare",
+            headers=headers,
+            json={"hardware_tier": "cpu_igpu", "activate": True},
+        )
+        self.assertTrue(reused.json()["activated"])
+        preserved = context.model_registry.roles["asr.primary"]
+        self.assertEqual(preserved.fallback_model_ids, ["custom-whisper"])
+        self.assertEqual(preserved.escalation_rule, "keep-user-fallback")
+
+        registry = context.model_registry.model_copy(deep=True)
+        registry.bind("asr.primary", "custom-whisper")
+        registry.bind("ocr.primary", "custom-ocr")
+        registry.bind("vision.text_detector", "custom-ocr")
+        registry.save(context.registry_path)
+        context.model_registry = registry
+        context.refresh_pipeline()
+
+        conflicted = client.post(
+            "/api/components/prepare",
+            headers=headers,
+            json={"hardware_tier": "cpu_igpu", "activate": True},
+        )
+        self.assertEqual(conflicted.status_code, 200)
+        self.assertFalse(conflicted.json()["activated"])
+        self.assertEqual(
+            context.model_registry.roles["asr.primary"].primary_model_id,
+            "custom-whisper",
+        )
+        self.assertEqual(
+            context.model_registry.roles["ocr.primary"].primary_model_id,
+            "custom-ocr",
+        )
 
     def test_provider_secret_is_write_only(self) -> None:
         previous_pipeline = self.context.pipeline

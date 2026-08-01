@@ -546,6 +546,17 @@ class ComponentManager:
             self._validate_payload(root, manifest)
         except ComponentManagerError as error:
             return False, str(error)
+        payload_files = self._payload_files(root)
+        payload_size = sum(item.stat().st_size for item in payload_files)
+        if (
+            len(payload_files) != marker.payload_file_count
+            or payload_size != marker.payload_size_bytes
+        ):
+            return False, "Managed model payload changed after preparation."
+        for relative, expected_digest in marker.required_file_sha256.items():
+            candidate = root / Path(relative.replace("/", os.sep))
+            if not candidate.is_file() or _sha256_file(candidate) != expected_digest:
+                return False, f"Required model file changed after preparation: {relative}"
         return True, None
 
     def _validate_payload(self, root: Path, manifest: ComponentManifest) -> None:
@@ -561,12 +572,24 @@ class ComponentManager:
             candidate = (root / Path(relative.replace("/", os.sep))).resolve()
             if not candidate.is_relative_to(resolved_root) or not candidate.is_file():
                 raise ComponentManagerError(f"required model file is missing: {relative}")
+            if candidate.stat().st_size < 1:
+                raise ComponentManagerError(f"required model file is empty: {relative}")
         for relative in manifest.required_nonempty_directories:
             candidate = (root / Path(relative.replace("/", os.sep))).resolve()
             if not candidate.is_relative_to(resolved_root) or not candidate.is_dir():
                 raise ComponentManagerError(f"required model directory is missing: {relative}")
-            if not any(item.is_file() for item in candidate.rglob("*")):
+            if not self._payload_files(candidate):
                 raise ComponentManagerError(f"required model directory is empty: {relative}")
+
+    @staticmethod
+    def _payload_files(root: Path) -> list[Path]:
+        return [
+            item
+            for item in root.rglob("*")
+            if item.is_file()
+            and item.name not in {_COMPLETE_MARKER, _PREPARE_STATE}
+            and ".hf-cache" not in item.relative_to(root).parts
+        ]
 
     def _completion_marker(
         self,
@@ -575,11 +598,7 @@ class ComponentManager:
         *,
         source_revision: str | None,
     ) -> ComponentCompletionMarker:
-        payload_files = [
-            item
-            for item in root.rglob("*")
-            if item.is_file() and item.name not in {_COMPLETE_MARKER, _PREPARE_STATE}
-        ]
+        payload_files = self._payload_files(root)
         return ComponentCompletionMarker(
             component_id=manifest.id,
             component_version=manifest.version,
@@ -588,6 +607,12 @@ class ComponentManager:
             source_revision=source_revision,
             payload_file_count=len(payload_files),
             payload_size_bytes=sum(item.stat().st_size for item in payload_files),
+            required_file_sha256={
+                relative: _sha256_file(
+                    root / Path(relative.replace("/", os.sep))
+                )
+                for relative in manifest.required_files
+            },
         )
 
     def _publish(
@@ -650,3 +675,11 @@ def _is_link(path: Path) -> bool:
         return True
     is_junction = getattr(path, "is_junction", None)
     return bool(is_junction()) if callable(is_junction) else False
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
