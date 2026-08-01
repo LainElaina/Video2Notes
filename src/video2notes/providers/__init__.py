@@ -2,6 +2,7 @@
 
 from .registry import (
     PROTOCOL_CATALOG,
+    ROLE_REQUIREMENTS,
     AuthScheme,
     Capability,
     Locality,
@@ -27,6 +28,7 @@ __all__ = [
     "ProviderProtocol",
     "ProviderSpec",
     "PROTOCOL_CATALOG",
+    "ROLE_REQUIREMENTS",
     "ProtocolTemplate",
     "RoleBinding",
     "SecretStatus",

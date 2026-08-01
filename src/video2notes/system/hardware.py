@@ -114,7 +114,7 @@ class _PsutilModule(Protocol):
     def disk_usage(self, path: str) -> _PsutilDiskUsage: ...
 
 
-def _detect_psutil_metrics() -> tuple[
+def _detect_psutil_metrics(disk_path: Path) -> tuple[
     float | None,
     int | None,
     int | None,
@@ -127,7 +127,7 @@ def _detect_psutil_metrics() -> tuple[
     try:
         psutil = cast(_PsutilModule, importlib.import_module("psutil"))
         memory = psutil.virtual_memory()
-        disk = psutil.disk_usage(str(Path.cwd()))
+        disk = psutil.disk_usage(str(disk_path))
         # A short blocking sample avoids psutil's meaningless first-call zero
         # while keeping hardware preflight responsive.
         cpu_load = float(psutil.cpu_percent(interval=0.05))
@@ -188,9 +188,9 @@ def _detect_native_memory() -> tuple[int | None, int | None, float | None]:
     return total, available, load
 
 
-def _detect_native_disk() -> tuple[int | None, int | None]:
+def _detect_native_disk(disk_path: Path) -> tuple[int | None, int | None]:
     try:
-        usage = shutil.disk_usage(Path.cwd())
+        usage = shutil.disk_usage(disk_path)
     except OSError:
         return None, None
     return int(usage.total), int(usage.free)
@@ -266,15 +266,20 @@ def _detect_ffmpeg_hwaccels(runner: CommandRunner) -> tuple[str, ...]:
     return tuple(dict.fromkeys(accelerators))
 
 
-def detect_hardware(*, runner: CommandRunner | None = None) -> HardwareSnapshot:
+def detect_hardware(
+    *,
+    runner: CommandRunner | None = None,
+    disk_path: str | Path | None = None,
+) -> HardwareSnapshot:
     """Return a serializable local snapshot suitable for scheduling and diagnostics."""
 
     command_runner = runner or _default_runner
+    measured_disk_path = Path(disk_path).expanduser().resolve() if disk_path else Path.cwd()
     cpu_name = (_detect_windows_cpu_name() if os.name == "nt" else None) or platform.processor()
-    psutil_metrics = _detect_psutil_metrics()
+    psutil_metrics = _detect_psutil_metrics(measured_disk_path)
     if psutil_metrics is None:
         memory_total, memory_available, memory_load = _detect_native_memory()
-        disk_total, disk_available = _detect_native_disk()
+        disk_total, disk_available = _detect_native_disk(measured_disk_path)
         cpu_load = None
     else:
         (

@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import hmac
+import json
+import os
 import re
 import secrets
 import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from video2notes.artifacts import RunWorkspace
 from video2notes.domain import ArtifactManifest, SourceDescriptor
@@ -52,8 +56,13 @@ from video2notes.pipeline import (
     Video2NotesPipeline,
 )
 from video2notes.providers import (
+    PROTOCOL_CATALOG,
+    ROLE_REQUIREMENTS,
+    AuthScheme,
+    Capability,
     KeyringSecretStore,
     ModelRegistry,
+    ProviderProtocol,
     ProviderSpec,
     SecretStatus,
 )
@@ -69,13 +78,19 @@ from video2notes.sources import (
     enumerate_browser_profiles,
 )
 from video2notes.system import (
+    ExperienceMode,
     HardwareSnapshot,
+    PerformanceOverrides,
     ProcessingEstimate,
     QualityMode,
+    ResourcePreference,
+    ResourceRecommendation,
+    ResourceReserve,
     build_execution_plan,
     detect_hardware,
     estimate_processing_time,
     recommend_hardware_tier,
+    recommend_resources,
 )
 
 _SENSITIVE_ASSIGNMENT = re.compile(
@@ -116,10 +131,69 @@ class ProviderSecretRequest(ApiModel):
     secret: SecretStr
 
 
+class PerformanceSettings(ApiModel):
+    """Persisted scheduling intent; detected machine state is never persisted."""
+
+    schema_version: Literal[1] = 1
+    experience_mode: ExperienceMode = ExperienceMode.GUIDED
+    preference: ResourcePreference = ResourcePreference.BALANCED
+    reserve: ResourceReserve | None = None
+    overrides: PerformanceOverrides = Field(default_factory=PerformanceOverrides)
+
+    @model_validator(mode="after")
+    def professional_controls_require_professional_mode(self) -> Self:
+        has_overrides = any(
+            value is not None for value in self.overrides.model_dump().values()
+        )
+        if has_overrides and self.experience_mode is not ExperienceMode.PROFESSIONAL:
+            raise ValueError("performance overrides require professional experience mode")
+        return self
+
+
 class SystemReport(ApiModel):
     hardware: HardwareSnapshot
     recommended_tier: str
+    performance: PerformanceSettings
+    recommendation: ResourceRecommendation
     plans: dict[str, dict[str, Any]]
+
+
+class ProtocolCatalogEntry(ApiModel):
+    protocol: ProviderProtocol
+    display_name: str
+    default_auth_scheme: AuthScheme
+    default_base_url: str | None
+    request_path: str | None
+    discovery_path: str | None
+    request_content_type: str
+    structured_generation_adapter: bool
+    supports_json_schema_transport: bool
+    supports_image_transport: bool
+    supports_streaming_transport: bool
+    stream_transport: str
+
+
+class RoleCatalogEntry(ApiModel):
+    role: str
+    required_capabilities: list[Capability]
+
+
+class ConfigurationCatalog(ApiModel):
+    protocols: list[ProtocolCatalogEntry]
+    roles: list[RoleCatalogEntry]
+    capabilities: list[Capability]
+
+
+class DiscoveredModel(ApiModel):
+    model_id: str
+    display_name: str
+    context_window: int | None = Field(default=None, ge=1)
+
+
+class ProviderDiscoveryResult(ApiModel):
+    provider_id: str
+    protocol: ProviderProtocol
+    models: list[DiscoveredModel]
 
 
 class ProcessingEstimateRequest(ApiModel):
@@ -179,6 +253,18 @@ class ApiContext:
         else:
             self.model_registry = ModelRegistry.with_local_defaults()
             self.model_registry.save(self.registry_path)
+        self.performance_path = self.config_root / "performance.json"
+        if self.performance_path.is_file():
+            try:
+                self.performance_settings = PerformanceSettings.model_validate_json(
+                    self.performance_path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                self.performance_settings = PerformanceSettings()
+                self.save_performance_settings(self.performance_settings)
+        else:
+            self.performance_settings = PerformanceSettings()
+            self.save_performance_settings(self.performance_settings)
         self.secret_store = secret_store or KeyringSecretStore()
         self.job_manager = job_manager or JobManager(max_workers=2)
         self._owns_job_manager = job_manager is None
@@ -205,6 +291,25 @@ class ApiContext:
     def close(self) -> None:
         if self._owns_job_manager:
             self.job_manager.shutdown(wait=False, cancel_pending=True)
+
+    def save_performance_settings(
+        self,
+        settings: PerformanceSettings,
+    ) -> PerformanceSettings:
+        temporary = self.performance_path.with_name(
+            f".{self.performance_path.name}.{uuid.uuid4().hex}.tmp"
+        )
+        temporary.write_text(
+            json.dumps(
+                settings.model_dump(mode="json", exclude_none=True),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary, self.performance_path)
+        self.performance_settings = settings
+        return settings
 
     def list_runs(self) -> list[ArtifactManifest]:
         manifests: list[ArtifactManifest] = []
@@ -324,20 +429,51 @@ def create_app(
         dependencies=protected,
     )
     def system_report() -> SystemReport:
-        hardware = detect_hardware()
+        hardware = detect_hardware(disk_path=context.data_root)
         tier = recommend_hardware_tier(hardware)
+        settings = context.performance_settings
+        recommendation = recommend_resources(
+            hardware,
+            experience_mode=settings.experience_mode,
+            preference=settings.preference,
+            reserve=settings.reserve,
+        )
         return SystemReport(
             hardware=hardware,
             recommended_tier=tier.value,
+            performance=settings,
+            recommendation=recommendation,
             plans={
                 mode.value: build_execution_plan(
                     hardware,
                     mode,
                     hardware_tier=tier,
+                    experience_mode=settings.experience_mode,
+                    preference=settings.preference,
+                    reserve=settings.reserve,
+                    overrides=settings.overrides,
                 ).model_dump(mode="json")
                 for mode in QualityMode
             },
         )
+
+    @app.get(
+        "/api/performance",
+        response_model=PerformanceSettings,
+        dependencies=protected,
+    )
+    def get_performance_settings() -> PerformanceSettings:
+        return context.performance_settings
+
+    @app.put(
+        "/api/performance",
+        response_model=PerformanceSettings,
+        dependencies=protected,
+    )
+    def put_performance_settings(
+        settings: PerformanceSettings,
+    ) -> PerformanceSettings:
+        return context.save_performance_settings(settings)
 
     @app.post(
         "/api/estimate",
@@ -347,7 +483,7 @@ def create_app(
     def estimate(request: ProcessingEstimateRequest) -> ProcessingEstimate:
         return estimate_processing_time(
             request.duration_seconds,
-            detect_hardware(),
+            detect_hardware(disk_path=context.data_root),
             request.quality_mode,
             source_height=request.source_height,
             source_fps=request.source_fps,
@@ -367,6 +503,30 @@ def create_app(
     @app.get("/api/browser-profiles", dependencies=protected)
     def browser_profiles() -> list[dict[str, Any]]:
         return [item.model_dump(mode="json") for item in enumerate_browser_profiles()]
+
+    @app.get(
+        "/api/configuration-catalog",
+        response_model=ConfigurationCatalog,
+        dependencies=protected,
+    )
+    def configuration_catalog() -> ConfigurationCatalog:
+        return ConfigurationCatalog(
+            protocols=[
+                ProtocolCatalogEntry.model_validate(asdict(template))
+                for template in PROTOCOL_CATALOG.values()
+            ],
+            roles=[
+                RoleCatalogEntry(
+                    role=role,
+                    required_capabilities=sorted(
+                        requirements,
+                        key=lambda item: item.value,
+                    ),
+                )
+                for role, requirements in ROLE_REQUIREMENTS.items()
+            ],
+            capabilities=list(Capability),
+        )
 
     @app.post(
         "/api/sources/probe",
@@ -466,19 +626,20 @@ def create_app(
                 status="connected",
                 detail="本地执行器配置可用；具体模型会在任务首次调用时延迟加载。",
             )
-        endpoint = _provider_models_endpoint(provider.base_url)
-        api_key = (
-            context.secret_store.get(provider_id) if provider.credential_ref is not None else None
-        )
-        if provider.credential_ref is not None and api_key is None:
+        api_key = _provider_api_key(context, provider)
+        if provider.auth_scheme is not AuthScheme.NONE and api_key is None:
             return ProviderConnectionResult(
                 provider_id=provider_id,
                 status="disconnected",
-                detail="Provider 需要凭据，但 Windows 凭据库中没有可用密钥。",
+                detail="该协议需要凭据，但 Windows 凭据库中没有可用密钥。",
             )
-        headers = {"Accept": "application/json"}
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
+        template = PROTOCOL_CATALOG[provider.protocol]
+        endpoint = _provider_endpoint(
+            provider,
+            template.discovery_path,
+        )
+        headers = _provider_headers(provider, api_key)
+        headers["Accept"] = "application/json"
         request = urllib.request.Request(endpoint, headers=headers, method="GET")
         try:
             with urllib.request.urlopen(
@@ -498,12 +659,70 @@ def create_app(
             return ProviderConnectionResult(
                 provider_id=provider_id,
                 status="connected",
-                detail="Provider endpoint 与模型目录接口连接正常。",
+                detail=(
+                    "Provider endpoint 与模型目录接口连接正常。"
+                    if template.discovery_path is not None
+                    else "Provider endpoint 可以访问；该实验协议没有标准模型目录。"
+                ),
             )
         return ProviderConnectionResult(
             provider_id=provider_id,
             status="disconnected",
             detail=f"Provider endpoint 返回 HTTP {status_code}；请检查地址或本机凭据。",
+        )
+
+    @app.get(
+        "/api/providers/{provider_id}/discover",
+        response_model=ProviderDiscoveryResult,
+        dependencies=protected,
+    )
+    def discover_provider_models(provider_id: str) -> ProviderDiscoveryResult:
+        provider = _require_provider(context, provider_id)
+        template = PROTOCOL_CATALOG[provider.protocol]
+        if provider.base_url is None or template.discovery_path is None:
+            raise HTTPException(
+                status_code=409,
+                detail="this provider protocol has no model discovery endpoint",
+            )
+        api_key = _provider_api_key(context, provider)
+        if provider.auth_scheme is not AuthScheme.NONE and api_key is None:
+            raise HTTPException(
+                status_code=409,
+                detail="provider credential is not configured",
+            )
+        endpoint = _provider_endpoint(provider, template.discovery_path)
+        headers = _provider_headers(provider, api_key)
+        headers["Accept"] = "application/json"
+        request = urllib.request.Request(endpoint, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=min(provider.request_timeout_seconds, 30),
+            ) as response:
+                body = response.read(4_000_001)
+        except urllib.error.HTTPError as error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"provider model discovery returned HTTP {int(error.code)}",
+            ) from None
+        except (OSError, TimeoutError, urllib.error.URLError):
+            raise HTTPException(
+                status_code=422,
+                detail="provider model discovery failed or timed out",
+            ) from None
+        if len(body) > 4_000_000:
+            raise HTTPException(status_code=422, detail="provider model catalog is too large")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(
+                status_code=422,
+                detail="provider model discovery returned invalid JSON",
+            ) from None
+        return ProviderDiscoveryResult(
+            provider_id=provider.id,
+            protocol=provider.protocol,
+            models=_parse_discovered_models(provider.protocol, payload),
         )
 
     @app.get(
@@ -899,14 +1118,171 @@ def _require_provider(context: ApiContext, provider_id: str) -> ProviderSpec:
     return provider
 
 
-def _provider_models_endpoint(base_url: str) -> str:
-    parts = urlsplit(base_url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
+def _provider_api_key(
+    context: ApiContext,
+    provider: ProviderSpec,
+) -> str | None:
+    """Resolve a provider secret only at the request boundary."""
+
+    if provider.credential_ref is None:
+        return None
+    return context.secret_store.get(provider.id)
+
+
+def _provider_endpoint(provider: ProviderSpec, path: str | None) -> str:
+    """Join a protocol path without discarding a reverse-proxy base path."""
+
+    if provider.base_url is None:
+        raise HTTPException(status_code=422, detail="provider base URL is missing")
+    parts = urlsplit(provider.base_url)
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+    ):
         raise HTTPException(status_code=422, detail="provider base URL is invalid")
-    path = parts.path.rstrip("/")
-    if not path.endswith("/models"):
-        path = f"{path}/models"
-    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    base_path = parts.path.rstrip("/")
+    if path is None:
+        joined_path = base_path or "/"
+    else:
+        suffix = f"/{path.lstrip('/')}"
+        joined_path = base_path if base_path.endswith(suffix) else f"{base_path}{suffix}"
+    return urlunsplit((parts.scheme, parts.netloc, joined_path, "", ""))
+
+
+_CUSTOM_HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_FORBIDDEN_CUSTOM_HEADERS = {
+    "connection",
+    "content-length",
+    "cookie",
+    "host",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "x-video2notes-token",
+}
+
+
+def _provider_headers(
+    provider: ProviderSpec,
+    api_key: str | None,
+) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if provider.auth_scheme is AuthScheme.NONE:
+        return headers
+    if api_key is None:
+        raise HTTPException(status_code=409, detail="provider credential is not configured")
+    if provider.auth_scheme is AuthScheme.BEARER:
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif provider.auth_scheme is AuthScheme.X_API_KEY:
+        headers["x-api-key"] = api_key
+        if provider.protocol is ProviderProtocol.ANTHROPIC_MESSAGES:
+            version = provider.protocol_options.get(
+                "anthropic_version",
+                "2023-06-01",
+            )
+            if not isinstance(version, str) or not version.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Anthropic protocol version is invalid",
+                )
+            headers["anthropic-version"] = version.strip()
+    elif provider.auth_scheme is AuthScheme.X_GOOG_API_KEY:
+        headers["x-goog-api-key"] = api_key
+    else:
+        header_name = provider.protocol_options.get("auth_header_name")
+        if (
+            not isinstance(header_name, str)
+            or _CUSTOM_HEADER_NAME.fullmatch(header_name) is None
+            or header_name.casefold() in _FORBIDDEN_CUSTOM_HEADERS
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="custom authentication header name is invalid",
+            )
+        prefix = provider.protocol_options.get("auth_header_prefix", "")
+        if not isinstance(prefix, str) or "\r" in prefix or "\n" in prefix:
+            raise HTTPException(
+                status_code=422,
+                detail="custom authentication header prefix is invalid",
+            )
+        headers[header_name] = f"{prefix}{api_key}"
+    return headers
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    return None
+
+
+def _parse_discovered_models(
+    protocol: ProviderProtocol,
+    payload: object,
+) -> list[DiscoveredModel]:
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="provider model discovery returned an invalid catalog",
+        )
+    if protocol in {
+        ProviderProtocol.OPENAI_RESPONSES,
+        ProviderProtocol.OPENAI_CHAT_COMPLETIONS,
+        ProviderProtocol.OPENAI_AUDIO_TRANSCRIPTIONS,
+        ProviderProtocol.ANTHROPIC_MESSAGES,
+    }:
+        raw_models = payload.get("data")
+    else:
+        raw_models = payload.get("models")
+    if not isinstance(raw_models, list):
+        raise HTTPException(
+            status_code=422,
+            detail="provider model discovery returned an invalid model list",
+        )
+
+    discovered: dict[str, DiscoveredModel] = {}
+    for raw in raw_models[:5_000]:
+        if not isinstance(raw, dict):
+            continue
+        raw_id = raw.get("id")
+        if protocol in {
+            ProviderProtocol.GEMINI_GENERATE_CONTENT,
+            ProviderProtocol.GEMINI_INTERACTIONS,
+        }:
+            raw_id = raw.get("name", raw_id)
+        elif protocol is ProviderProtocol.OLLAMA_NATIVE_CHAT:
+            raw_id = raw.get("model", raw.get("name", raw_id))
+        if not isinstance(raw_id, str) or not raw_id.strip():
+            continue
+        model_id = raw_id.strip()
+        if model_id.startswith("models/"):
+            model_id = model_id.removeprefix("models/")
+        display_value = raw.get("display_name", raw.get("displayName", model_id))
+        display_name = (
+            display_value.strip()
+            if isinstance(display_value, str) and display_value.strip()
+            else model_id
+        )
+        context_window = _positive_int(
+            raw.get(
+                "context_window",
+                raw.get("inputTokenLimit", raw.get("max_input_tokens")),
+            )
+        )
+        discovered[model_id] = DiscoveredModel(
+            model_id=model_id,
+            display_name=display_name,
+            context_window=context_window,
+        )
+    return sorted(
+        discovered.values(),
+        key=lambda item: (item.display_name.casefold(), item.model_id.casefold()),
+    )
 
 
 def _safe_manifest(manifest: ArtifactManifest) -> ArtifactManifest:

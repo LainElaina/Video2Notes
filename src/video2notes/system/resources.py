@@ -20,7 +20,10 @@ class ResourceModel(BaseModel):
 class ExperienceMode(StrEnum):
     """How much scheduling detail the user wants to control."""
 
-    SIMPLE = "simple"
+    GUIDED = "guided"
+    # Backward-compatible source alias for early callers; serialized settings
+    # use the same "guided" vocabulary as the desktop experience switch.
+    SIMPLE = "guided"
     PROFESSIONAL = "professional"
 
 
@@ -197,7 +200,7 @@ def _remote_concurrency(
 def recommend_resources(
     snapshot: HardwareSnapshot,
     *,
-    experience_mode: ExperienceMode = ExperienceMode.SIMPLE,
+    experience_mode: ExperienceMode = ExperienceMode.GUIDED,
     preference: ResourcePreference = ResourcePreference.BALANCED,
     reserve: ResourceReserve | None = None,
 ) -> ResourceRecommendation:

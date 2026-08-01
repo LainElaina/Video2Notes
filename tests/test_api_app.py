@@ -11,10 +11,12 @@ from PIL import Image
 
 from video2notes.api import ApiContext, create_app
 from video2notes.providers import (
+    AuthScheme,
     KeyringSecretStore,
     Locality,
     ModelRegistry,
     ProviderKind,
+    ProviderProtocol,
     ProviderSpec,
 )
 from video2notes.sources import SourceInput
@@ -44,6 +46,8 @@ class ApiAppTests(unittest.TestCase):
             id="cloud",
             display_name="Test cloud",
             kind=ProviderKind.OPENAI_COMPATIBLE,
+            protocol=ProviderProtocol.OPENAI_CHAT_COMPLETIONS,
+            auth_scheme=AuthScheme.BEARER,
             base_url="https://example.test/v1",
             locality=Locality.CLOUD,
         )
@@ -64,6 +68,72 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("fast", response.json()["plans"])
         self.assertIn("accurate", response.json()["plans"])
+        self.assertEqual(response.json()["performance"]["experience_mode"], "guided")
+        self.assertIn("budget", response.json()["recommendation"])
+
+    def test_performance_settings_are_validated_persisted_and_applied(self) -> None:
+        guided = self.client.get("/api/performance", headers=self.headers)
+        self.assertEqual(guided.status_code, 200)
+        self.assertEqual(guided.json()["preference"], "balanced")
+
+        invalid = self.client.put(
+            "/api/performance",
+            headers=self.headers,
+            json={
+                "schema_version": 1,
+                "experience_mode": "guided",
+                "preference": "balanced",
+                "overrides": {"cpu_workers": 8},
+            },
+        )
+        self.assertEqual(invalid.status_code, 422)
+
+        saved = self.client.put(
+            "/api/performance",
+            headers=self.headers,
+            json={
+                "schema_version": 1,
+                "experience_mode": "professional",
+                "preference": "responsive",
+                "reserve": {"cpu_reserve_ratio": 0.5},
+                "overrides": {
+                    "cpu_workers": 2,
+                    "remote_model_concurrency": 1,
+                },
+            },
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()["overrides"]["cpu_workers"], 2)
+        persisted = self.client.get("/api/performance", headers=self.headers)
+        self.assertEqual(persisted.json(), saved.json())
+        system = self.client.get("/api/system", headers=self.headers)
+        self.assertEqual(system.json()["performance"], saved.json())
+        self.assertEqual(system.json()["recommendation"]["preference"], "responsive")
+
+    def test_configuration_catalog_exposes_protocols_roles_and_no_model_ids(
+        self,
+    ) -> None:
+        response = self.client.get("/api/configuration-catalog", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        protocols = {item["protocol"]: item for item in payload["protocols"]}
+        self.assertIn("openai_responses", protocols)
+        self.assertIn("anthropic_messages", protocols)
+        self.assertIn("gemini_interactions", protocols)
+        self.assertIn("ollama_native_chat", protocols)
+        self.assertEqual(
+            protocols["ollama_native_chat"]["stream_transport"],
+            "ndjson",
+        )
+        roles = {item["role"]: item for item in payload["roles"]}
+        self.assertEqual(
+            set(roles["notes.fact_extractor"]["required_capabilities"]),
+            {"text", "structured_output"},
+        )
+        self.assertIn("word_timestamps", payload["capabilities"])
+        for protocol in payload["protocols"]:
+            self.assertNotIn("model_id", protocol)
+            self.assertNotIn("models", protocol)
 
     def test_processing_estimate_and_runtime_diagnostics_are_protected(self) -> None:
         self.assertEqual(
@@ -252,6 +322,13 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(local.status_code, 200)
         self.assertEqual(local.json()["status"], "connected")
 
+        configured = self.client.put(
+            "/api/providers/cloud/secret",
+            headers=self.headers,
+            json={"secret": "test-secret"},
+        )
+        self.assertEqual(configured.status_code, 200)
+
         response = MagicMock()
         response.__enter__.return_value.status = 200
         with patch(
@@ -266,6 +343,72 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(cloud.json()["status"], "connected")
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "https://example.test/v1/models")
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-secret")
+        self.assertNotIn("test-secret", cloud.text)
+
+    def test_provider_discovery_is_protocol_aware_and_declares_no_capabilities(
+        self,
+    ) -> None:
+        configured = self.client.put(
+            "/api/providers/cloud/secret",
+            headers=self.headers,
+            json={"secret": "test-secret"},
+        )
+        self.assertEqual(configured.status_code, 200)
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"data":[{"id":"beta","context_window":2048},'
+            b'{"id":"alpha","display_name":"Alpha"}]}'
+        )
+        with patch(
+            "video2notes.api.app.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen:
+            discovered = self.client.get(
+                "/api/providers/cloud/discover",
+                headers=self.headers,
+            )
+        self.assertEqual(discovered.status_code, 200)
+        self.assertEqual(
+            [item["model_id"] for item in discovered.json()["models"]],
+            ["alpha", "beta"],
+        )
+        self.assertNotIn("capabilities", discovered.text)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-secret")
+
+        gemini = ProviderSpec(
+            id="gemini",
+            display_name="Gemini test",
+            kind=ProviderKind.GOOGLE,
+            protocol=ProviderProtocol.GEMINI_GENERATE_CONTENT,
+            auth_scheme=AuthScheme.X_GOOG_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            locality=Locality.CLOUD,
+        )
+        gemini.credential_ref = self.context.secret_store.set("gemini", "gemini-key")
+        self.context.model_registry.providers[gemini.id] = gemini
+        response.__enter__.return_value.read.return_value = (
+            b'{"models":[{"name":"models/gemini-x",'
+            b'"displayName":"Gemini X","inputTokenLimit":32768}]}'
+        )
+        with patch(
+            "video2notes.api.app.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen:
+            discovered = self.client.get(
+                "/api/providers/gemini/discover",
+                headers=self.headers,
+            )
+        self.assertEqual(discovered.status_code, 200)
+        self.assertEqual(discovered.json()["models"][0]["model_id"], "gemini-x")
+        self.assertEqual(discovered.json()["models"][0]["context_window"], 32768)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        )
+        self.assertEqual(request.get_header("X-goog-api-key"), "gemini-key")
 
     def test_unknown_local_probe_is_a_safe_validation_error(self) -> None:
         missing = Path(self.temporary.name) / "missing.mp4"

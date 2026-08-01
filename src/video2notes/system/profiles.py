@@ -254,7 +254,7 @@ def build_execution_plan(
     quality_mode: QualityMode,
     *,
     hardware_tier: HardwareTier | None = None,
-    experience_mode: ExperienceMode = ExperienceMode.SIMPLE,
+    experience_mode: ExperienceMode = ExperienceMode.GUIDED,
     preference: ResourcePreference = ResourcePreference.BALANCED,
     reserve: ResourceReserve | None = None,
     overrides: PerformanceOverrides | None = None,
@@ -266,7 +266,7 @@ def build_execution_plan(
     quality = _QUALITY_BUDGETS[quality_mode]
     if (
         overrides is not None
-        and overrides.model_fields_set
+        and any(value is not None for value in overrides.model_dump().values())
         and experience_mode is not ExperienceMode.PROFESSIONAL
     ):
         raise ValueError("performance overrides require professional experience mode")
