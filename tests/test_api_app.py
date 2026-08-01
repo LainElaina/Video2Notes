@@ -259,8 +259,26 @@ class ApiAppTests(unittest.TestCase):
             "detection_model_dir",
             context.model_registry.models["paddleocr"].settings,
         )
+        self.assertEqual(
+            set(
+                context.model_registry.models["faster-whisper"].settings[
+                    "quality_profiles"
+                ]
+            ),
+            {"fast", "balanced", "accurate"},
+        )
+        self.assertEqual(
+            set(
+                context.model_registry.models["paddleocr"].settings[
+                    "quality_profiles"
+                ]
+            ),
+            {"fast", "balanced", "accurate"},
+        )
         self.assertIsNotNone(context.pipeline.runtime.asr_backend)
         self.assertIsNotNone(context.pipeline.runtime.ocr_backend)
+        self.assertEqual(len(context.pipeline.runtime.asr_backends_by_quality), 3)
+        self.assertEqual(len(context.pipeline.runtime.ocr_backends_by_quality), 3)
 
         registry = context.model_registry.model_copy(deep=True)
         registry.models["custom-whisper"] = ModelSpec(

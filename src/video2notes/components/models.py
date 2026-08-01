@@ -9,6 +9,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from video2notes.system.hardware import HardwareTier
+from video2notes.system.profiles import QualityMode
 
 
 class ComponentModel(BaseModel):
@@ -175,3 +176,11 @@ class PrepareBatchResult(ComponentModel):
 class LocalAdapterSettings(ComponentModel):
     asr: dict[str, str | int | float | bool]
     ocr: dict[str, str | int | float | bool]
+    asr_profiles: dict[
+        QualityMode,
+        dict[str, str | int | float | bool],
+    ] = Field(default_factory=dict)
+    ocr_profiles: dict[
+        QualityMode,
+        dict[str, str | int | float | bool],
+    ] = Field(default_factory=dict)

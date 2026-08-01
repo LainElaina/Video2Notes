@@ -24,6 +24,7 @@ from video2notes.providers import (
     ProviderSpec,
 )
 from video2notes.runtime import FallbackStructuredBackend, build_pipeline_runtime
+from video2notes.system import QualityMode
 
 
 class SecretFixture:
@@ -168,7 +169,94 @@ class RuntimeConfigurationTests(unittest.TestCase):
 
         self.assertIsInstance(result.runtime.asr_backend, FasterWhisperBackend)
         self.assertIsInstance(result.runtime.ocr_backend, PaddleOcrBackend)
+        self.assertEqual(result.runtime.asr_backends_by_quality, {})
+        self.assertEqual(result.runtime.ocr_backends_by_quality, {})
         self.assertEqual(result.warnings, ())
+
+    def test_quality_profiles_build_distinct_lazy_backends_and_strip_extensions(
+        self,
+    ) -> None:
+        registry = ModelRegistry.with_local_defaults()
+        registry.models["faster-whisper"].settings = {
+            "engine": "faster_whisper",
+            "model_path": "D:/models/whisper-primary",
+            "device": "cuda",
+            "compute_type": "float16",
+            "quality_profiles": {
+                "fast": {
+                    "engine": "faster_whisper",
+                    "model_path": "D:/models/whisper-primary",
+                    "device": "cuda",
+                    "compute_type": "float16",
+                },
+                "accurate": {
+                    "engine": "faster_whisper",
+                    "model_path": "D:/models/whisper-accurate",
+                    "device": "cuda",
+                    "compute_type": "float16",
+                },
+            },
+        }
+        registry.models["paddleocr"].settings = {
+            "engine": "paddleocr",
+            "detection_model_dir": "D:/models/paddle/mobile-det",
+            "recognition_model_dir": "D:/models/paddle/mobile-rec",
+            "device": "gpu:0",
+            "quality_profiles": {
+                "accurate": {
+                    "engine": "paddleocr",
+                    "detection_model_dir": "D:/models/paddle/server-det",
+                    "recognition_model_dir": "D:/models/paddle/server-rec",
+                    "device": "gpu:0",
+                }
+            },
+        }
+
+        result = build_pipeline_runtime(registry)
+
+        self.assertEqual(set(result.runtime.asr_backends_by_quality), set(QualityMode))
+        self.assertEqual(set(result.runtime.ocr_backends_by_quality), set(QualityMode))
+        self.assertEqual(
+            result.runtime.asr_backends_by_quality[QualityMode.ACCURATE].config.model_path,
+            "D:/models/whisper-accurate",
+        )
+        self.assertEqual(
+            result.runtime.asr_backends_by_quality[QualityMode.BALANCED].config.model_path,
+            "D:/models/whisper-primary",
+        )
+        self.assertEqual(
+            result.runtime.ocr_backends_by_quality[
+                QualityMode.ACCURATE
+            ].config.detection_model_dir,
+            "D:/models/paddle/server-det",
+        )
+        self.assertEqual(
+            result.runtime.ocr_backends_by_quality[
+                QualityMode.FAST
+            ].config.detection_model_dir,
+            "D:/models/paddle/mobile-det",
+        )
+        self.assertEqual(result.warnings, ())
+
+    def test_invalid_quality_profile_falls_back_to_actual_primary_backend(self) -> None:
+        registry = ModelRegistry.with_local_defaults()
+        registry.models["faster-whisper"].settings = {
+            "engine": "faster_whisper",
+            "model_path": "D:/models/whisper-primary",
+            "quality_profiles": {
+                "fast": {"beam_size": 0},
+            },
+        }
+
+        result = build_pipeline_runtime(registry)
+
+        primary = result.runtime.asr_backend
+        fast = result.runtime.asr_backends_by_quality[QualityMode.FAST]
+        self.assertIsInstance(primary, FasterWhisperBackend)
+        self.assertIsInstance(fast, FasterWhisperBackend)
+        assert isinstance(primary, FasterWhisperBackend)
+        self.assertEqual(fast.config, primary.config)
+        self.assertTrue(any("asr.primary.fast" in item for item in result.warnings))
 
     def test_note_roles_resolve_provider_style_secret_and_fallback(self) -> None:
         registry = ModelRegistry.with_local_defaults()

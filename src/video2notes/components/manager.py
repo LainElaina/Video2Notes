@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from video2notes.system.hardware import HardwareTier
+from video2notes.system.profiles import QualityMode
 
 from .catalog import DEFAULT_COMPONENT_CATALOG, ComponentCatalog
 from .downloaders import (
@@ -35,6 +36,7 @@ from .models import (
     ComponentState,
     DownloadSource,
     LocalAdapterSettings,
+    LocalModelRole,
     PrepareBatchResult,
     PrepareResult,
     PrepareStatus,
@@ -315,22 +317,97 @@ class ComponentManager:
         ocr_ready, _ = self._ready_at(ocr_path, ocr_manifest)
         if not asr_ready or not ocr_ready:
             raise ComponentNotReadyError("recommended local ASR/OCR models are not ready")
+
+        accurate_asr = self._strongest_ready_recommended_model(
+            LocalModelRole.ASR,
+            fallback=asr_manifest,
+        )
+        accurate_ocr = self._strongest_ready_recommended_model(
+            LocalModelRole.OCR,
+            fallback=ocr_manifest,
+        )
+        asr = self._asr_adapter_settings(asr_manifest, recommendation)
+        ocr = self._ocr_adapter_settings(ocr_manifest, recommendation)
         return LocalAdapterSettings(
-            asr={
-                "engine": "faster_whisper",
-                "model_path": str(asr_path),
-                "device": recommendation.asr_device,
-                "compute_type": recommendation.asr_compute_type,
+            asr=asr,
+            ocr=ocr,
+            asr_profiles={
+                QualityMode.FAST: dict(asr),
+                QualityMode.BALANCED: dict(asr),
+                QualityMode.ACCURATE: self._asr_adapter_settings(
+                    accurate_asr,
+                    recommendation,
+                ),
             },
-            ocr={
-                "engine": "paddleocr",
-                "detection_model_dir": str(ocr_path / "detection"),
-                "recognition_model_dir": str(ocr_path / "recognition"),
-                "device": recommendation.ocr_device,
-                "language": "ch",
-                "api_family": "auto",
+            ocr_profiles={
+                QualityMode.FAST: dict(ocr),
+                QualityMode.BALANCED: dict(ocr),
+                QualityMode.ACCURATE: self._ocr_adapter_settings(
+                    accurate_ocr,
+                    recommendation,
+                ),
             },
         )
+
+    def _strongest_ready_recommended_model(
+        self,
+        role: LocalModelRole,
+        *,
+        fallback: ComponentManifest,
+    ) -> ComponentManifest:
+        """Return a ready higher-capacity recommendation without downgrading the base."""
+
+        ordered: list[ComponentManifest] = []
+        for candidate_tier in HardwareTier:
+            recommendation = self.catalog.recommendations.get(candidate_tier)
+            if recommendation is None:
+                continue
+            component_id = (
+                recommendation.asr_component_id
+                if role is LocalModelRole.ASR
+                else recommendation.ocr_component_id
+            )
+            manifest = self.catalog.manifests[component_id]
+            if manifest not in ordered:
+                ordered.append(manifest)
+
+        try:
+            fallback_index = ordered.index(fallback)
+        except ValueError:  # pragma: no cover - catalog validation protects defaults
+            return fallback
+        selected = fallback
+        for manifest in ordered[fallback_index:]:
+            ready, _ = self._ready_at(self._target_path(manifest), manifest)
+            if ready:
+                selected = manifest
+        return selected
+
+    def _asr_adapter_settings(
+        self,
+        manifest: ComponentManifest,
+        recommendation: TierRecommendation,
+    ) -> dict[str, str | int | float | bool]:
+        return {
+            "engine": manifest.engine,
+            "model_path": str(self._target_path(manifest)),
+            "device": recommendation.asr_device,
+            "compute_type": recommendation.asr_compute_type,
+        }
+
+    def _ocr_adapter_settings(
+        self,
+        manifest: ComponentManifest,
+        recommendation: TierRecommendation,
+    ) -> dict[str, str | int | float | bool]:
+        root = self._target_path(manifest)
+        return {
+            "engine": manifest.engine,
+            "detection_model_dir": str(root / "detection"),
+            "recognition_model_dir": str(root / "recognition"),
+            "device": recommendation.ocr_device,
+            "language": "ch",
+            "api_family": "auto",
+        }
 
     def _runtime_inventory(self) -> tuple[ComponentInventoryItem, ...]:
         runtime_root_ready = self.runtime_root.is_dir()

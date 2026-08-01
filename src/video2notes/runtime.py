@@ -7,7 +7,7 @@ in-memory backend is built and are never copied into a Pydantic model.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -44,9 +44,12 @@ from video2notes.system import (
     ExperienceMode,
     HardwareSnapshot,
     PerformanceOverrides,
+    QualityMode,
     ResourcePreference,
     ResourceReserve,
 )
+
+_QUALITY_PROFILES_KEY = "quality_profiles"
 
 
 class SecretReader(Protocol):
@@ -110,9 +113,13 @@ def build_pipeline_runtime(
     """
 
     warnings: list[str] = []
-    asr = _resolve_asr(registry, "asr.primary", warnings)
-    secondary_asr = _resolve_asr(registry, "asr.secondary", warnings)
-    ocr = _resolve_ocr(registry, warnings)
+    asr, asr_profiles = _resolve_asr(registry, "asr.primary", warnings)
+    secondary_asr, secondary_asr_profiles = _resolve_asr(
+        registry,
+        "asr.secondary",
+        warnings,
+    )
+    ocr, ocr_profiles = _resolve_ocr(registry, warnings)
     fact = _resolve_structured_role(
         registry,
         "notes.fact_extractor",
@@ -151,6 +158,9 @@ def build_pipeline_runtime(
             asr_backend=asr,
             secondary_asr_backend=secondary_asr,
             ocr_backend=ocr,
+            asr_backends_by_quality=asr_profiles,
+            secondary_asr_backends_by_quality=secondary_asr_profiles,
+            ocr_backends_by_quality=ocr_profiles,
             hardware=hardware,
             hardware_disk_path=hardware_disk_path,
             experience_mode=experience_mode,
@@ -191,65 +201,206 @@ def _resolve_asr(
     registry: ModelRegistry,
     role: str,
     warnings: list[str],
-) -> FasterWhisperBackend | None:
+) -> tuple[FasterWhisperBackend | None, dict[QualityMode, FasterWhisperBackend]]:
     for model in _role_models(registry, role, warnings):
         provider = registry.providers[model.provider_id]
-        engine = str(model.settings.get("engine", "")).strip().lower()
-        if not engine and "whisper" in model.model_id.lower():
-            engine = "faster_whisper"
-        if provider.kind is not ProviderKind.LOCAL or engine not in {
-            "faster_whisper",
-            "faster-whisper",
-        }:
+        if provider.kind is not ProviderKind.LOCAL:
             warnings.append(
                 f"{role}: '{model.id}' is not supported by the local faster-whisper adapter."
             )
             continue
-        payload = dict(model.settings)
-        payload.pop("engine", None)
-        if not str(payload.get("model_path", "")).strip():
-            warnings.append(
-                f"{role}: '{model.id}' needs settings.model_path pointing "
-                "to an existing local faster-whisper model."
-            )
+
+        base_settings = dict(model.settings)
+        raw_profiles = base_settings.pop(_QUALITY_PROFILES_KEY, None)
+        backend = _build_asr_backend(
+            model,
+            base_settings,
+            label=role,
+            warnings=warnings,
+        )
+        if backend is None:
             continue
-        try:
-            return FasterWhisperBackend(FasterWhisperConfig.model_validate(payload))
-        except ValidationError:
-            warnings.append(f"{role}: '{model.id}' has invalid runtime settings.")
-    return None
+        profiles = _resolve_asr_profiles(
+            model,
+            base_settings,
+            raw_profiles,
+            backend=backend,
+            role=role,
+            warnings=warnings,
+        )
+        return backend, profiles
+    return None, {}
+
+
+def _build_asr_backend(
+    model: ModelSpec,
+    settings: Mapping[str, object],
+    *,
+    label: str,
+    warnings: list[str],
+) -> FasterWhisperBackend | None:
+    engine = str(settings.get("engine", "")).strip().lower()
+    if not engine and "whisper" in model.model_id.lower():
+        engine = "faster_whisper"
+    if engine not in {"faster_whisper", "faster-whisper"}:
+        warnings.append(
+            f"{label}: '{model.id}' is not supported by the local faster-whisper adapter."
+        )
+        return None
+    payload = dict(settings)
+    payload.pop("engine", None)
+    payload.pop(_QUALITY_PROFILES_KEY, None)
+    if not str(payload.get("model_path", "")).strip():
+        warnings.append(
+            f"{label}: '{model.id}' needs settings.model_path pointing "
+            "to an existing local faster-whisper model."
+        )
+        return None
+    try:
+        return FasterWhisperBackend(FasterWhisperConfig.model_validate(payload))
+    except ValidationError:
+        warnings.append(f"{label}: '{model.id}' has invalid runtime settings.")
+        return None
+
+
+def _resolve_asr_profiles(
+    model: ModelSpec,
+    base_settings: Mapping[str, object],
+    raw_profiles: object,
+    *,
+    backend: FasterWhisperBackend,
+    role: str,
+    warnings: list[str],
+) -> dict[QualityMode, FasterWhisperBackend]:
+    if raw_profiles is None:
+        return {}
+    if not isinstance(raw_profiles, Mapping):
+        warnings.append(f"{role}: '{model.id}' quality_profiles must be an object.")
+        return {mode: backend for mode in QualityMode}
+
+    resolved: dict[QualityMode, FasterWhisperBackend] = {}
+    for mode in QualityMode:
+        raw_profile = raw_profiles.get(mode.value, raw_profiles.get(mode))
+        if raw_profile is None:
+            resolved[mode] = backend
+            continue
+        if not isinstance(raw_profile, Mapping):
+            warnings.append(
+                f"{role}.{mode.value}: '{model.id}' profile settings must be an object."
+            )
+            resolved[mode] = backend
+            continue
+        profile_settings = {**base_settings, **dict(raw_profile)}
+        profile_backend = _build_asr_backend(
+            model,
+            profile_settings,
+            label=f"{role}.{mode.value}",
+            warnings=warnings,
+        )
+        resolved[mode] = profile_backend or backend
+    return resolved
 
 
 def _resolve_ocr(
     registry: ModelRegistry,
     warnings: list[str],
-) -> PaddleOcrBackend | None:
+) -> tuple[PaddleOcrBackend | None, dict[QualityMode, PaddleOcrBackend]]:
     for model in _role_models(registry, "ocr.primary", warnings):
         provider = registry.providers[model.provider_id]
-        engine = str(model.settings.get("engine", "")).strip().lower()
-        if not engine and "paddle" in model.model_id.lower():
-            engine = "paddleocr"
-        if provider.kind is not ProviderKind.LOCAL or engine not in {
-            "paddleocr",
-            "paddle_ocr",
-        }:
+        if provider.kind is not ProviderKind.LOCAL:
             warnings.append(
                 f"ocr.primary: '{model.id}' is not supported by the local PaddleOCR adapter."
             )
             continue
-        payload = dict(model.settings)
-        payload.pop("engine", None)
-        required = ("detection_model_dir", "recognition_model_dir")
-        if any(not str(payload.get(name, "")).strip() for name in required):
-            warnings.append(
-                f"ocr.primary: '{model.id}' needs local detector and recognizer model directories."
-            )
+
+        base_settings = dict(model.settings)
+        raw_profiles = base_settings.pop(_QUALITY_PROFILES_KEY, None)
+        backend = _build_ocr_backend(
+            model,
+            base_settings,
+            label="ocr.primary",
+            warnings=warnings,
+        )
+        if backend is None:
             continue
-        try:
-            return PaddleOcrBackend(PaddleOcrConfig.model_validate(payload))
-        except ValidationError:
-            warnings.append(f"ocr.primary: '{model.id}' has invalid runtime settings.")
-    return None
+        profiles = _resolve_ocr_profiles(
+            model,
+            base_settings,
+            raw_profiles,
+            backend=backend,
+            warnings=warnings,
+        )
+        return backend, profiles
+    return None, {}
+
+
+def _build_ocr_backend(
+    model: ModelSpec,
+    settings: Mapping[str, object],
+    *,
+    label: str,
+    warnings: list[str],
+) -> PaddleOcrBackend | None:
+    engine = str(settings.get("engine", "")).strip().lower()
+    if not engine and "paddle" in model.model_id.lower():
+        engine = "paddleocr"
+    if engine not in {"paddleocr", "paddle_ocr"}:
+        warnings.append(
+            f"{label}: '{model.id}' is not supported by the local PaddleOCR adapter."
+        )
+        return None
+    payload = dict(settings)
+    payload.pop("engine", None)
+    payload.pop(_QUALITY_PROFILES_KEY, None)
+    required = ("detection_model_dir", "recognition_model_dir")
+    if any(not str(payload.get(name, "")).strip() for name in required):
+        warnings.append(
+            f"{label}: '{model.id}' needs local detector and recognizer model directories."
+        )
+        return None
+    try:
+        return PaddleOcrBackend(PaddleOcrConfig.model_validate(payload))
+    except ValidationError:
+        warnings.append(f"{label}: '{model.id}' has invalid runtime settings.")
+        return None
+
+
+def _resolve_ocr_profiles(
+    model: ModelSpec,
+    base_settings: Mapping[str, object],
+    raw_profiles: object,
+    *,
+    backend: PaddleOcrBackend,
+    warnings: list[str],
+) -> dict[QualityMode, PaddleOcrBackend]:
+    role = "ocr.primary"
+    if raw_profiles is None:
+        return {}
+    if not isinstance(raw_profiles, Mapping):
+        warnings.append(f"{role}: '{model.id}' quality_profiles must be an object.")
+        return {mode: backend for mode in QualityMode}
+
+    resolved: dict[QualityMode, PaddleOcrBackend] = {}
+    for mode in QualityMode:
+        raw_profile = raw_profiles.get(mode.value, raw_profiles.get(mode))
+        if raw_profile is None:
+            resolved[mode] = backend
+            continue
+        if not isinstance(raw_profile, Mapping):
+            warnings.append(
+                f"{role}.{mode.value}: '{model.id}' profile settings must be an object."
+            )
+            resolved[mode] = backend
+            continue
+        profile_settings = {**base_settings, **dict(raw_profile)}
+        profile_backend = _build_ocr_backend(
+            model,
+            profile_settings,
+            label=f"{role}.{mode.value}",
+            warnings=warnings,
+        )
+        resolved[mode] = profile_backend or backend
+    return resolved
 
 
 def _resolve_structured_role(

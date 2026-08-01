@@ -25,6 +25,7 @@ from video2notes.components import (
     PaddleHuggingFaceDownloader,
     PrepareStatus,
 )
+from video2notes.system import QualityMode
 from video2notes.system.hardware import HardwareTier
 
 
@@ -145,6 +146,75 @@ class ComponentManagerTests(unittest.TestCase):
         self.assertEqual(settings.ocr["engine"], "paddleocr")
         self.assertTrue(Path(str(settings.asr["model_path"])).is_dir())
         self.assertTrue(Path(str(settings.ocr["detection_model_dir"])).is_dir())
+        self.assertEqual(set(settings.asr_profiles), set(QualityMode))
+        self.assertEqual(set(settings.ocr_profiles), set(QualityMode))
+        self.assertEqual(
+            settings.asr_profiles[QualityMode.FAST]["model_path"],
+            settings.asr["model_path"],
+        )
+        self.assertEqual(
+            settings.ocr_profiles[QualityMode.FAST]["detection_model_dir"],
+            settings.ocr["detection_model_dir"],
+        )
+
+    def test_accurate_profile_uses_only_ready_higher_capacity_models(self) -> None:
+        manager = self.manager(
+            asr_downloader=FakeDownloader(),
+            ocr_downloader=FakeDownloader(),
+        )
+        manager.prepare_recommended(HardwareTier.CPU_IGPU)
+
+        fallback = manager.local_adapter_settings(HardwareTier.CPU_IGPU)
+        self.assertEqual(
+            fallback.asr_profiles[QualityMode.ACCURATE]["model_path"],
+            fallback.asr["model_path"],
+        )
+        self.assertEqual(
+            fallback.ocr_profiles[QualityMode.ACCURATE]["detection_model_dir"],
+            fallback.ocr["detection_model_dir"],
+        )
+
+        manager.prepare("asr-faster-whisper-large-v3")
+        manager.prepare("ocr-paddle-ppocrv5-server")
+        upgraded = manager.local_adapter_settings(HardwareTier.CPU_IGPU)
+
+        self.assertIn(
+            "faster-whisper-large-v3",
+            str(upgraded.asr_profiles[QualityMode.ACCURATE]["model_path"]),
+        )
+        self.assertIn(
+            "ppocrv5-server",
+            str(upgraded.ocr_profiles[QualityMode.ACCURATE]["detection_model_dir"]),
+        )
+        self.assertEqual(
+            upgraded.asr_profiles[QualityMode.FAST]["model_path"],
+            upgraded.asr["model_path"],
+        )
+        self.assertEqual(
+            upgraded.asr_profiles[QualityMode.BALANCED]["model_path"],
+            upgraded.asr["model_path"],
+        )
+
+    def test_fast_profile_never_downgrades_a_strong_recommended_primary(self) -> None:
+        manager = self.manager(
+            asr_downloader=FakeDownloader(),
+            ocr_downloader=FakeDownloader(),
+        )
+        manager.prepare_recommended(HardwareTier.GPU_12GB)
+        manager.prepare("asr-faster-whisper-small")
+        manager.prepare("ocr-paddle-ppocrv5-mobile")
+
+        settings = manager.local_adapter_settings(HardwareTier.GPU_12GB)
+
+        for mode in QualityMode:
+            self.assertEqual(
+                settings.asr_profiles[mode]["model_path"],
+                settings.asr["model_path"],
+            )
+            self.assertEqual(
+                settings.ocr_profiles[mode]["detection_model_dir"],
+                settings.ocr["detection_model_dir"],
+            )
 
     def test_interrupted_download_has_no_ready_marker_and_resumes(self) -> None:
         asr = FakeDownloader(failures=1)

@@ -1271,9 +1271,9 @@ def _activate_managed_local_models(
         else:
             local_provider.enabled = True
 
-        for model_id, selected_settings in (
-            ("faster-whisper", settings.asr),
-            ("paddleocr", settings.ocr),
+        for model_id, selected_settings, profile_settings in (
+            ("faster-whisper", settings.asr, settings.asr_profiles),
+            ("paddleocr", settings.ocr, settings.ocr_profiles),
         ):
             default_model = defaults.models[model_id]
             model = registry.models.get(model_id)
@@ -1285,7 +1285,13 @@ def _activate_managed_local_models(
                     f"model ID '{model_id}' is occupied by a non-local provider"
                 )
             model.capabilities.update(default_model.capabilities)
-            model.settings = dict(selected_settings)
+            model.settings = {
+                **selected_settings,
+                "quality_profiles": {
+                    quality_mode.value: dict(profile)
+                    for quality_mode, profile in profile_settings.items()
+                },
+            }
             model.enabled = True
 
         for role, model_id in (
