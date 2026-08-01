@@ -48,11 +48,14 @@ def main() -> int:
             page.goto(args.base_url, wait_until="networkidle")
             page.get_by_text("后端 0.1.0", exact=True).wait_for(timeout=15_000)
             page.get_by_role("button", name="新建任务", exact=True).click()
+            # The processing profile is part of the source probe policy because it
+            # can change the exact media format we require.  Select it before the
+            # probe so the verified manifest is current when the job is submitted.
+            page.locator(f"input[type='radio'][value='{args.mode}']").check(force=True)
             source_input = page.get_by_label("视频链接")
             source_input.fill(str(source))
             page.get_by_role("button", name="探测来源").click()
             page.get_by_text("SOURCE VERIFIED", exact=True).wait_for(timeout=15_000)
-            page.locator(f"input[type='radio'][value='{args.mode}']").check(force=True)
             page.locator("details.advanced-options").evaluate("(element) => element.open = true")
             pdf_toggle = page.get_by_label("同时生成离线 PDF")
             if args.pdf:
@@ -73,7 +76,10 @@ def main() -> int:
             page.get_by_role("button", name="阅读笔记").click()
             page.locator("article.note-paper").wait_for(timeout=15_000)
             page.locator("video.local-video").wait_for(timeout=15_000)
-            page.locator("img.frame-image").first.wait_for(timeout=15_000)
+            if args.mode != "fast":
+                # Fast deliberately has a zero screenshot budget.  The higher
+                # profiles must still prove that selected frames reach the reader.
+                page.locator("img.frame-image").first.wait_for(timeout=15_000)
             page.screenshot(
                 path=str(args.screenshot_dir / "08-real-reader-1440x900.png"),
                 full_page=True,
