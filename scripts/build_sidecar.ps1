@@ -26,12 +26,13 @@ $PythonComponentSpecs = @(
     [ordered]@{ id = "psutil"; distribution = "psutil"; module = "psutil" },
     [ordered]@{ id = "faster-whisper"; distribution = "faster-whisper"; module = "faster_whisper" },
     [ordered]@{ id = "ctranslate2"; distribution = "ctranslate2"; module = "ctranslate2" },
+    [ordered]@{ id = "huggingface-hub"; distribution = "huggingface-hub"; module = "huggingface_hub" },
     [ordered]@{ id = "paddleocr"; distribution = "paddleocr"; module = "paddleocr" },
     [ordered]@{ id = "paddlepaddle"; distribution = "paddlepaddle"; module = "paddle" }
 )
 $IncludedPythonComponentIds = @("yt-dlp", "psutil")
 if (-not $CoreOnly) {
-    $IncludedPythonComponentIds += @("faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle")
+    $IncludedPythonComponentIds += @("faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle")
 }
 
 function Assert-LastExitCode {
@@ -286,7 +287,12 @@ if os.environ.get("VIDEO2NOTES_RUNTIME_PROBE") == "1":
     failed = False
     for component in _COMPONENTS:
         try:
-            importlib.import_module(component["module"])
+            module = importlib.import_module(component["module"])
+            if (
+                component["id"] == "huggingface-hub"
+                and not callable(getattr(module, "snapshot_download", None))
+            ):
+                raise AttributeError("snapshot_download is unavailable")
             package_version = importlib.metadata.version(component["distribution"])
             results.append({**component, "version": package_version, "importable": True})
         except BaseException as error:
@@ -343,6 +349,7 @@ if ($CoreOnly) {
         "--exclude-module", "paddlex",
         "--exclude-module", "faster_whisper",
         "--exclude-module", "ctranslate2",
+        "--exclude-module", "huggingface_hub",
         "--exclude-module", "torch"
     )
 }
@@ -355,6 +362,7 @@ else {
     $PyInstallerArguments += @(
         "--collect-all", "faster_whisper",
         "--collect-all", "ctranslate2",
+        "--collect-all", "huggingface_hub",
         "--collect-all", "paddleocr",
         "--hidden-import", "paddle",
         "--collect-data", "paddlex",
@@ -363,6 +371,7 @@ else {
         "--copy-metadata", "paddlex",
         "--copy-metadata", "faster-whisper",
         "--copy-metadata", "ctranslate2",
+        "--copy-metadata", "huggingface-hub",
         "--copy-metadata", "paddlepaddle"
     )
     foreach ($distribution in $PaddleMetadataDistributions) {

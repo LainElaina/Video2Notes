@@ -33,6 +33,7 @@ environment.  Notable components include:
 | [FFmpeg](https://ffmpeg.org/) | Media probe/extraction/processing; sourced from `PATH` in development and copied into Windows release builds | The selected binary distribution determines its license; release builds include `FFMPEG_LICENSE.txt` and exact `FFMPEG_BUILD_INFO.txt` beside the bundled tools |
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | Local ASR; bundled in the default full Windows runtime | MIT (see upstream) |
 | [CTranslate2](https://github.com/OpenNMT/CTranslate2) | Native inference engine used by faster-whisper; bundled in the default full Windows runtime | MIT (see upstream) |
+| [Hugging Face Hub](https://github.com/huggingface/huggingface_hub) | Resumable app-managed ASR/OCR model downloads into local App Data | Apache License 2.0 |
 | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) | Local OCR; bundled in the default full Windows runtime | Apache License 2.0 (see upstream) |
 | [PaddlePaddle](https://github.com/PaddlePaddle/Paddle) | PaddleOCR inference engine; bundled in the default full Windows runtime | Apache License 2.0 (see upstream) |
 | [FastAPI](https://github.com/fastapi/fastapi), Uvicorn (optional) | Local loopback API | Upstream projects and their licenses |

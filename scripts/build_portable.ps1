@@ -129,7 +129,7 @@ function Assert-BackendManifest {
         if ($manifest.user_model_weights_included -ne $false) {
             throw "The frozen backend manifest does not explicitly exclude user model weights."
         }
-        $fullInferenceIds = @("faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle")
+        $fullInferenceIds = @("faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle")
         $requiredIds = @("yt-dlp", "psutil", "ffmpeg", "ffprobe")
         if ($manifest.runtime_flavor -eq "full") { $requiredIds += $fullInferenceIds }
         foreach ($componentId in $requiredIds) {

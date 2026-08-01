@@ -18,6 +18,13 @@ class PackagingScriptContractTests(unittest.TestCase):
         asr = project["optional-dependencies"]["asr"]
         self.assertTrue(any(item.startswith("faster-whisper") for item in asr))
         self.assertTrue(any(item.startswith("ctranslate2") for item in asr))
+        self.assertTrue(any(item.startswith("huggingface-hub") for item in asr))
+        self.assertTrue(
+            any(
+                item.startswith("huggingface-hub")
+                for item in project["optional-dependencies"]["ocr"]
+            )
+        )
         self.assertTrue(
             any(item.startswith("psutil") for item in project["dependencies"])
         )
@@ -27,9 +34,11 @@ class PackagingScriptContractTests(unittest.TestCase):
 
         self.assertIn('[switch]$CoreOnly', script)
         self.assertIn('$RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }', script)
-        for module in ("faster_whisper", "ctranslate2", "paddleocr"):
+        for module in ("faster_whisper", "ctranslate2", "huggingface_hub", "paddleocr"):
             self.assertIn(f'"--collect-all", "{module}"', script)
         self.assertIn('"--hidden-import", "paddle"', script)
+        self.assertIn('"--exclude-module", "huggingface_hub"', script)
+        self.assertIn('callable(getattr(module, "snapshot_download", None))', script)
         self.assertNotIn('"--collect-all", "paddle"', script)
         self.assertIn('"--collect-data", "paddlex"', script)
         self.assertIn('"--collect-binaries", "paddle"', script)
@@ -73,6 +82,7 @@ class PackagingScriptContractTests(unittest.TestCase):
         for component in (
             '"faster-whisper"',
             '"ctranslate2"',
+            '"huggingface-hub"',
             '"paddleocr"',
             '"paddlepaddle"',
             '"yt-dlp"',

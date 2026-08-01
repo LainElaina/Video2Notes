@@ -155,100 +155,22 @@ data/
 
 报告提供五种 preset：`concise`（简洁）、`detailed`（详细）、`professional`（专业）、`beginner`（入门）和 `executive`（领导/决策）。它们改变受众、章节/要点预算、术语解释和编辑目标，不降低“只能引用现有证据与补充资料”的约束。Markdown 是不可关闭的 canonical 输出；HTML 同源渲染，PDF 可选。对完成任务再次生成报告时，服务会读取当前 active evidence revision 并重新融合有效证据，将该 evidence revision ID 与活动资料 ID 一起写入报告记录；产物发布到 `revisions/notes/<revision-id>/` 并原子切换 `latest` 指针，不覆盖最初的 `notes/` 与 `render/` 产物。
 
-## 配置本地模型、OpenAI-compatible 与 Ollama
+## 模型、协议与性能设置
 
-首次运行 API 或 CLI 时，`DATA_ROOT\config\providers.json` 会生成本地默认注册表。它是实际加载的配置；[`config/profiles.example.yaml`](config/profiles.example.yaml) 是带注释的架构参考，不会被运行时直接读取。
+普通使用不需要打开终端、安装 Python 包或手改 JSON。进入桌面的“模型与算力”页即可完成整个配置闭环：
 
-### 本地 ASR 与 OCR
+1. 先用“一键准备推荐模型”下载并自动绑定本机适合的 ASR/OCR 权重；程序运行库、FFmpeg 和下载工具已经在 full 便携包中。
+2. 如需大模型整理与复核，新增供应商，选择线路协议、认证方式和 Base URL，再把密钥写入 Windows Credential Manager。密钥只写入系统凭据库，注册表只保存引用。
+3. 连接测试通过后，可从协议支持的发现端点读取模型 ID，或手动输入服务实际提供的 ID；项目不硬编码远程模型名。
+4. 明确确认每个模型真实具备的能力，再绑定事实提取、长文撰写、证据复核、翻译、画面解释等角色。角色下拉框只列出能力集合满足该角色要求且已启用的模型；未知能力不会靠品牌或协议猜测。
 
-安装可选依赖不会替你下载模型，也不会在运行时偷偷联网拉模型。把模型先下载到本地后，在 `providers.json` 的 `models` 中填写目录：
+内置线路覆盖 OpenAI Responses、OpenAI Chat Completions、OpenAI Audio Transcriptions、Anthropic Messages、Gemini `generateContent`、Gemini Interactions、Ollama 原生 Chat、OpenAI-compatible 服务和实验性自定义 HTTP。OpenAI-compatible 可用于采用相同线协议的自建网关或第三方服务，并可配置 Bearer、`x-api-key`、`x-goog-api-key` 或受限制的自定义认证头。只有实现了结构化生成适配器的协议才会出现在笔记生成相关绑定中；音频转录与实验性通用 HTTP 不会伪装成可用的结构化笔记模型。
 
-```jsonc
-{
-  "models": {
-    "faster-whisper": {
-      "id": "faster-whisper",
-      "provider_id": "local",
-      "model_id": "faster-whisper",
-      "display_name": "Local Whisper",
-      "capabilities": ["asr", "language_id", "segment_timestamps", "word_timestamps", "word_confidence"],
-      "locality": "local",
-      "settings": {
-        "engine": "faster_whisper",
-        "model_path": "D:/Models/faster-whisper-large-v3",
-        "device": "cuda",
-        "compute_type": "float16",
-        "beam_size": 5,
-        "vad_filter": true,
-        "multilingual": true,
-        "language_detection_threshold": 0.70,
-        "language_detection_segments": 3
-      },
-      "enabled": true
-    },
-    "paddleocr": {
-      "id": "paddleocr",
-      "provider_id": "local",
-      "model_id": "paddleocr",
-      "display_name": "Local PaddleOCR",
-      "capabilities": ["ocr", "ocr_boxes", "ocr_confidence"],
-      "locality": "local",
-      "settings": {
-        "engine": "paddleocr",
-        "detection_model_dir": "D:/Models/ppocr/det",
-        "recognition_model_dir": "D:/Models/ppocr/rec",
-        "language": "ch",
-        "device": "cpu",
-        "enable_mkldnn": false
-      },
-      "enabled": true
-    }
-  }
-}
-```
+本地 ASR 使用 `local_files_only=True`，组件管理器只从固定版本清单下载到 `DATA_ROOT\components`，不会在任务处理中临时拉取未声明模型。一个语言提示会固定语言；多个提示会启用多语言解码，并把逐段语言、概率与检测方法写入 evidence。默认 VAD 按自然短句边界切分，低语言概率或语言冲突只在当前质量模式允许时触发第二 ASR。PaddleOCR detector/recognizer 同样使用组件管理器校验过的本地目录；模型缺失或不完整时会明确降级，不会伪造文本。
 
-`faster-whisper` 使用 `local_files_only=True`，因此 `model_path` 必须是实际存在的本地目录；CPU 可设 `device: "cpu"` 和 `compute_type: "int8"`。一个语言提示会固定语言；多个提示会启用 faster-whisper 1.2.1 的 multilingual 解码，并把逐段语言、概率与检测方法写入 evidence。默认 VAD 以 500 ms 静音形成自然短句边界，低语言概率/语言冲突只在模式允许时触发第二 ASR。
+“入门模式”根据 CPU、可用内存、GPU/显存、FFmpeg 能力、当前占用和磁盘余量生成安全预算，并允许用户选择节能、均衡或性能倾向以及预留给其他程序的资源；每次任务开始前都会重新检测实时余量。“专业模式”在同一安全预算上开放 CPU/远程并发、GPU 引擎槽位、解码线程、固定采样上限、扫描宽度与频率、OCR/ASR 设备和线程、ASR beam、复核轮次及截图预算等已经接入执行器的参数。当前 PTS 保真视觉解码器使用软件解码；尚无真实批处理或学习型检测执行器的字段不会出现在可编辑界面，后端也拒绝非空覆盖。超过当前安全余量的设置会被钳制并显示原因，而不是让任务把整台电脑占满。
 
-PaddleOCR 的 detector 和 recognizer 目录也必须真实存在且含模型文件。当前 Windows CPU 验证组合是 PaddleOCR 3.7 + PaddlePaddle 3.3.1；为避开该组合已观察到的 oneDNN 算子错误，示例设置 `enable_mkldnn: false`。GPU Paddle wheel 需按本机 CUDA 单独安装后再改成 `gpu:0`。若依赖或模型未正确安装，运行时会报告 OCR 未配置并保守跳过，不会下载模型或伪造文本。
-
-### OpenAI-compatible / Ollama 的笔记角色
-
-Provider 与 Model 是分开的；Model 必须声明其能力，role 绑定会在保存时校验。笔记路径可分别绑定 `notes.fact_extractor`、`notes.drafter` 和 `notes.verifier`；前两者任一不可用时，系统使用确定性的抽取式证据笔记并发出警告。
-
-下面是实际 JSON schema 的精简示例。不要把 API key 写进 JSON：通过 API 的 `PUT /api/providers/{provider_id}/secret` 写入 Windows Credential Manager，配置中只留下 `credential_ref`。
-
-```jsonc
-{
-  "providers": {
-    "local": { "id": "local", "display_name": "Local engines", "kind": "local", "locality": "local", "enabled": true },
-    "llm": {
-      "id": "llm", "display_name": "Compatible LLM", "kind": "openai_compatible",
-      "base_url": "https://your-endpoint.example/v1", "endpoint_style": "chat_completions",
-      "credential_ref": "keyring://Video2Notes/providers/llm", "request_timeout_seconds": 180,
-      "locality": "cloud", "enabled": true
-    },
-    "ollama": {
-      "id": "ollama", "display_name": "Ollama", "kind": "ollama",
-      "base_url": "http://127.0.0.1:11434/v1", "endpoint_style": "chat_completions",
-      "locality": "local", "enabled": true
-    }
-  },
-  "models": {
-    "note-llm": {
-      "id": "note-llm", "provider_id": "llm", "model_id": "configure-model-id",
-      "display_name": "Evidence note model", "capabilities": ["text", "structured_output", "long_context"],
-      "locality": "cloud", "context_window": 65536, "settings": {}, "enabled": true
-    }
-  },
-  "roles": {
-    "notes.fact_extractor": { "role": "notes.fact_extractor", "primary_model_id": "note-llm", "fallback_model_ids": [] },
-    "notes.drafter": { "role": "notes.drafter", "primary_model_id": "note-llm", "fallback_model_ids": [] },
-    "notes.verifier": { "role": "notes.verifier", "primary_model_id": "note-llm", "fallback_model_ids": [] }
-  }
-}
-```
-
-Ollama 同样走 OpenAI-compatible Chat Completions 适配层；前提是所选 Ollama 服务/模型确实提供该接口并满足对应 role 的能力。LLM 返回的事实卡和草稿只可引用现有 evidence ID；校验层拒绝无效引用并回退到可追溯内容。
+首次运行 API 或 CLI 时仍会在 `DATA_ROOT\config\providers.json` 生成 schema v2 注册表，供高级排障和备份；桌面界面是推荐且完整的配置入口。[`config/profiles.example.yaml`](config/profiles.example.yaml) 只是带注释的架构参考。LLM 返回的事实卡与草稿只能引用已有 evidence/material ID；校验层拒绝无效引用并回退到可追溯内容。
 
 ## 本地 API 与桌面壳
 
@@ -262,8 +184,10 @@ $env:VIDEO2NOTES_TOKEN = "请使用至少16字符的随机本地令牌"
 若不设置令牌，服务会生成一个短生命周期的私有 token 文件，并在退出时清理；它不会把 token 输出到控制台。除 `/api/health` 外，所有 API 都需要 `X-Video2Notes-Token: <token>`。可用端点包括：
 
 - `GET /api/system`、`GET /api/runtime`、`GET /api/browser-profiles`
+- `GET /api/configuration-catalog`、`GET/PUT /api/performance`
+- `GET /api/components`、`POST /api/components/prepare`
+- `GET/PUT /api/providers`、`POST /api/providers/{id}/test`、`GET /api/providers/{id}/discover` 及 provider secret 状态/写入/删除
 - `POST /api/sources/probe`、`POST /api/estimate`
-- `GET/PUT /api/providers`、`POST /api/providers/{id}/test` 及 provider secret 状态/写入/删除
 - `POST /api/jobs`、`GET /api/jobs/{run_id}`、`GET /api/jobs/{run_id}/result`、`POST /api/jobs/{run_id}/cancel`
 - `GET/POST /api/runs/{run_id}/operations`、`GET /api/runs/{run_id}/evidence`
 - `GET /api/runs/{run_id}/materials`、`POST .../materials/text`、`POST .../materials/files`、`DELETE .../materials/{material_id}`
@@ -284,9 +208,9 @@ $env:VIDEO2NOTES_TOKEN = "请使用至少16字符的随机本地令牌"
 
 Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口，隐藏启动 Python sidecar，并在桌面程序退出时终止它。令牌只通过子进程环境变量传递。原生文件选择器只返回绝对路径；本地视频与截图 URL 经过 run 目录 canonicalize/范围检查。
 
-发布构建的 sidecar 是 PyInstaller onedir 包。默认 `full` 构建携带固定版本的 Python 业务代码、`yt-dlp`、`faster-whisper`、CTranslate2、PaddleOCR、PaddlePaddle，以及构建机提供的 `ffmpeg.exe`/`ffprobe.exe`；便携版用户无需另外安装 Python、FFmpeg 或这些推理包。构建过程只冻结已经安装在仓库 `.venv` 中的运行时，不读取用户模型目录和下载缓存，因此发布前应先执行 `bootstrap.ps1 -WithAsr -WithOcr`。`-CoreOnly` 是明确的开发快速迭代开关，绝不是默认发行配置。
+发布构建的 sidecar 是 PyInstaller onedir 包。默认 `full` 构建携带固定版本的 Python 业务代码、`yt-dlp`、`psutil`、`faster-whisper`、CTranslate2、Hugging Face Hub、PaddleOCR、PaddlePaddle，以及构建机提供的 `ffmpeg.exe`/`ffprobe.exe`；便携版用户无需另外安装 Python、FFmpeg 或这些推理包。构建过程只冻结已经安装在仓库 `.venv` 中的运行时，不读取用户模型目录和下载缓存，因此发布前应先执行 `bootstrap.ps1 -WithAsr -WithOcr`。`-CoreOnly` 是明确的开发快速迭代开关，绝不是默认发行配置。
 
-运行时包与模型权重是两层内容：发行包包含执行 ASR/OCR 所需的程序库，但不包含用户选择的 Whisper、PaddleOCR 或大模型权重，也不包含 Cookie、任务数据、下载视频或 API Key。唯一精确允许的模型类随包资产是 faster-whisper 上游自带、默认 VAD 路径必需的小型 Silero VAD 文件；它不是用户选择的听写模型。具体 ASR/OCR 权重由后续应用内模型管理器负责下载、校验、选择与清理。
+运行时包与模型权重是两层内容：发行包包含执行 ASR/OCR 所需的程序库，但不包含用户选择的 Whisper、PaddleOCR 或远程大模型权重，也不包含 Cookie、任务数据、下载视频或 API Key。唯一精确允许的模型类随包资产是 faster-whisper 上游自带、默认 VAD 路径必需的小型 Silero VAD 文件；它不是用户选择的听写模型。首次使用可在“模型与算力”页点击“一键准备推荐模型”：组件管理器依据检测到的硬件档位下载固定版本的 ASR/OCR 权重到 Windows AppData，支持中断后续传、完整性校验、原子启用和失败恢复，不需要打开终端或手填模型路径。
 
 构建脚本会从 FFmpeg 二进制目录或其父目录一并查找许可证；若目录布局不同，使用 `-FfmpegLicensePath` 显式指定。发行包还包含项目 MIT 许可证、第三方 notices、完整 `ffmpeg -version` 输出和对应源码引用。
 
@@ -313,7 +237,7 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 .\scripts\build_portable.ps1 -CoreOnly
 ```
 
-截至 2026-07-28，完整 Python 验证已通过 **133** 个测试（约 **82%** 覆盖率）；React 已通过 ESLint、TypeScript、**12** 个 Vitest、Vite build，Rust 已通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。
+截至 2026-08-01，完整 Python 验证已通过 **217** 个测试；React 已通过 ESLint、TypeScript、**41** 个 Vitest 和 Vite 生产构建，Rust 通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。
 
 这些命令还在一个路径含空格、没有既有 `.venv`、`node_modules`、Tauri target 或生成 sidecar 的全新本地克隆中重新执行：`bootstrap.ps1 -WithPlaywright`、`verify.ps1 -Strict` 和标准 `build.ps1` 均通过。bootstrap 会先安装 `pyproject.toml` 声明的 setuptools 构建后端；跟踪的空 backend 占位目录允许 Tauri 在 sidecar 尚未冻结前完成干净克隆的 Rust 检查。
 
@@ -344,10 +268,10 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 ## 已知非阻断限制
 
-- **模型权重准备仍是显式的。** 默认 full 发行包已经包含 faster-whisper/CTranslate2/PaddleOCR/PaddlePaddle 程序运行时，但不携带用户 ASR/OCR 权重；在应用内模型管理器完成前，没有本地模型目录或可用 provider credential 时，对应模块会保守跳过。Markdown/HTML 仍会从已有字幕、元数据和视觉状态生成。
+- **模型权重首次使用时按需下载。** 默认 full 发行包已经包含 faster-whisper/CTranslate2/Hugging Face Hub/PaddleOCR/PaddlePaddle 程序运行时，但刻意不把数 GB、随硬件档位变化的 ASR/OCR 权重塞进每次更新包。应用内“一键准备推荐模型”会下载、校验并自动绑定推荐权重；在准备完成前，对应模块会保守跳过，Markdown/HTML 仍可从已有字幕、元数据和视觉状态生成。
 - **OCR/ASR 质量尚未用带标注的大规模真实语料校准。** 自适应取帧、PTS 对齐、置信度和选择性复核的机制已经落地，但 WER/CER、专有名词和截图选择还需要按语言/内容类别建立评测集。
 - **平台可用性和清晰度受账号、地区、站点更新、源文件及平台政策影响。** 下载器会记录可用格式与低清警告；不支持 DRM 绕过。
-- **安装包不携带用户模型权重。** React/Tauri 安装包包含可自动启动的 full Python/FFmpeg sidecar、四个本地推理运行时和内置样例；用户选择的 Whisper/PaddleOCR 权重仍由后续应用内模型管理器负责。开发构建只有显式传入 `-CoreOnly` 才会省略推理运行时。
+- **便携包不预塞大体积模型权重。** React/Tauri 发行包包含可自动启动的 full Python/FFmpeg sidecar、本地推理与模型下载运行时以及内置样例；Whisper/PaddleOCR 权重由已经内置的组件管理器按机器档位准备到 AppData。开发构建只有显式传入 `-CoreOnly` 才会省略推理运行时。
 - **显存峰值目前为空。** stage manifest 已有 `peak_vram_bytes` 字段，但通用 CPU/Paddle/faster-whisper 路径尚未接统一显存采样器；因此 benchmark 不虚报 0 B。
 - **当前本地安装包未做 Authenticode 签名。** 个人本机安装不影响功能，但 Windows SmartScreen 可能显示未知发布者；公开分发前应配置受信任的代码签名证书。
 - **HTML 的 `video2notes://seek/...` 链接是桌面集成协议。** 在普通浏览器中仍可阅读 HTML，但该自定义跳转需要宿主应用实现；截图是实验性、按证据预算选择的附加信息。

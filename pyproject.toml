@@ -31,8 +31,10 @@ secrets = [
 asr = [
   "ctranslate2>=4.4,<5",
   "faster-whisper>=1.1,<2",
+  "huggingface-hub>=0.34,<2",
 ]
 ocr = [
+  "huggingface-hub>=0.34,<2",
   "paddlepaddle>=3.3,<4; platform_system == 'Windows'",
   "paddleocr>=3.1,<4",
 ]

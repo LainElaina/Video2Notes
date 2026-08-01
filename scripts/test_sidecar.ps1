@@ -90,7 +90,7 @@ if ($Manifest.user_model_weights_included -ne $false) {
     throw "The backend manifest does not explicitly exclude user model weights."
 }
 
-$FullInferenceIds = @("faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle")
+$FullInferenceIds = @("faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle")
 $RequiredPythonIds = @("yt-dlp", "psutil")
 if (-not $CoreOnly) { $RequiredPythonIds += $FullInferenceIds }
 foreach ($componentId in $RequiredPythonIds) {
