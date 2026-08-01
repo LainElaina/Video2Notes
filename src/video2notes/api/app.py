@@ -62,9 +62,11 @@ from video2notes.providers import (
     Capability,
     KeyringSecretStore,
     ModelRegistry,
+    ProviderAuthError,
     ProviderProtocol,
     ProviderSpec,
     SecretStatus,
+    provider_auth_headers,
 )
 from video2notes.runtime import build_pipeline_runtime
 from video2notes.sources import (
@@ -1151,65 +1153,16 @@ def _provider_endpoint(provider: ProviderSpec, path: str | None) -> str:
     return urlunsplit((parts.scheme, parts.netloc, joined_path, "", ""))
 
 
-_CUSTOM_HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-_FORBIDDEN_CUSTOM_HEADERS = {
-    "connection",
-    "content-length",
-    "cookie",
-    "host",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "x-video2notes-token",
-}
-
-
 def _provider_headers(
     provider: ProviderSpec,
     api_key: str | None,
 ) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    if provider.auth_scheme is AuthScheme.NONE:
-        return headers
-    if api_key is None:
-        raise HTTPException(status_code=409, detail="provider credential is not configured")
-    if provider.auth_scheme is AuthScheme.BEARER:
-        headers["Authorization"] = f"Bearer {api_key}"
-    elif provider.auth_scheme is AuthScheme.X_API_KEY:
-        headers["x-api-key"] = api_key
-        if provider.protocol is ProviderProtocol.ANTHROPIC_MESSAGES:
-            version = provider.protocol_options.get(
-                "anthropic_version",
-                "2023-06-01",
-            )
-            if not isinstance(version, str) or not version.strip():
-                raise HTTPException(
-                    status_code=422,
-                    detail="Anthropic protocol version is invalid",
-                )
-            headers["anthropic-version"] = version.strip()
-    elif provider.auth_scheme is AuthScheme.X_GOOG_API_KEY:
-        headers["x-goog-api-key"] = api_key
-    else:
-        header_name = provider.protocol_options.get("auth_header_name")
-        if (
-            not isinstance(header_name, str)
-            or _CUSTOM_HEADER_NAME.fullmatch(header_name) is None
-            or header_name.casefold() in _FORBIDDEN_CUSTOM_HEADERS
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail="custom authentication header name is invalid",
-            )
-        prefix = provider.protocol_options.get("auth_header_prefix", "")
-        if not isinstance(prefix, str) or "\r" in prefix or "\n" in prefix:
-            raise HTTPException(
-                status_code=422,
-                detail="custom authentication header prefix is invalid",
-            )
-        headers[header_name] = f"{prefix}{api_key}"
+    try:
+        headers.update(provider_auth_headers(provider, api_key))
+    except ProviderAuthError as error:
+        status_code = 409 if "not configured" in str(error) else 422
+        raise HTTPException(status_code=status_code, detail=str(error)) from None
     return headers
 
 

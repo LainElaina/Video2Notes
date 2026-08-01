@@ -30,11 +30,14 @@ from video2notes.notes import EvidenceNoteComposer
 from video2notes.ocr import PaddleOcrBackend, PaddleOcrConfig
 from video2notes.pipeline import PipelineRuntime
 from video2notes.providers import (
+    AuthScheme,
     ModelRegistry,
     ModelSpec,
+    ProviderAuthError,
     ProviderKind,
     ProviderProtocol,
     ProviderSpec,
+    provider_auth_headers,
 )
 from video2notes.sources import SourceRegistry
 from video2notes.system import HardwareSnapshot
@@ -268,20 +271,33 @@ def _structured_backend(
         raise RuntimeConfigurationError(f"provider '{provider.id}' has no base URL")
 
     api_key: str | None = None
+    if provider.auth_scheme is not AuthScheme.NONE and provider.credential_ref is None:
+        warnings.append(f"{role}: credential for provider '{provider.id}' is not configured.")
+        return None
     if provider.credential_ref is not None:
         api_key = secret_store.get(provider.id) if secret_store is not None else None
         if api_key is None:
             warnings.append(f"{role}: credential for provider '{provider.id}' is not available.")
             return None
     if provider.protocol is ProviderProtocol.OPENAI_RESPONSES:
+        try:
+            auth_headers = provider_auth_headers(provider, api_key)
+        except ProviderAuthError:
+            warnings.append(f"{role}: provider '{provider.id}' has invalid authentication.")
+            return None
         return OpenAIResponsesBackend(
             provider_id=provider.id,
             model_id=model.model_id,
             base_url=provider.base_url,
-            api_key=api_key,
+            auth_headers=auth_headers,
             timeout_seconds=provider.request_timeout_seconds,
         )
     if provider.protocol is ProviderProtocol.OPENAI_CHAT_COMPLETIONS:
+        try:
+            auth_headers = provider_auth_headers(provider, api_key)
+        except ProviderAuthError:
+            warnings.append(f"{role}: provider '{provider.id}' has invalid authentication.")
+            return None
         legacy_max_tokens = bool(
             model.settings.get(
                 "legacy_max_tokens",
@@ -292,7 +308,7 @@ def _structured_backend(
             provider_id=provider.id,
             model_id=model.model_id,
             base_url=provider.base_url,
-            api_key=api_key,
+            auth_headers=auth_headers,
             legacy_max_tokens=legacy_max_tokens,
             timeout_seconds=provider.request_timeout_seconds,
         )

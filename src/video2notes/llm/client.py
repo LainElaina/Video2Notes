@@ -167,6 +167,7 @@ class OpenAICompatibleBackend(_JsonStructuredBackend):
         base_url: str,
         endpoint_style: EndpointStyle,
         api_key: str | None = None,
+        auth_headers: Mapping[str, str] | None = None,
         timeout_seconds: float = 180,
         transport: JsonTransport | None = None,
         legacy_max_tokens: bool = False,
@@ -180,6 +181,7 @@ class OpenAICompatibleBackend(_JsonStructuredBackend):
         )
         self.endpoint_style = endpoint_style
         self._api_key = api_key
+        self._auth_headers = dict(auth_headers or {})
         self.legacy_max_tokens = legacy_max_tokens
 
     def _endpoint(self) -> str:
@@ -192,7 +194,8 @@ class OpenAICompatibleBackend(_JsonStructuredBackend):
 
     def _headers(self) -> Mapping[str, str]:
         headers = {"Content-Type": "application/json"}
-        if self._api_key:
+        headers.update(self._auth_headers)
+        if self._api_key and "Authorization" not in headers:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
@@ -219,6 +222,7 @@ class OpenAIResponsesBackend(OpenAICompatibleBackend):
         model_id: str,
         base_url: str,
         api_key: str | None = None,
+        auth_headers: Mapping[str, str] | None = None,
         timeout_seconds: float = 180,
         transport: JsonTransport | None = None,
     ):
@@ -228,6 +232,7 @@ class OpenAIResponsesBackend(OpenAICompatibleBackend):
             base_url=base_url,
             endpoint_style=EndpointStyle.RESPONSES,
             api_key=api_key,
+            auth_headers=auth_headers,
             timeout_seconds=timeout_seconds,
             transport=transport,
         )
@@ -241,6 +246,7 @@ class OpenAIChatCompletionsBackend(OpenAICompatibleBackend):
         model_id: str,
         base_url: str,
         api_key: str | None = None,
+        auth_headers: Mapping[str, str] | None = None,
         timeout_seconds: float = 180,
         transport: JsonTransport | None = None,
         legacy_max_tokens: bool = False,
@@ -251,6 +257,7 @@ class OpenAIChatCompletionsBackend(OpenAICompatibleBackend):
             base_url=base_url,
             endpoint_style=EndpointStyle.CHAT_COMPLETIONS,
             api_key=api_key,
+            auth_headers=auth_headers,
             timeout_seconds=timeout_seconds,
             transport=transport,
             legacy_max_tokens=legacy_max_tokens,

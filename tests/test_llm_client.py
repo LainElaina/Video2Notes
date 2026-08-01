@@ -135,6 +135,31 @@ class LlmClientTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["max_tokens"], 8_192)
         self.assertNotIn("max_completion_tokens", captured["payload"])
 
+    def test_openai_compatible_backend_accepts_protocol_auth_headers(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def transport(
+            url: str,
+            headers: Mapping[str, str],
+            payload: Mapping[str, Any],
+            timeout: float,
+        ) -> Mapping[str, Any]:
+            del url, payload, timeout
+            captured["headers"] = dict(headers)
+            return {"choices": [{"message": {"content": '{"facts":[]}'}}]}
+
+        backend = OpenAIChatCompletionsBackend(
+            provider_id="proxy",
+            model_id="configured-model",
+            base_url="https://proxy.example/v1",
+            auth_headers={"api-key": "Token private"},
+            transport=transport,
+        )
+        backend.generate(request())
+
+        self.assertEqual(captured["headers"]["api-key"], "Token private")
+        self.assertNotIn("Authorization", captured["headers"])
+
     def test_anthropic_messages_contract(self) -> None:
         captured: dict[str, Any] = {}
 

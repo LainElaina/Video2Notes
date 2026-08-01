@@ -14,11 +14,13 @@ from video2notes.providers import (
     Locality,
     ModelRegistry,
     ModelSpec,
+    ProviderAuthError,
     ProviderKind,
     ProviderProtocol,
     ProviderSpec,
     SecretStatus,
     StreamTransport,
+    provider_auth_headers,
 )
 
 
@@ -37,6 +39,32 @@ class InMemoryKeyring:
 
 
 class ModelRegistryTests(unittest.TestCase):
+    def test_shared_auth_headers_support_custom_openai_compatible_protocols(
+        self,
+    ) -> None:
+        provider = ProviderSpec(
+            id="proxy",
+            display_name="Proxy",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            protocol=ProviderProtocol.OPENAI_CHAT_COMPLETIONS,
+            auth_scheme=AuthScheme.CUSTOM_HEADER,
+            base_url="https://proxy.example/v1",
+            locality=Locality.CLOUD,
+            protocol_options={
+                "auth_header_name": "api-key",
+                "auth_header_prefix": "Token ",
+            },
+        )
+        self.assertEqual(
+            provider_auth_headers(provider, "private"),
+            {"api-key": "Token private"},
+        )
+        unsafe = provider.model_copy(
+            update={"protocol_options": {"auth_header_name": "Cookie"}}
+        )
+        with self.assertRaises(ProviderAuthError):
+            provider_auth_headers(unsafe, "private")
+
     def test_schema_v1_payload_migrates_to_explicit_protocol_and_auth(self) -> None:
         registry = ModelRegistry.model_validate(
             {

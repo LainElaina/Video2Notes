@@ -1,5 +1,6 @@
 """Capability-aware model registry and local credential references."""
 
+from .auth import ProviderAuthError, provider_auth_headers
 from .registry import (
     PROTOCOL_CATALOG,
     ROLE_REQUIREMENTS,
@@ -25,8 +26,10 @@ __all__ = [
     "ModelRegistry",
     "ModelSpec",
     "ProviderKind",
+    "ProviderAuthError",
     "ProviderProtocol",
     "ProviderSpec",
+    "provider_auth_headers",
     "PROTOCOL_CATALOG",
     "ROLE_REQUIREMENTS",
     "ProtocolTemplate",

@@ -261,3 +261,34 @@ class RuntimeConfigurationTests(unittest.TestCase):
 
         self.assertIsNone(result.runtime.note_composer.fact_backend)
         self.assertTrue(any("credential" in item for item in result.warnings))
+
+    def test_required_auth_without_credential_reference_disables_notes(self) -> None:
+        registry = ModelRegistry.with_local_defaults()
+        registry.providers["cloud"] = ProviderSpec(
+            id="cloud",
+            display_name="Cloud",
+            kind=ProviderKind.OPENAI,
+            protocol=ProviderProtocol.OPENAI_RESPONSES,
+            auth_scheme=AuthScheme.BEARER,
+            base_url="https://example.invalid/v1",
+            locality=Locality.CLOUD,
+        )
+        registry.models["notes"] = ModelSpec(
+            id="notes",
+            provider_id="cloud",
+            model_id="user-selected-model",
+            display_name="Notes",
+            capabilities={
+                Capability.TEXT,
+                Capability.STRUCTURED_OUTPUT,
+                Capability.LONG_CONTEXT,
+            },
+            locality=Locality.CLOUD,
+        )
+        registry.bind("notes.fact_extractor", "notes")
+        registry.bind("notes.drafter", "notes")
+
+        result = build_pipeline_runtime(registry, secret_store=SecretFixture())
+
+        self.assertIsNone(result.runtime.note_composer.fact_backend)
+        self.assertTrue(any("not configured" in item for item in result.warnings))
