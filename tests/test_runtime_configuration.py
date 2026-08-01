@@ -3,14 +3,24 @@ from __future__ import annotations
 import unittest
 
 from video2notes.audio import FasterWhisperBackend
-from video2notes.llm import EndpointStyle, OpenAICompatibleBackend
+from video2notes.llm import (
+    AnthropicMessagesBackend,
+    EndpointStyle,
+    GeminiGenerateContentBackend,
+    GeminiInteractionsBackend,
+    OllamaNativeChatBackend,
+    OpenAIChatCompletionsBackend,
+    OpenAICompatibleBackend,
+)
 from video2notes.ocr import PaddleOcrBackend
 from video2notes.providers import (
+    AuthScheme,
     Capability,
     Locality,
     ModelRegistry,
     ModelSpec,
     ProviderKind,
+    ProviderProtocol,
     ProviderSpec,
 )
 from video2notes.runtime import FallbackStructuredBackend, build_pipeline_runtime
@@ -25,6 +35,112 @@ class SecretFixture:
 
 
 class RuntimeConfigurationTests(unittest.TestCase):
+    def test_structured_runtime_dispatches_by_protocol(self) -> None:
+        cases = (
+            (
+                "openai-chat",
+                ProviderKind.OPENAI,
+                ProviderProtocol.OPENAI_CHAT_COMPLETIONS,
+                AuthScheme.BEARER,
+                "https://api.openai.test/v1",
+                OpenAIChatCompletionsBackend,
+                True,
+            ),
+            (
+                "anthropic",
+                ProviderKind.ANTHROPIC,
+                ProviderProtocol.ANTHROPIC_MESSAGES,
+                AuthScheme.X_API_KEY,
+                "https://api.anthropic.test/v1",
+                AnthropicMessagesBackend,
+                False,
+            ),
+            (
+                "gemini-content",
+                ProviderKind.GOOGLE,
+                ProviderProtocol.GEMINI_GENERATE_CONTENT,
+                AuthScheme.X_GOOG_API_KEY,
+                "https://generativelanguage.test/v1beta",
+                GeminiGenerateContentBackend,
+                False,
+            ),
+            (
+                "gemini-interactions",
+                ProviderKind.GOOGLE,
+                ProviderProtocol.GEMINI_INTERACTIONS,
+                AuthScheme.X_GOOG_API_KEY,
+                "https://generativelanguage.test/v1beta",
+                GeminiInteractionsBackend,
+                False,
+            ),
+            (
+                "ollama-native",
+                ProviderKind.OLLAMA,
+                ProviderProtocol.OLLAMA_NATIVE_CHAT,
+                AuthScheme.NONE,
+                "http://127.0.0.1:11434",
+                OllamaNativeChatBackend,
+                False,
+            ),
+        )
+        for (
+            provider_id,
+            kind,
+            protocol,
+            auth_scheme,
+            base_url,
+            backend_type,
+            legacy_max_tokens,
+        ) in cases:
+            with self.subTest(protocol=protocol):
+                registry = ModelRegistry.with_local_defaults()
+                credential_ref = None
+                secrets: dict[str, str] = {}
+                if auth_scheme is not AuthScheme.NONE:
+                    credential_ref = f"keyring://Video2Notes/providers/{provider_id}"
+                    secrets[provider_id] = "private-key"
+                registry.providers[provider_id] = ProviderSpec(
+                    id=provider_id,
+                    display_name=provider_id,
+                    kind=kind,
+                    protocol=protocol,
+                    auth_scheme=auth_scheme,
+                    base_url=base_url,
+                    credential_ref=credential_ref,
+                    locality=(
+                        Locality.LOCAL
+                        if protocol is ProviderProtocol.OLLAMA_NATIVE_CHAT
+                        else Locality.CLOUD
+                    ),
+                )
+                model = ModelSpec(
+                    id=f"{provider_id}-model",
+                    provider_id=provider_id,
+                    model_id="user-selected-model",
+                    display_name="User selected model",
+                    capabilities={
+                        Capability.TEXT,
+                        Capability.STRUCTURED_OUTPUT,
+                        Capability.LONG_CONTEXT,
+                    },
+                    locality=registry.providers[provider_id].locality,
+                    settings={"legacy_max_tokens": legacy_max_tokens},
+                )
+                registry.models[model.id] = model
+                registry.bind("notes.fact_extractor", model.id)
+                registry.bind("notes.drafter", model.id)
+
+                result = build_pipeline_runtime(
+                    registry,
+                    secret_store=SecretFixture(secrets),
+                )
+
+                backend = result.runtime.note_composer.fact_backend
+                self.assertIsInstance(backend, backend_type)
+                if isinstance(backend, OpenAIChatCompletionsBackend):
+                    self.assertTrue(backend.legacy_max_tokens)
+                self.assertFalse(any(item.startswith("notes.") for item in result.warnings))
+
     def test_unconfigured_local_defaults_degrade_explicitly(self) -> None:
         result = build_pipeline_runtime(ModelRegistry.with_local_defaults())
 

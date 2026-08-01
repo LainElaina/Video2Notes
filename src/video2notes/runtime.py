@@ -15,11 +15,15 @@ from pydantic import ValidationError
 
 from video2notes.audio import FasterWhisperBackend, FasterWhisperConfig
 from video2notes.llm import (
-    EndpointStyle,
+    AnthropicMessagesBackend,
+    GeminiGenerateContentBackend,
+    GeminiInteractionsBackend,
     GenerationError,
     GenerationRequest,
     GenerationResult,
-    OpenAICompatibleBackend,
+    OllamaNativeChatBackend,
+    OpenAIChatCompletionsBackend,
+    OpenAIResponsesBackend,
     StructuredGenerationBackend,
 )
 from video2notes.notes import EvidenceNoteComposer
@@ -29,6 +33,7 @@ from video2notes.providers import (
     ModelRegistry,
     ModelSpec,
     ProviderKind,
+    ProviderProtocol,
     ProviderSpec,
 )
 from video2notes.sources import SourceRegistry
@@ -254,12 +259,9 @@ def _structured_backend(
     role: str,
     warnings: list[str],
 ) -> StructuredGenerationBackend | None:
-    if provider.kind not in {
-        ProviderKind.OPENAI_COMPATIBLE,
-        ProviderKind.OLLAMA,
-    }:
+    if provider.protocol is ProviderProtocol.LOCAL:
         warnings.append(
-            f"{role}: local text model '{model.id}' has no configured OpenAI-compatible endpoint."
+            f"{role}: local text model '{model.id}' has no configured HTTP generation adapter."
         )
         return None
     if provider.base_url is None:  # pragma: no cover - ProviderSpec validates this
@@ -271,12 +273,78 @@ def _structured_backend(
         if api_key is None:
             warnings.append(f"{role}: credential for provider '{provider.id}' is not available.")
             return None
+    if provider.protocol is ProviderProtocol.OPENAI_RESPONSES:
+        return OpenAIResponsesBackend(
+            provider_id=provider.id,
+            model_id=model.model_id,
+            base_url=provider.base_url,
+            api_key=api_key,
+            timeout_seconds=provider.request_timeout_seconds,
+        )
+    if provider.protocol is ProviderProtocol.OPENAI_CHAT_COMPLETIONS:
+        legacy_max_tokens = bool(
+            model.settings.get(
+                "legacy_max_tokens",
+                provider.protocol_options.get("legacy_max_tokens", False),
+            )
+        )
+        return OpenAIChatCompletionsBackend(
+            provider_id=provider.id,
+            model_id=model.model_id,
+            base_url=provider.base_url,
+            api_key=api_key,
+            legacy_max_tokens=legacy_max_tokens,
+            timeout_seconds=provider.request_timeout_seconds,
+        )
+    if provider.protocol is ProviderProtocol.ANTHROPIC_MESSAGES:
+        if api_key is None:
+            warnings.append(f"{role}: credential for provider '{provider.id}' is not configured.")
+            return None
+        anthropic_version = str(
+            provider.protocol_options.get("anthropic_version", "2023-06-01")
+        ).strip()
+        if not anthropic_version:
+            warnings.append(f"{role}: provider '{provider.id}' has an invalid Anthropic version.")
+            return None
+        return AnthropicMessagesBackend(
+            provider_id=provider.id,
+            model_id=model.model_id,
+            base_url=provider.base_url,
+            api_key=api_key,
+            anthropic_version=anthropic_version,
+            timeout_seconds=provider.request_timeout_seconds,
+        )
+    if provider.protocol is ProviderProtocol.GEMINI_GENERATE_CONTENT:
+        if api_key is None:
+            warnings.append(f"{role}: credential for provider '{provider.id}' is not configured.")
+            return None
+        return GeminiGenerateContentBackend(
+            provider_id=provider.id,
+            model_id=model.model_id,
+            base_url=provider.base_url,
+            api_key=api_key,
+            timeout_seconds=provider.request_timeout_seconds,
+        )
+    if provider.protocol is ProviderProtocol.GEMINI_INTERACTIONS:
+        if api_key is None:
+            warnings.append(f"{role}: credential for provider '{provider.id}' is not configured.")
+            return None
+        return GeminiInteractionsBackend(
+            provider_id=provider.id,
+            model_id=model.model_id,
+            base_url=provider.base_url,
+            api_key=api_key,
+            timeout_seconds=provider.request_timeout_seconds,
+        )
+    if provider.protocol is ProviderProtocol.OLLAMA_NATIVE_CHAT:
+        return OllamaNativeChatBackend(
+            provider_id=provider.id,
+            model_id=model.model_id,
+            base_url=provider.base_url,
+            timeout_seconds=provider.request_timeout_seconds,
+        )
 
-    return OpenAICompatibleBackend(
-        provider_id=provider.id,
-        model_id=model.model_id,
-        base_url=provider.base_url,
-        endpoint_style=EndpointStyle(provider.endpoint_style),
-        api_key=api_key,
-        timeout_seconds=provider.request_timeout_seconds,
+    warnings.append(
+        f"{role}: protocol '{provider.protocol.value}' has no structured-generation adapter."
     )
+    return None

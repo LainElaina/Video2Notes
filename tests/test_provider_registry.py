@@ -7,14 +7,18 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from video2notes.providers import (
+    PROTOCOL_CATALOG,
+    AuthScheme,
     Capability,
     KeyringSecretStore,
     Locality,
     ModelRegistry,
     ModelSpec,
     ProviderKind,
+    ProviderProtocol,
     ProviderSpec,
     SecretStatus,
+    StreamTransport,
 )
 
 
@@ -33,6 +37,94 @@ class InMemoryKeyring:
 
 
 class ModelRegistryTests(unittest.TestCase):
+    def test_schema_v1_payload_migrates_to_explicit_protocol_and_auth(self) -> None:
+        registry = ModelRegistry.model_validate(
+            {
+                "schema_version": 1,
+                "providers": {
+                    "cloud": {
+                        "id": "cloud",
+                        "display_name": "Legacy cloud",
+                        "kind": "openai_compatible",
+                        "base_url": "https://example.invalid/v1",
+                        "credential_ref": "keyring://Video2Notes/providers/cloud",
+                        "endpoint_style": "responses",
+                        "locality": "cloud",
+                    }
+                },
+                "models": {},
+                "roles": {},
+            }
+        )
+
+        provider = registry.providers["cloud"]
+        self.assertEqual(registry.schema_version, 2)
+        self.assertEqual(provider.protocol, ProviderProtocol.OPENAI_RESPONSES)
+        self.assertEqual(provider.auth_scheme, AuthScheme.BEARER)
+        self.assertEqual(provider.endpoint_style, "responses")
+        dumped = registry.model_dump(mode="json")
+        self.assertEqual(dumped["schema_version"], 2)
+        self.assertNotIn("secret", str(dumped).lower())
+
+    def test_protocol_catalog_describes_transport_without_model_names(self) -> None:
+        required = {
+            ProviderProtocol.LOCAL,
+            ProviderProtocol.OPENAI_RESPONSES,
+            ProviderProtocol.OPENAI_CHAT_COMPLETIONS,
+            ProviderProtocol.ANTHROPIC_MESSAGES,
+            ProviderProtocol.GEMINI_GENERATE_CONTENT,
+            ProviderProtocol.GEMINI_INTERACTIONS,
+            ProviderProtocol.OLLAMA_NATIVE_CHAT,
+        }
+        self.assertTrue(required.issubset(PROTOCOL_CATALOG))
+        self.assertEqual(
+            PROTOCOL_CATALOG[ProviderProtocol.ANTHROPIC_MESSAGES].default_auth_scheme,
+            AuthScheme.X_API_KEY,
+        )
+        self.assertEqual(
+            PROTOCOL_CATALOG[ProviderProtocol.GEMINI_GENERATE_CONTENT].discovery_path,
+            "/models",
+        )
+        self.assertEqual(
+            PROTOCOL_CATALOG[ProviderProtocol.OLLAMA_NATIVE_CHAT].stream_transport,
+            StreamTransport.NDJSON,
+        )
+        self.assertFalse(
+            PROTOCOL_CATALOG[
+                ProviderProtocol.OPENAI_AUDIO_TRANSCRIPTIONS
+            ].structured_generation_adapter
+        )
+        self.assertFalse(
+            PROTOCOL_CATALOG[ProviderProtocol.CUSTOM_HTTP].structured_generation_adapter
+        )
+        for template in PROTOCOL_CATALOG.values():
+            self.assertFalse(hasattr(template, "models"))
+            self.assertFalse(hasattr(template, "model_ids"))
+
+    def test_protocol_template_does_not_infer_model_capabilities(self) -> None:
+        provider = ProviderSpec(
+            id="anthropic",
+            display_name="Anthropic",
+            kind=ProviderKind.ANTHROPIC,
+            protocol=ProviderProtocol.ANTHROPIC_MESSAGES,
+            auth_scheme=AuthScheme.X_API_KEY,
+            base_url="https://api.anthropic.com/v1",
+            locality=Locality.CLOUD,
+        )
+        model = ModelSpec(
+            id="unverified",
+            provider_id=provider.id,
+            model_id="user-supplied-model",
+            display_name="Unverified",
+            capabilities=set(),
+            locality=Locality.CLOUD,
+        )
+        registry = ModelRegistry(
+            providers={provider.id: provider},
+            models={model.id: model},
+        )
+        self.assertEqual(registry.compatible_models("notes.fact_extractor"), [])
+
     def test_incompatible_role_binding_is_rejected(self) -> None:
         provider = ProviderSpec(
             id="cloud",
