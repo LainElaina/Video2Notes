@@ -10,6 +10,7 @@ hard per-process limiter.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -310,12 +311,8 @@ def run_worker(
             }
             if message is not None:
                 payload["message"] = message
-            try:
+            with contextlib.suppress(OSError):
                 print(json.dumps(payload, ensure_ascii=False), flush=True)
-            except OSError:
-                # A detached benchmark must not fail recognition merely because its
-                # optional progress console was closed by the invoking terminal.
-                pass
 
         outcome = pipeline.run(workspace, request, emit=emit)
         _atomic_write_json(
