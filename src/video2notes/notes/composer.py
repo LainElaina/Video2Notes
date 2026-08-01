@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -390,7 +390,8 @@ def build_deterministic_note(
     evidence_by_id = {item.id: item for item in fusion.evidence}
     facts: list[FactCard] = []
     sections: list[NoteSection] = []
-    takeaway_candidates: list[str] = []
+    speech_takeaway_candidates: list[EvidenceSpan] = []
+    ocr_takeaway_candidates: list[EvidenceSpan] = []
     emitted_evidence_ids: set[str] = set()
     emitted_texts: dict[EvidenceModality, list[str]] = {}
     ocr_fact_limit_per_window = (
@@ -398,8 +399,6 @@ def build_deterministic_note(
     )
 
     for section_index, window in enumerate(fusion.windows):
-        if len(sections) >= resolved_report.max_sections:
-            break
         window_evidence = [
             evidence_by_id[item] for item in window.evidence_ids if item in evidence_by_id
         ]
@@ -458,8 +457,13 @@ def build_deterministic_note(
             selected_textual.append(evidence)
             emitted_evidence_ids.add(evidence.id)
             emitted_texts.setdefault(evidence.modality, []).append(normalized)
-            if len(takeaway_candidates) < resolved_report.max_takeaways * 2:
-                takeaway_candidates.append(text)
+            if evidence.modality in {
+                EvidenceModality.ASR,
+                EvidenceModality.PLATFORM_CAPTION,
+            }:
+                speech_takeaway_candidates.append(evidence)
+            elif evidence.modality is EvidenceModality.OCR:
+                ocr_takeaway_candidates.append(evidence)
             label = _modality_label(evidence.modality)
             body_lines.append(f"- **{label}** {text}")
             if len(fact_ids) >= resolved_report.max_facts_per_section:
@@ -491,6 +495,16 @@ def build_deterministic_note(
             )
         )
 
+    sections = _coalesce_deterministic_sections(
+        sections,
+        quality_mode=metadata.quality_mode,
+        max_sections=resolved_report.max_sections,
+    )
+    takeaway_candidates = _select_deterministic_takeaways(
+        speech_takeaway_candidates,
+        ocr_takeaway_candidates,
+        limit=resolved_report.max_takeaways,
+    )
     abstract = (
         "；".join(takeaway_candidates[:3])
         if takeaway_candidates
@@ -509,17 +523,187 @@ def build_deterministic_note(
 
 def _deterministic_evidence_sort_key(
     evidence: EvidenceSpan,
-) -> tuple[int, int, float, int, str]:
-    priority = {
-        EvidenceModality.METADATA: 0,
-        EvidenceModality.PLATFORM_CAPTION: 1,
-        EvidenceModality.ASR: 2,
-        EvidenceModality.OCR: 3,
-        EvidenceModality.VISUAL: 4,
-    }[evidence.modality]
+) -> tuple[int, int, int, float, int, int, str]:
     text_length = len(_canonical_note_text(_evidence_text(evidence)))
     confidence = evidence.confidence if evidence.confidence is not None else 0.5
-    return (priority, evidence.start_us, -confidence, -text_length, evidence.id)
+    if evidence.modality in {
+        EvidenceModality.ASR,
+        EvidenceModality.PLATFORM_CAPTION,
+    }:
+        return (0, 0, evidence.start_us, 0.0, 0, evidence.end_us, evidence.id)
+    if evidence.modality is EvidenceModality.OCR:
+        return (
+            1,
+            _ocr_information_tier(evidence),
+            0,
+            -confidence,
+            -text_length,
+            evidence.start_us,
+            evidence.id,
+        )
+    return (2, 0, evidence.start_us, -confidence, -text_length, evidence.end_us, evidence.id)
+
+
+def _ocr_information_tier(evidence: EvidenceSpan) -> int:
+    text = _evidence_text(evidence)
+    canonical = _canonical_note_text(text)
+    if any(character.isdigit() for character in text):
+        semantic_characters = sum(character.isalpha() for character in text)
+        if semantic_characters >= 3 and len(canonical) >= 8:
+            return 0
+        if semantic_characters >= 2 and len(canonical) >= 6:
+            return 1
+        # Short counters remain eligible facts and exact numeric changes are
+        # never deduplicated, but they should not outrank a complete sentence.
+        return 2
+    ascii_letters = [
+        character for character in text if character.isascii() and character.isalpha()
+    ]
+    if (
+        ascii_letters
+        and len(ascii_letters) >= 2
+        and all(character.isupper() for character in ascii_letters)
+        and not any(not character.isascii() and character.isalpha() for character in text)
+    ):
+        return 3
+    if len(canonical) >= 8:
+        return 0
+    if len(canonical) >= 5:
+        return 1
+    if len(canonical) >= 2:
+        return 2
+    return 4
+
+
+def _select_deterministic_takeaways(
+    speech: Sequence[EvidenceSpan],
+    ocr: Sequence[EvidenceSpan],
+    *,
+    limit: int,
+) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    def add(evidence: EvidenceSpan) -> None:
+        text = _evidence_text(evidence)
+        canonical = _canonical_note_text(text)
+        if (
+            evidence.modality
+            in {EvidenceModality.ASR, EvidenceModality.PLATFORM_CAPTION}
+            and len(canonical) < 2
+        ):
+            # Keep acknowledgements such as “好”/“嗯” in the timed fact layer,
+            # but do not spend scarce overview slots on non-informative fillers.
+            return
+        if canonical and canonical not in seen and len(selected) < limit:
+            seen.add(canonical)
+            selected.append(text)
+
+    for evidence in sorted(speech, key=lambda item: (item.start_us, item.end_us, item.id)):
+        add(evidence)
+    if len(selected) >= limit:
+        return selected
+    for evidence in sorted(
+        ocr,
+        key=lambda item: (
+            _ocr_information_tier(item),
+            -(item.confidence if item.confidence is not None else 0.5),
+            -len(_canonical_note_text(_evidence_text(item))),
+            item.start_us,
+            item.id,
+        ),
+    ):
+        if _ocr_information_tier(evidence) <= 1 and not _is_persistent_edge_chrome(evidence):
+            add(evidence)
+    return selected
+
+
+_SECTION_TARGET_US = {
+    "fast": 5_000_000,
+    "balanced": 4_000_000,
+    "accurate": 3_000_000,
+}
+
+
+def _coalesce_deterministic_sections(
+    sections: Sequence[NoteSection],
+    *,
+    quality_mode: str,
+    max_sections: int,
+) -> list[NoteSection]:
+    if not sections:
+        return []
+    preferred = _SECTION_TARGET_US.get(quality_mode.casefold(), 4_000_000)
+    total_span = max(1, sections[-1].end_us - sections[0].start_us)
+    capacity_floor = (total_span + max_sections - 1) // max_sections
+    readable_floor = max(round(preferred * 0.75), capacity_floor)
+    groups: list[list[NoteSection]] = []
+    pending: list[NoteSection] = []
+    for section in sections:
+        pending.append(section)
+        if pending[-1].end_us - pending[0].start_us >= readable_floor:
+            groups.append(pending)
+            pending = []
+    if pending:
+        if groups:
+            groups[-1].extend(pending)
+        else:
+            groups.append(pending)
+    while len(groups) > max_sections:
+        groups[-2].extend(groups.pop())
+    return [
+        _merge_deterministic_section_group(group, index=index)
+        for index, group in enumerate(groups, start=1)
+    ]
+
+
+def _merge_deterministic_section_group(
+    group: Sequence[NoteSection],
+    *,
+    index: int,
+) -> NoteSection:
+    first = group[0]
+    representative = max(
+        group,
+        key=lambda section: (
+            int(
+                "**语音**" in section.body_markdown
+                or "**平台字幕**" in section.body_markdown
+            ),
+            len(_canonical_note_text(section.title)),
+            -section.start_us,
+        ),
+    )
+    return NoteSection(
+        id=f"section-{index:03d}",
+        title=representative.title,
+        start_us=first.start_us,
+        end_us=group[-1].end_us,
+        summary=representative.summary,
+        body_markdown="\n\n".join(
+            section.body_markdown for section in group if section.body_markdown
+        ),
+        evidence_ids=_stable_unique(
+            identifier for section in group for identifier in section.evidence_ids
+        ),
+        fact_ids=_stable_unique(
+            identifier for section in group for identifier in section.fact_ids
+        ),
+        material_ids=_stable_unique(
+            identifier for section in group for identifier in section.material_ids
+        ),
+        screenshots=[screenshot for section in group for screenshot in section.screenshots],
+    )
+
+
+def _stable_unique(values: Iterable[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            output.append(value)
+    return output
 
 
 def _canonical_note_text(text: str) -> str:

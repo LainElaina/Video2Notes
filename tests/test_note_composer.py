@@ -11,8 +11,11 @@ from video2notes.llm import GenerationRequest, GenerationResult
 from video2notes.notes import (
     EvidenceNoteComposer,
     NoteMetadata,
+    NoteScreenshot,
     ReportPreset,
     ReportSpec,
+    SupportingMaterial,
+    SupportingMaterialKind,
     build_deterministic_note,
 )
 
@@ -607,7 +610,274 @@ class NoteComposerTests(unittest.TestCase):
             [item.claim for item in note.facts],
             ["temperature 20.0", "temperature 20.1"],
         )
-        self.assertEqual(len(note.sections), 2)
+        self.assertEqual(len(note.sections), 1)
+        self.assertEqual(set(note.sections[0].fact_ids), {item.id for item in note.facts})
+
+    def test_deterministic_overview_prefers_chronological_speech_over_early_ocr(self) -> None:
+        run_id = "run-speech-overview"
+        evidence = [
+            *[
+                EvidenceSpan(
+                    id=f"ocr-noise-{index}",
+                    run_id=run_id,
+                    modality=EvidenceModality.OCR,
+                    start_us=0,
+                    end_us=500_000,
+                    raw_text=text,
+                    normalized_text=text,
+                    confidence=0.99,
+                )
+                for index, text in enumerate(("STORMCREW+", "APK", "ZIP"))
+            ],
+            *[
+                EvidenceSpan(
+                    id=f"speech-{index}",
+                    run_id=run_id,
+                    modality=EvidenceModality.ASR,
+                    start_us=start,
+                    end_us=start + 500_000,
+                    raw_text=text,
+                    normalized_text=text,
+                    confidence=0.90,
+                )
+                for index, (start, text) in enumerate(
+                    (
+                        (1_000_000, "先下载弹幕机"),
+                        (2_000_000, "好"),
+                        (3_000_000, "然后安装语音插件"),
+                        (5_000_000, "最后复制到插件目录"),
+                    )
+                )
+            ],
+        ]
+        fusion = build_evidence_timeline(evidence)
+        metadata = NoteMetadata(
+            title="语音优先摘要",
+            run_id=run_id,
+            source_kind="local",
+            source_locator="overview.mp4",
+            duration_us=6_000_000,
+            quality_mode="balanced",
+        )
+
+        note = build_deterministic_note(
+            metadata,
+            fusion,
+            report_spec=ReportSpec(max_takeaways=3),
+        )
+
+        self.assertEqual(
+            note.key_takeaways,
+            ["先下载弹幕机", "然后安装语音插件", "最后复制到插件目录"],
+        )
+        self.assertEqual(
+            note.abstract,
+            "先下载弹幕机；然后安装语音插件；最后复制到插件目录",
+        )
+
+    def test_ocr_fact_ranking_keeps_descriptions_and_numeric_changes_ahead_of_ui(self) -> None:
+        run_id = "run-ocr-ranking"
+        texts = [
+            "A",
+            "APK",
+            "ZIP",
+            "STORMCREW+",
+            "点击下载安装包并完成插件配置",
+            "选择弹幕机的 plugins 目录",
+            "复制文件后重新启动应用",
+            "当前连接状态显示为成功",
+            "temperature 20.0",
+            "temperature 20.1",
+            "40",
+        ]
+        evidence = [
+            EvidenceSpan(
+                id=f"ocr-rank-{index}",
+                run_id=run_id,
+                modality=EvidenceModality.OCR,
+                start_us=0,
+                end_us=1_000_000,
+                raw_text=text,
+                normalized_text=text,
+                confidence=0.99 if index < 4 else 0.90,
+            )
+            for index, text in enumerate(texts)
+        ]
+        fusion = build_evidence_timeline(evidence)
+        metadata = NoteMetadata(
+            title="OCR 排序",
+            run_id=run_id,
+            source_kind="local",
+            source_locator="ranking.mp4",
+            duration_us=1_000_000,
+            quality_mode="accurate",
+        )
+
+        note = build_deterministic_note(metadata, fusion)
+        claims = [item.claim for item in note.facts]
+
+        self.assertEqual(len(note.evidence), len(texts))
+        self.assertNotIn("A", claims)
+        self.assertIn("temperature 20.0", claims)
+        self.assertIn("temperature 20.1", claims)
+        self.assertIn("40", claims)
+        self.assertLess(
+            claims.index("点击下载安装包并完成插件配置"),
+            claims.index("40"),
+        )
+
+    def test_balanced_section_coalescing_preserves_all_references_and_screenshots(self) -> None:
+        run_id = "run-section-coalesce"
+        evidence = [
+            EvidenceSpan(
+                id=f"speech-part-{index}",
+                run_id=run_id,
+                modality=EvidenceModality.ASR,
+                start_us=index * 1_000_000,
+                end_us=(index + 1) * 1_000_000,
+                raw_text=f"步骤 {index + 1}",
+                normalized_text=f"步骤 {index + 1}",
+                confidence=0.95,
+            )
+            for index in range(8)
+        ]
+        states = [
+            VisualState(
+                id=f"state-{index}",
+                run_id=run_id,
+                start_us=index * 1_000_000,
+                end_us=(index + 1) * 1_000_000,
+                transition_us=index * 1_000_000,
+                stable_keyframe_us=index * 1_000_000 + 500_000,
+                change_reason="screen_text_change",
+            )
+            for index in range(8)
+        ]
+        fusion = build_evidence_timeline(evidence, states)
+        screenshots = {
+            window.id: [
+                NoteScreenshot(
+                    relative_path=f"screenshots/{index}.jpg",
+                    timestamp_us=window.start_us,
+                    caption=f"截图 {index}",
+                    alt_text=f"截图 {index}",
+                    evidence_ids=list(window.evidence_ids),
+                )
+            ]
+            for index, window in enumerate(fusion.windows)
+        }
+        materials = [
+            SupportingMaterial(
+                id="material-A",
+                kind=SupportingMaterialKind.TEXT,
+                title="开头资料",
+                artifact_path="supporting/a.txt",
+                media_type="text/plain",
+                sha256="a" * 64,
+                size_bytes=1,
+                text_content="a",
+                start_us=0,
+                end_us=2_000_000,
+            ),
+            SupportingMaterial(
+                id="material-B",
+                kind=SupportingMaterialKind.TEXT,
+                title="结尾资料",
+                artifact_path="supporting/b.txt",
+                media_type="text/plain",
+                sha256="b" * 64,
+                size_bytes=1,
+                text_content="b",
+                start_us=6_000_000,
+                end_us=8_000_000,
+            ),
+        ]
+        metadata = NoteMetadata(
+            title="章节合并",
+            run_id=run_id,
+            source_kind="local",
+            source_locator="sections.mp4",
+            duration_us=8_000_000,
+            quality_mode="balanced",
+        )
+
+        note = build_deterministic_note(
+            metadata,
+            fusion,
+            screenshots_by_window=screenshots,
+            supporting_materials=materials,
+        )
+
+        self.assertEqual([item.id for item in note.sections], ["section-001", "section-002"])
+        self.assertEqual(note.sections[0].end_us, note.sections[1].start_us)
+        self.assertEqual(
+            {identifier for section in note.sections for identifier in section.fact_ids},
+            {item.id for item in note.facts},
+        )
+        self.assertEqual(
+            {identifier for section in note.sections for identifier in section.evidence_ids},
+            {item.id for item in note.evidence},
+        )
+        self.assertEqual(
+            {identifier for section in note.sections for identifier in section.material_ids},
+            {"material-A", "material-B"},
+        )
+        self.assertEqual(sum(len(section.screenshots) for section in note.sections), 8)
+
+    def test_section_limit_coalesces_all_windows_without_truncating_the_tail(self) -> None:
+        run_id = "run-long-coalesce"
+        evidence = [
+            EvidenceSpan(
+                id=f"long-speech-{index}",
+                run_id=run_id,
+                modality=EvidenceModality.ASR,
+                start_us=index * 1_000_000,
+                end_us=(index + 1) * 1_000_000,
+                raw_text=f"长视频步骤 {index + 1}",
+                normalized_text=f"长视频步骤 {index + 1}",
+                confidence=0.95,
+            )
+            for index in range(30)
+        ]
+        states = [
+            VisualState(
+                id=f"long-state-{index}",
+                run_id=run_id,
+                start_us=index * 1_000_000,
+                end_us=(index + 1) * 1_000_000,
+                transition_us=index * 1_000_000,
+                stable_keyframe_us=index * 1_000_000 + 500_000,
+                change_reason="screen_text_change",
+            )
+            for index in range(30)
+        ]
+        fusion = build_evidence_timeline(evidence, states)
+        metadata = NoteMetadata(
+            title="长视频章节覆盖",
+            run_id=run_id,
+            source_kind="local",
+            source_locator="long.mp4",
+            duration_us=30_000_000,
+            quality_mode="accurate",
+        )
+
+        note = build_deterministic_note(
+            metadata,
+            fusion,
+            report_spec=ReportSpec(max_sections=6),
+        )
+
+        self.assertLessEqual(len(note.sections), 6)
+        self.assertEqual(note.sections[-1].end_us, 30_000_000)
+        self.assertEqual(len(note.facts), 30)
+        self.assertEqual(
+            {identifier for section in note.sections for identifier in section.evidence_ids},
+            {item.id for item in note.evidence},
+        )
+        self.assertEqual(
+            {identifier for section in note.sections for identifier in section.fact_ids},
+            {item.id for item in note.facts},
+        )
 
     def test_detailed_and_professional_notes_keep_persistent_edge_warning(self) -> None:
         warning = EvidenceSpan(

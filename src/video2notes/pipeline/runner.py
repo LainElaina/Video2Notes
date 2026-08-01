@@ -208,7 +208,7 @@ class Video2NotesPipeline:
         "audio.asr": "5",
         "ocr.extract": "4",
         "evidence.fuse": "3",
-        "notes.compose": "6",
+        "notes.compose": "7",
         "render.outputs": "6",
     }
 
