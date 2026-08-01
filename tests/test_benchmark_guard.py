@@ -13,6 +13,7 @@ from video2notes.system.benchmark_guard import (
     BenchmarkGuardConfig,
     NvidiaReading,
     PsutilProcessLimiter,
+    PsutilResourceSampler,
     ResourceGuardError,
     ResourceSample,
     ResourceSummary,
@@ -271,6 +272,73 @@ class ProcessLimiterTests(unittest.TestCase):
         self.assertEqual(process.priority, 16_384)
         self.assertTrue(priority)
         self.assertEqual(notes, ())
+
+
+class ProcessSamplerTests(unittest.TestCase):
+    def test_process_cpu_baseline_is_retained_across_poll_objects(self) -> None:
+        class Memory:
+            rss = 256 * 1024**2
+
+        class Process:
+            def __init__(self, process_id: int) -> None:
+                self.pid = process_id
+                self.cpu_calls = 0
+
+            def children(self, *, recursive: bool) -> list[Process]:
+                self.assert_recursive(recursive)
+                return []
+
+            @staticmethod
+            def assert_recursive(value: bool) -> None:
+                if not value:
+                    raise AssertionError("recursive process sampling is required")
+
+            def create_time(self) -> float:
+                return 1234.5
+
+            def cpu_percent(self, interval: float | None = None) -> float:
+                self.assert_recursive(interval is None)
+                self.cpu_calls += 1
+                return 0.0 if self.cpu_calls == 1 else 160.0
+
+            def memory_info(self) -> Memory:
+                return Memory()
+
+        class Psutil:
+            created: list[Process] = []
+
+            @staticmethod
+            def cpu_count(*, logical: bool) -> int:
+                if not logical:
+                    raise AssertionError("logical CPU count is required")
+                return 16
+
+            @staticmethod
+            def cpu_percent(interval: float | None = None) -> float:
+                if interval is not None:
+                    raise AssertionError("system sampling must be non-blocking")
+                return 25.0
+
+            @classmethod
+            def Process(cls, process_id: int) -> Process:
+                process = Process(process_id)
+                cls.created.append(process)
+                return process
+
+        sampler = PsutilResourceSampler(
+            psutil_module=Psutil(),
+            gpu_probe=lambda: None,
+        )
+
+        first = sampler.sample(42, elapsed_seconds=0)
+        second = sampler.sample(42, elapsed_seconds=1)
+
+        self.assertEqual(first.process_tree_cpu_percent, 0)
+        self.assertEqual(second.process_tree_cpu_percent, 10)
+        self.assertEqual(second.process_tree_rss_bytes, 256 * 1024**2)
+        self.assertEqual(len(Psutil.created), 2)
+        self.assertEqual(Psutil.created[0].cpu_calls, 2)
+        self.assertEqual(Psutil.created[1].cpu_calls, 0)
 
 
 class NvidiaProbeTests(unittest.TestCase):

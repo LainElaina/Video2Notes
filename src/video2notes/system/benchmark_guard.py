@@ -478,7 +478,10 @@ class PsutilResourceSampler:
         self._psutil = psutil_module or importlib.import_module("psutil")
         logical = self._psutil.cpu_count(logical=True) or os.cpu_count() or 1
         self._logical_processors = max(1, int(logical))
-        self._known_process_ids: set[int] = set()
+        # ``psutil.Process.cpu_percent(interval=None)`` stores its comparison
+        # baseline on the Process instance, not globally by PID.  Keep the same
+        # object across polls; recreating it on every sample would report 0 forever.
+        self._process_cache: dict[int, tuple[float | None, Any]] = {}
         self._gpu_probe = gpu_probe or probe_nvidia
         # Prime psutil's non-blocking system CPU counter before baseline samples.
         self._psutil.cpu_percent(interval=None)
@@ -514,14 +517,24 @@ class PsutilResourceSampler:
         cpu_total = 0.0
         rss_total = 0
         sampled = False
-        for process in processes:
+        active_process_ids: set[int] = set()
+        for candidate in processes:
             try:
-                pid = int(process.pid)
-                if pid not in self._known_process_ids:
+                pid = int(candidate.pid)
+                active_process_ids.add(pid)
+                identity = _process_create_time(candidate)
+                cached = self._process_cache.get(pid)
+                if cached is None or (
+                    identity is not None
+                    and cached[0] is not None
+                    and identity != cached[0]
+                ):
+                    process = candidate
                     process.cpu_percent(interval=None)
-                    self._known_process_ids.add(pid)
+                    self._process_cache[pid] = (identity, process)
                     cpu_value = 0.0
                 else:
+                    process = cached[1]
                     cpu_value = float(process.cpu_percent(interval=None))
                 rss_value = int(process.memory_info().rss)
             except Exception:  # process can exit between enumeration and sampling
@@ -529,9 +542,20 @@ class PsutilResourceSampler:
             sampled = True
             cpu_total += max(0.0, cpu_value)
             rss_total += max(0, rss_value)
+        for pid in tuple(self._process_cache):
+            if pid not in active_process_ids:
+                self._process_cache.pop(pid, None)
         if not sampled:
             return None, None
         return cpu_total / self._logical_processors, rss_total
+
+
+def _process_create_time(process: Any) -> float | None:
+    try:
+        value = process.create_time()
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        return None
+    return float(value)
 
 
 def build_guard_environment(
