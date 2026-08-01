@@ -202,7 +202,7 @@ function Assert-BackendManifest {
         if ($item.Length -ne [long]$entry.bytes) {
             throw "Frozen backend size mismatch for '$relativePath'."
         }
-        $actualHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = (Get-Video2NotesFileSha256 -Path $candidate).ToLowerInvariant()
         if ($actualHash -ne ([string]$entry.sha256).ToLowerInvariant()) {
             throw "Frozen backend hash mismatch for '$relativePath'."
         }
@@ -324,7 +324,7 @@ function Write-Sha256Sums {
             Sort-Object FullName |
             ForEach-Object {
                 $relative = $_.FullName.Substring($PortableRoot.Length).TrimStart("\") -replace "\\", "/"
-                "{0}  {1}" -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $relative
+                "{0}  {1}" -f (Get-Video2NotesFileSha256 -Path $_.FullName), $relative
             }
     )
     [IO.File]::WriteAllLines($checksumPath, $lines, [Text.UTF8Encoding]::new($false))
@@ -356,7 +356,7 @@ function Assert-PortableChecksums {
         }
         $candidate = Join-Path $PortableRoot ($relativePath -replace "/", "\")
         Require-File $candidate "Portable checksum entry"
-        $actualHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
+        $actualHash = Get-Video2NotesFileSha256 -Path $candidate
         if ($actualHash -ne $expectedHash) {
             throw "Portable checksum mismatch for '$relativePath'. Move personal changes out before rebuilding."
         }
@@ -459,8 +459,8 @@ try {
         user_model_weights_included = $false
         packaged_runtime_assets = $StagedBackendManifest.packaged_runtime_assets
         runtime_components = $StagedBackendManifest.components
-        executable_sha256 = (Get-FileHash -LiteralPath (Join-Path $safeStaging "Video2Notes.exe") -Algorithm SHA256).Hash
-        sidecar_manifest_sha256 = (Get-FileHash -LiteralPath (Join-Path $safeStaging "backend\manifest.json") -Algorithm SHA256).Hash
+        executable_sha256 = Get-Video2NotesFileSha256 -Path (Join-Path $safeStaging "Video2Notes.exe")
+        sidecar_manifest_sha256 = Get-Video2NotesFileSha256 -Path (Join-Path $safeStaging "backend\manifest.json")
     }
     $buildInfo | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $safeStaging "BUILD_INFO.json") -Encoding utf8
     [ordered]@{
@@ -526,7 +526,7 @@ $PortableRuntimeNote
         if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath -Force }
         if (Test-Path -LiteralPath $archiveHashPath) { Remove-Item -LiteralPath $archiveHashPath -Force }
         Compress-Archive -LiteralPath $safeCurrent -DestinationPath $archivePath -CompressionLevel Optimal
-        $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+        $archiveHash = Get-Video2NotesFileSha256 -Path $archivePath
         [IO.File]::WriteAllText(
             $archiveHashPath,
             "$archiveHash  $([IO.Path]::GetFileName($archivePath))`n",

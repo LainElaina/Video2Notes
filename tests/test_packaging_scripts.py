@@ -81,6 +81,8 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('ExpectedSourceFingerprint', script)
         self.assertIn('sidecar_source_fingerprint_sha256', script)
         self.assertIn('Rebuild without -ReuseSidecar', script)
+        self.assertIn('Get-Video2NotesFileSha256', script)
+        self.assertNotIn('Get-FileHash', script)
 
     def test_sidecar_source_fingerprint_covers_code_and_packaging_inputs(self) -> None:
         script = self.read("scripts/packaging_common.ps1")
@@ -90,7 +92,9 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('scripts\\build_sidecar.ps1', script)
         self.assertIn('scripts\\pyinstaller_runtime_hook.py', script)
         self.assertIn('scripts\\sidecar_entry.py', script)
-        self.assertIn('Get-FileHash', script)
+        self.assertIn('Get-Video2NotesFileSha256', script)
+        self.assertIn('[IO.File]::OpenRead', script)
+        self.assertNotIn('Get-FileHash', script)
         self.assertIn('Security.Cryptography.SHA256', script)
 
     def test_sidecar_smoke_requires_tools_and_full_runtime_imports(self) -> None:

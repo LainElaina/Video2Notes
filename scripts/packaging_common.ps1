@@ -1,3 +1,25 @@
+function Get-Video2NotesFileSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    # Use the framework implementation directly instead of relying on
+    # Microsoft.PowerShell.Utility being available through module autoloading.
+    # Portable builds also call this inside a guarded, profile-free child shell.
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    try {
+        $bytes = $algorithm.ComputeHash($stream)
+        return ([BitConverter]::ToString($bytes) -replace "-", "")
+    }
+    finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 function Get-Video2NotesSidecarSourceFingerprint {
     [CmdletBinding()]
     param(
@@ -45,7 +67,7 @@ function Get-Video2NotesSidecarSourceFingerprint {
             Sort-Object FullName |
             ForEach-Object {
                 $relativePath = $_.FullName.Substring($resolvedRoot.Length).TrimStart("\") -replace "\\", "/"
-                $fileHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                $fileHash = (Get-Video2NotesFileSha256 -Path $_.FullName).ToLowerInvariant()
                 "{0}`0{1}" -f $relativePath, $fileHash
             }
     )
