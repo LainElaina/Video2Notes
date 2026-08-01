@@ -5,7 +5,7 @@ import threading
 import time
 import unittest
 
-from video2notes.domain import EvidenceModality, EvidenceSpan
+from video2notes.domain import BoundingBox, EvidenceModality, EvidenceSpan, VisualState
 from video2notes.fusion import build_evidence_timeline
 from video2notes.llm import GenerationRequest, GenerationResult
 from video2notes.notes import (
@@ -83,6 +83,52 @@ class NoteComposerTests(unittest.TestCase):
         self.assertEqual(
             set(note.sections[0].evidence_ids),
             {"asr-1", "ocr-1"},
+        )
+
+    def test_deterministic_note_keeps_metadata_as_provenance_not_a_fact(self) -> None:
+        evidence = [
+            EvidenceSpan(
+                id="metadata-source",
+                run_id="run-metadata",
+                modality=EvidenceModality.METADATA,
+                start_us=0,
+                end_us=2_000_000,
+                raw_text="clip-210-300 · local-file",
+                normalized_text="clip-210-300 local-file",
+            ),
+            EvidenceSpan(
+                id="asr-instruction",
+                run_id="run-metadata",
+                modality=EvidenceModality.ASR,
+                start_us=0,
+                end_us=2_000_000,
+                raw_text="打开弹幕机并安装 TTS 插件。",
+                normalized_text="打开弹幕机并安装 TTS 插件。",
+                confidence=0.94,
+            ),
+        ]
+        fusion = build_evidence_timeline(evidence)
+        metadata = NoteMetadata(
+            title="多平台直播和发布视频",
+            run_id="run-metadata",
+            source_kind="local",
+            source_locator="clip-210-300.mp4",
+            duration_us=2_000_000,
+            quality_mode="balanced",
+        )
+
+        note = build_deterministic_note(metadata, fusion)
+
+        self.assertEqual(note.metadata.title, "多平台直播和发布视频")
+        self.assertEqual(note.key_takeaways, ["打开弹幕机并安装 TTS 插件。"])
+        self.assertEqual([item.claim for item in note.facts], ["打开弹幕机并安装 TTS 插件。"])
+        self.assertEqual(
+            {item.id for item in note.evidence},
+            {"metadata-source", "asr-instruction"},
+        )
+        self.assertEqual(
+            set(note.sections[0].evidence_ids),
+            {"metadata-source", "asr-instruction"},
         )
 
     def test_roles_can_use_different_models_and_verifier_marks_review(self) -> None:
@@ -354,3 +400,249 @@ class NoteComposerTests(unittest.TestCase):
         self.assertLessEqual(len(note.sections), 1)
         self.assertLessEqual(len(note.key_takeaways), 1)
         self.assertEqual(note.metadata.report_preset, "concise")
+
+    def test_deterministic_note_does_not_repeat_long_ocr_span_across_windows(self) -> None:
+        evidence = [
+            EvidenceSpan(
+                id="ocr-persistent",
+                run_id="run-repeat",
+                modality=EvidenceModality.OCR,
+                start_us=0,
+                end_us=3_000_000,
+                raw_text="平台直播设置",
+                normalized_text="平台直播设置",
+                confidence=0.95,
+            ),
+            EvidenceSpan(
+                id="speech-first",
+                run_id="run-repeat",
+                modality=EvidenceModality.ASR,
+                start_us=0,
+                end_us=500_000,
+                raw_text="第一段",
+                normalized_text="第一段",
+            ),
+            EvidenceSpan(
+                id="speech-second",
+                run_id="run-repeat",
+                modality=EvidenceModality.ASR,
+                start_us=2_000_000,
+                end_us=2_500_000,
+                raw_text="第二段",
+                normalized_text="第二段",
+            ),
+        ]
+        fusion = build_evidence_timeline(evidence)
+        metadata = NoteMetadata(
+            title="跨窗口",
+            run_id="run-repeat",
+            source_kind="local",
+            source_locator="repeat.mp4",
+            duration_us=3_000_000,
+            quality_mode="balanced",
+        )
+
+        note = build_deterministic_note(metadata, fusion)
+
+        screen_facts = [item for item in note.facts if item.kind == "screen_text"]
+        self.assertEqual([item.claim for item in screen_facts], ["平台直播设置"])
+
+    def test_deterministic_note_caps_ocr_facts_without_dropping_evidence(self) -> None:
+        evidence = [
+            EvidenceSpan(
+                id="speech",
+                run_id="run-budget",
+                modality=EvidenceModality.ASR,
+                start_us=0,
+                end_us=1_000_000,
+                raw_text="讲解多平台发布流程",
+                normalized_text="讲解多平台发布流程",
+            ),
+            *[
+                EvidenceSpan(
+                    id=f"ocr-{index}",
+                    run_id="run-budget",
+                    modality=EvidenceModality.OCR,
+                    start_us=0,
+                    end_us=1_000_000,
+                    raw_text=f"界面字段 {index}",
+                    normalized_text=f"界面字段 {index}",
+                    confidence=0.90 + index / 1000,
+                )
+                for index in range(12)
+            ],
+        ]
+        fusion = build_evidence_timeline(evidence)
+        metadata = NoteMetadata(
+            title="事实预算",
+            run_id="run-budget",
+            source_kind="local",
+            source_locator="budget.mp4",
+            duration_us=1_000_000,
+            quality_mode="balanced",
+        )
+
+        note = build_deterministic_note(metadata, fusion)
+
+        self.assertEqual(len(note.evidence), len(evidence))
+        self.assertLessEqual(
+            sum(item.kind == "screen_text" for item in note.facts),
+            8,
+        )
+        self.assertTrue(any(item.kind == "speech" for item in note.facts))
+
+    def test_deterministic_note_ignores_repeated_edge_navigation_chrome(self) -> None:
+        chrome = EvidenceSpan(
+            id="ocr-chrome",
+            run_id="run-chrome",
+            modality=EvidenceModality.OCR,
+            start_us=0,
+            end_us=3_000_000,
+            raw_text="首页",
+            normalized_text="首页",
+            confidence=0.99,
+            bounding_boxes=[
+                BoundingBox(x=1000, y=200, width=60, height=30),
+            ],
+            provenance={
+                "observation_count": 5,
+                "frame_width": 1080,
+                "frame_height": 1920,
+            },
+        )
+        content = EvidenceSpan(
+            id="ocr-content",
+            run_id="run-chrome",
+            modality=EvidenceModality.OCR,
+            start_us=0,
+            end_us=3_000_000,
+            raw_text="多平台直播教程",
+            normalized_text="多平台直播教程",
+            confidence=0.95,
+            bounding_boxes=[
+                BoundingBox(x=200, y=500, width=500, height=60),
+            ],
+            provenance={
+                "observation_count": 5,
+                "frame_width": 1080,
+                "frame_height": 1920,
+            },
+        )
+        fusion = build_evidence_timeline([chrome, content])
+        metadata = NoteMetadata(
+            title="过滤界面导航",
+            run_id="run-chrome",
+            source_kind="local",
+            source_locator="chrome.mp4",
+            duration_us=3_000_000,
+            quality_mode="balanced",
+        )
+
+        note = build_deterministic_note(
+            metadata,
+            fusion,
+            report_spec=ReportSpec(preset=ReportPreset.CONCISE),
+        )
+
+        self.assertNotIn("首页", [item.claim for item in note.facts])
+        self.assertIn("多平台直播教程", [item.claim for item in note.facts])
+
+    def test_deterministic_note_preserves_numeric_ocr_changes_across_windows(self) -> None:
+        run_id = "run-numeric-change"
+        evidence = [
+            EvidenceSpan(
+                id="temperature-before",
+                run_id=run_id,
+                modality=EvidenceModality.OCR,
+                start_us=0,
+                end_us=1_000_000,
+                raw_text="temperature 20.0",
+                normalized_text="temperature 20.0",
+                confidence=0.98,
+            ),
+            EvidenceSpan(
+                id="temperature-after",
+                run_id=run_id,
+                modality=EvidenceModality.OCR,
+                start_us=1_000_000,
+                end_us=2_000_000,
+                raw_text="temperature 20.1",
+                normalized_text="temperature 20.1",
+                confidence=0.98,
+            ),
+        ]
+        states = [
+            VisualState(
+                id="state-before",
+                run_id=run_id,
+                start_us=0,
+                end_us=1_000_000,
+                transition_us=0,
+                stable_keyframe_us=500_000,
+                change_reason="initial_state",
+            ),
+            VisualState(
+                id="state-after",
+                run_id=run_id,
+                start_us=1_000_000,
+                end_us=2_000_000,
+                transition_us=1_000_000,
+                stable_keyframe_us=1_500_000,
+                change_reason="screen_text_change",
+            ),
+        ]
+        fusion = build_evidence_timeline(evidence, states)
+        metadata = NoteMetadata(
+            title="温度变化",
+            run_id=run_id,
+            source_kind="local",
+            source_locator="temperature.mp4",
+            duration_us=2_000_000,
+            quality_mode="accurate",
+        )
+
+        note = build_deterministic_note(metadata, fusion)
+
+        self.assertEqual(
+            [item.claim for item in note.facts],
+            ["temperature 20.0", "temperature 20.1"],
+        )
+        self.assertEqual(len(note.sections), 2)
+
+    def test_detailed_and_professional_notes_keep_persistent_edge_warning(self) -> None:
+        warning = EvidenceSpan(
+            id="ocr-edge-warning",
+            run_id="run-edge-warning",
+            modality=EvidenceModality.OCR,
+            start_us=0,
+            end_us=3_000_000,
+            raw_text="系统过热告警",
+            normalized_text="系统过热告警",
+            confidence=0.99,
+            bounding_boxes=[
+                BoundingBox(x=1000, y=200, width=60, height=30),
+            ],
+            provenance={
+                "observation_count": 5,
+                "frame_width": 1080,
+                "frame_height": 1920,
+            },
+        )
+        fusion = build_evidence_timeline([warning])
+        metadata = NoteMetadata(
+            title="边缘告警",
+            run_id="run-edge-warning",
+            source_kind="local",
+            source_locator="warning.mp4",
+            duration_us=3_000_000,
+            quality_mode="accurate",
+        )
+
+        for preset in (ReportPreset.DETAILED, ReportPreset.PROFESSIONAL):
+            with self.subTest(preset=preset):
+                note = build_deterministic_note(
+                    metadata,
+                    fusion,
+                    report_spec=ReportSpec(preset=preset),
+                )
+                self.assertIn("系统过热告警", [item.claim for item in note.facts])

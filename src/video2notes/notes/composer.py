@@ -30,7 +30,7 @@ from .models import (
     SupportingMaterial,
     SupportingMaterialKind,
 )
-from .reporting import ReportSpec, ResolvedReportSpec
+from .reporting import ReportPreset, ReportSpec, ResolvedReportSpec
 
 
 class ComposerModel(BaseModel):
@@ -391,6 +391,11 @@ def build_deterministic_note(
     facts: list[FactCard] = []
     sections: list[NoteSection] = []
     takeaway_candidates: list[str] = []
+    emitted_evidence_ids: set[str] = set()
+    emitted_texts: dict[EvidenceModality, list[str]] = {}
+    ocr_fact_limit_per_window = (
+        8 if len(fusion.windows) <= 4 else 4 if len(fusion.windows) <= 8 else 2
+    )
 
     for section_index, window in enumerate(fusion.windows):
         if len(sections) >= resolved_report.max_sections:
@@ -398,19 +403,46 @@ def build_deterministic_note(
         window_evidence = [
             evidence_by_id[item] for item in window.evidence_ids if item in evidence_by_id
         ]
-        textual = [item for item in window_evidence if _evidence_text(item)]
+        # Source metadata already has a dedicated, structured home in NoteMetadata.
+        # Keeping it in the evidence graph preserves provenance, but turning a
+        # filename/title/author tuple into a repeated "fact" makes deterministic
+        # fallback notes read like an import manifest instead of a video summary.
+        textual = [
+            item
+            for item in window_evidence
+            if item.modality is not EvidenceModality.METADATA and _evidence_text(item)
+        ]
         if not textual and not screenshots.get(window.id):
             continue
 
-        unique_texts: set[str] = set()
         fact_ids: list[str] = []
         body_lines: list[str] = []
-        for evidence in textual:
-            text = _evidence_text(evidence)
-            normalized = "".join(text.casefold().split())
-            if not normalized or normalized in unique_texts:
+        selected_textual: list[EvidenceSpan] = []
+        ocr_fact_limit = min(
+            resolved_report.max_facts_per_section,
+            ocr_fact_limit_per_window,
+        )
+        ocr_fact_count = 0
+        for evidence in sorted(textual, key=_deterministic_evidence_sort_key):
+            if evidence.id in emitted_evidence_ids:
                 continue
-            unique_texts.add(normalized)
+            text = _evidence_text(evidence)
+            normalized = _canonical_note_text(text)
+            if not normalized or _duplicates_emitted_text(
+                normalized,
+                evidence.modality,
+                emitted_texts,
+            ):
+                continue
+            if evidence.modality is EvidenceModality.OCR:
+                if (
+                    resolved_report.preset is ReportPreset.CONCISE
+                    and _is_persistent_edge_chrome(evidence)
+                ):
+                    continue
+                if ocr_fact_count >= ocr_fact_limit:
+                    continue
+                ocr_fact_count += 1
             fact_id = f"fact-{window.id}-{len(fact_ids):03d}"
             facts.append(
                 FactCard(
@@ -423,6 +455,9 @@ def build_deterministic_note(
                 )
             )
             fact_ids.append(fact_id)
+            selected_textual.append(evidence)
+            emitted_evidence_ids.add(evidence.id)
+            emitted_texts.setdefault(evidence.modality, []).append(normalized)
             if len(takeaway_candidates) < resolved_report.max_takeaways * 2:
                 takeaway_candidates.append(text)
             label = _modality_label(evidence.modality)
@@ -430,13 +465,16 @@ def build_deterministic_note(
             if len(fact_ids) >= resolved_report.max_facts_per_section:
                 break
 
-        title_source = textual[0] if textual else None
+        if not fact_ids and not screenshots.get(window.id):
+            continue
+        title_source = selected_textual[0] if selected_textual else None
         title_text = _evidence_text(title_source) if title_source is not None else "关键画面"
         title = _short_title(title_text, fallback=f"片段 {section_index + 1}")
         summary = title_text
+        section_number = len(sections) + 1
         sections.append(
             NoteSection(
-                id=f"section-{section_index + 1:03d}",
+                id=f"section-{section_number:03d}",
                 title=title,
                 start_us=window.start_us,
                 end_us=window.end_us,
@@ -467,6 +505,69 @@ def build_deterministic_note(
         evidence=fusion.evidence,
         supporting_materials=materials,
     )
+
+
+def _deterministic_evidence_sort_key(
+    evidence: EvidenceSpan,
+) -> tuple[int, int, float, int, str]:
+    priority = {
+        EvidenceModality.METADATA: 0,
+        EvidenceModality.PLATFORM_CAPTION: 1,
+        EvidenceModality.ASR: 2,
+        EvidenceModality.OCR: 3,
+        EvidenceModality.VISUAL: 4,
+    }[evidence.modality]
+    text_length = len(_canonical_note_text(_evidence_text(evidence)))
+    confidence = evidence.confidence if evidence.confidence is not None else 0.5
+    return (priority, evidence.start_us, -confidence, -text_length, evidence.id)
+
+
+def _canonical_note_text(text: str) -> str:
+    return "".join(character for character in text.casefold() if character.isalnum())
+
+
+def _duplicates_emitted_text(
+    normalized: str,
+    modality: EvidenceModality,
+    emitted: Mapping[EvidenceModality, list[str]],
+) -> bool:
+    # Only exact canonical text is safe to suppress globally.  Fuzzy OCR text
+    # can differ by a single digit (for example 20.0 -> 20.1) while describing
+    # a real state change, so similarity-based collapsing belongs in the
+    # time/track-aware OCR stage rather than the final note composer.
+    return normalized in emitted.get(modality, [])
+
+
+def _is_persistent_edge_chrome(evidence: EvidenceSpan) -> bool:
+    count = evidence.provenance.get("observation_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 3:
+        return False
+    text = _canonical_note_text(_evidence_text(evidence))
+    if not text or len(text) > 24:
+        return False
+    frame_width = evidence.provenance.get("frame_width")
+    frame_height = evidence.provenance.get("frame_height")
+    if (
+        not isinstance(frame_width, (int, float))
+        or not isinstance(frame_height, (int, float))
+        or isinstance(frame_width, bool)
+        or isinstance(frame_height, bool)
+        or frame_width <= 0
+        or frame_height <= 0
+    ):
+        return False
+    for box in evidence.bounding_boxes:
+        if box.coordinate_space == "normalized":
+            center_x = box.x + box.width / 2
+            center_y = box.y + box.height / 2
+        elif box.coordinate_space == "pixels":
+            center_x = (box.x + box.width / 2) / float(frame_width)
+            center_y = (box.y + box.height / 2) / float(frame_height)
+        else:
+            continue
+        if center_x <= 0.12 or center_x >= 0.88 or center_y <= 0.08 or center_y >= 0.92:
+            return True
+    return False
 
 
 def _note_from_draft(

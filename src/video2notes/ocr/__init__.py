@@ -43,6 +43,7 @@ from .selection import ScrollSelectionConfig, select_scroll_keyframes
 from .tracking import (
     OcrTrackingConfig,
     box_iou,
+    boxes_share_semantic_region,
     normalized_edit_similarity,
     track_ocr_lines,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "ScrollFrameSelection",
     "ScrollSelectionConfig",
     "box_iou",
+    "boxes_share_semantic_region",
     "detect_script",
     "extract_ocr_evidence",
     "image_readability",

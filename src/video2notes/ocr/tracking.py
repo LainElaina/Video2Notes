@@ -52,6 +52,28 @@ def box_iou(left: OcrBox, right: OcrBox) -> float:
     return min(1.0, intersection / union) if union > 0 else 0.0
 
 
+def boxes_share_semantic_region(left: OcrBox, right: OcrBox) -> bool:
+    """Return whether two line boxes plausibly occupy the same layout slot.
+
+    OCR boxes jitter between frames and may stop intersecting after a small
+    scroll or detector resize.  IoU alone therefore breaks otherwise stable
+    text tracks.  This predicate remains deliberately local: the centers must
+    be close relative to the line dimensions, so equal navigation labels in
+    different parts of a frame are never merged.
+    """
+
+    if left.coordinate_space != right.coordinate_space:
+        return False
+    if box_iou(left, right) >= 0.15:
+        return True
+    center_dx = abs((left.x + left.width / 2) - (right.x + right.width / 2))
+    center_dy = abs((left.y + left.height / 2) - (right.y + right.height / 2))
+    return (
+        center_dx <= 0.45 * max(left.width, right.width)
+        and center_dy <= 0.75 * max(left.height, right.height)
+    )
+
+
 def normalized_edit_similarity(left: str, right: str) -> float:
     """Compare normalized OCR text without discarding the auditable raw strings."""
 
@@ -116,7 +138,10 @@ def track_ocr_lines(
                 )
                 combined = settings.iou_weight * iou + settings.text_weight * similarity
                 if (
-                    iou >= settings.minimum_iou
+                    (iou >= settings.minimum_iou or boxes_share_semantic_region(
+                        previous_line.box,
+                        current_line.box,
+                    ))
                     and similarity >= settings.minimum_text_similarity
                     and combined >= settings.minimum_combined_score
                 ):

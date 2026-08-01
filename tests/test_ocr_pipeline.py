@@ -220,6 +220,209 @@ class OcrPipelineTests(unittest.TestCase):
         self.assertEqual([result.keyframe_us for result in bundle.results], times)
         self.assertEqual(len(bundle.evidence), 3)
 
+    def test_merges_stable_adjacent_text_with_complete_observation_provenance(self) -> None:
+        image = Image.new("RGB", (200, 100), "black")
+        states = [
+            _state(
+                "state-a",
+                start_us=0,
+                end_us=1_000_000,
+                keyframe_us=500_000,
+                pts=45_000,
+                artifact=_artifact("frames/a.png", "a" * 64),
+            ),
+            _state(
+                "state-b",
+                start_us=1_000_000,
+                end_us=2_000_000,
+                keyframe_us=1_500_000,
+                pts=135_000,
+                artifact=_artifact("frames/b.png", "b" * 64),
+            ),
+        ]
+        backend = FakeBackend(
+            [
+                BackendOcrOutput(
+                    invocation=_invocation(),
+                    lines=[
+                        BackendOcrLine(
+                            raw_text="Start streaming",
+                            box=OcrBox(x=10, y=10, width=120, height=24),
+                            confidence=0.91,
+                        )
+                    ],
+                ),
+                BackendOcrOutput(
+                    invocation=_invocation(),
+                    lines=[
+                        BackendOcrLine(
+                            raw_text="Start streamlng",
+                            box=OcrBox(x=12, y=11, width=121, height=24),
+                            confidence=0.97,
+                        )
+                    ],
+                ),
+            ]
+        )
+
+        bundle = extract_ocr_evidence(
+            states,
+            backend=backend,
+            image_loader=lambda _: image,
+            config=OcrPipelineConfig(minimum_crop_readability=0),
+        )
+
+        self.assertEqual(len(bundle.results), 2)
+        self.assertEqual(len(bundle.evidence), 1)
+        merged = bundle.evidence[0]
+        self.assertEqual(
+            merged.id,
+            "ocr-track-00001-aggregate-a425fa2fe0e9bd68-evidence",
+        )
+        self.assertEqual((merged.start_us, merged.end_us), (0, 2_000_000))
+        self.assertEqual(merged.raw_text, "Start streamlng")
+        self.assertEqual(merged.confidence, 0.97)
+        self.assertEqual(len(merged.artifact_refs), 2)
+        self.assertEqual(len(merged.bounding_boxes), 2)
+        self.assertEqual(merged.provenance["observation_count"], 2)
+        self.assertEqual(
+            merged.provenance["source_evidence_ids"],
+            [
+                "ocr-state-a-line-0000-evidence",
+                "ocr-state-b-line-0000-evidence",
+            ],
+        )
+        self.assertEqual(
+            merged.provenance["representative_evidence_id"],
+            "ocr-state-b-line-0000-evidence",
+        )
+        self.assertNotIn(merged.id, merged.provenance["source_evidence_ids"])
+        observations = merged.provenance["observations"]
+        self.assertEqual(len(observations), 2)
+        self.assertEqual(observations[0]["provenance"]["keyframe_pts"], 45_000)
+        self.assertEqual(observations[1]["provenance"]["keyframe_pts"], 135_000)
+
+    def test_downscales_inference_and_maps_pixel_boxes_back_to_original_frame(self) -> None:
+        image = Image.new("RGB", (400, 200), "black")
+        backend = FakeBackend(
+            [
+                BackendOcrOutput(
+                    invocation=_invocation(),
+                    lines=[
+                        BackendOcrLine(
+                            raw_text="mapped",
+                            box=OcrBox(x=10, y=5, width=80, height=20),
+                            confidence=0.99,
+                        )
+                    ],
+                )
+            ]
+        )
+        state = _state(
+            "scaled",
+            start_us=0,
+            end_us=1_000_000,
+            keyframe_us=500_000,
+            pts=45_000,
+        )
+
+        bundle = extract_ocr_evidence(
+            [state],
+            backend=backend,
+            image_loader=lambda _: image,
+            config=OcrPipelineConfig(
+                minimum_crop_readability=0,
+                inference_max_width=100,
+            ),
+        )
+
+        self.assertEqual(backend.calls[0][0], (100, 50))
+        line_box = bundle.results[0].accepted_lines[0].box
+        self.assertEqual(
+            (line_box.x, line_box.y, line_box.width, line_box.height),
+            (40.0, 20.0, 320.0, 80.0),
+        )
+        evidence_box = bundle.evidence[0].bounding_boxes[0]
+        self.assertEqual(
+            (evidence_box.x, evidence_box.y, evidence_box.width, evidence_box.height),
+            (40.0, 20.0, 320.0, 80.0),
+        )
+        self.assertEqual(bundle.evidence[0].provenance["frame_width"], 400)
+        self.assertEqual(bundle.evidence[0].provenance["inference_width"], 100)
+
+    def test_does_not_merge_across_unobserved_time_or_distant_layout_slots(self) -> None:
+        image = Image.new("RGB", (300, 120), "black")
+        states = [
+            _state(
+                "state-a",
+                start_us=0,
+                end_us=1_000_000,
+                keyframe_us=500_000,
+                pts=45_000,
+            ),
+            _state(
+                "state-b",
+                start_us=2_000_000,
+                end_us=3_000_000,
+                keyframe_us=2_500_000,
+                pts=225_000,
+            ),
+            _state(
+                "state-c",
+                start_us=3_000_000,
+                end_us=4_000_000,
+                keyframe_us=3_500_000,
+                pts=315_000,
+            ),
+        ]
+        backend = FakeBackend(
+            [
+                BackendOcrOutput(
+                    invocation=_invocation(),
+                    lines=[
+                        BackendOcrLine(
+                            raw_text="Stable label",
+                            box=OcrBox(x=10, y=10, width=100, height=20),
+                            confidence=0.99,
+                        )
+                    ],
+                ),
+                BackendOcrOutput(
+                    invocation=_invocation(),
+                    lines=[
+                        BackendOcrLine(
+                            raw_text="Stable label",
+                            box=OcrBox(x=12, y=10, width=100, height=20),
+                            confidence=0.99,
+                        )
+                    ],
+                ),
+                BackendOcrOutput(
+                    invocation=_invocation(),
+                    lines=[
+                        BackendOcrLine(
+                            raw_text="Stable label",
+                            box=OcrBox(x=180, y=80, width=100, height=20),
+                            confidence=0.99,
+                        )
+                    ],
+                ),
+            ]
+        )
+
+        bundle = extract_ocr_evidence(
+            states,
+            backend=backend,
+            image_loader=lambda _: image,
+            config=OcrPipelineConfig(minimum_crop_readability=0),
+        )
+
+        self.assertEqual(len(bundle.evidence), 3)
+        self.assertEqual(
+            [(item.start_us, item.end_us) for item in bundle.evidence],
+            [(0, 1_000_000), (2_000_000, 3_000_000), (3_000_000, 4_000_000)],
+        )
+
     def test_missing_pts_abstains_without_calling_backend(self) -> None:
         backend = FakeBackend([])
         state = _state(
