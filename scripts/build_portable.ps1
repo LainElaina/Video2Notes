@@ -3,6 +3,9 @@ param(
     # Reuse the already frozen canonical sidecar for faster UI/Rust iteration.
     # Its complete manifest is still verified before it enters the portable tree.
     [switch]$ReuseSidecar,
+    # Development-only fast path. Default portable output always includes the
+    # complete ASR/OCR inference runtime.
+    [switch]$CoreOnly,
     [switch]$SkipSidecarSmoke,
     [switch]$Zip,
     [string]$FfmpegDirectory = "",
@@ -20,6 +23,7 @@ $PortableCurrent = Join-Path $PortableParent "current"
 $PortableStaging = Join-Path $PortableParent (".staging-" + [guid]::NewGuid().ToString("N"))
 $PortableOld = Join-Path $PortableParent (".old-" + [guid]::NewGuid().ToString("N"))
 $PortableMarkerName = ".video2notes-portable.json"
+$RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }
 
 function Assert-LastExitCode {
     param([string]$Step)
@@ -100,13 +104,69 @@ function Assert-ExistingPortableMarker {
 }
 
 function Assert-BackendManifest {
-    param([string]$BackendRoot)
+    param(
+        [string]$BackendRoot,
+        [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
+        [switch]$AllowLegacy
+    )
 
     $manifestPath = Join-Path $BackendRoot "manifest.json"
     Require-File $manifestPath "Frozen backend manifest"
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($manifest.schema -ne 1 -or -not $manifest.files) {
+    if ($manifest.schema -notin @(1, 2) -or -not $manifest.files) {
         throw "The frozen backend manifest is unsupported or empty."
+    }
+    if ($manifest.schema -eq 1 -and -not $AllowLegacy) {
+        throw "The frozen backend manifest predates runtime-flavor verification and must be rebuilt."
+    }
+    if ($manifest.schema -eq 2) {
+        if ($manifest.runtime_flavor -notin @("full", "core-only")) {
+            throw "The frozen backend manifest has an invalid runtime flavor."
+        }
+        if ($ExpectedRuntimeFlavor -and $manifest.runtime_flavor -ne $ExpectedRuntimeFlavor) {
+            throw "Portable runtime '$ExpectedRuntimeFlavor' cannot use a '$($manifest.runtime_flavor)' sidecar. Rebuild it or pass the matching -CoreOnly option."
+        }
+        if ($manifest.user_model_weights_included -ne $false) {
+            throw "The frozen backend manifest does not explicitly exclude user model weights."
+        }
+        $fullInferenceIds = @("faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle")
+        $requiredIds = @("yt-dlp", "psutil", "ffmpeg", "ffprobe")
+        if ($manifest.runtime_flavor -eq "full") { $requiredIds += $fullInferenceIds }
+        foreach ($componentId in $requiredIds) {
+            $matches = @($manifest.components | Where-Object { $_.id -eq $componentId })
+            if (
+                $matches.Count -ne 1 -or
+                $matches[0].included -ne $true -or
+                $matches[0].status -ne "bundled" -or
+                -not $matches[0].version
+            ) {
+                throw "The frozen backend manifest does not verify bundled component '$componentId'."
+            }
+            if (
+                $matches[0].kind -eq "python-package" -and
+                $matches[0].import_verified -ne $true
+            ) {
+                throw "The frozen backend manifest does not verify importing '$componentId'."
+            }
+            if (
+                $matches[0].kind -eq "executable" -and
+                $matches[0].executable_verified -ne $true
+            ) {
+                throw "The frozen backend manifest does not verify executing '$componentId'."
+            }
+        }
+        if ($manifest.runtime_flavor -eq "core-only") {
+            foreach ($componentId in $fullInferenceIds) {
+                $matches = @($manifest.components | Where-Object { $_.id -eq $componentId })
+                if (
+                    $matches.Count -ne 1 -or
+                    $matches[0].included -ne $false -or
+                    $matches[0].status -ne "excluded-core-only"
+                ) {
+                    throw "Core-only component '$componentId' is not explicitly marked excluded."
+                }
+            }
+        }
     }
     $expectedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in $manifest.files) {
@@ -149,6 +209,7 @@ function Assert-BackendManifest {
     if ($unexpectedFiles.Count -gt 0) {
         throw "The frozen backend contains files outside its manifest: $($unexpectedFiles.FullName -join ', ')."
     }
+    return $manifest
 }
 
 function Assert-NoPrivatePayload {
@@ -159,12 +220,18 @@ function Assert-NoPrivatePayload {
             Where-Object {
                 $relative = $_.FullName.Substring($PortableRoot.Length).TrimStart("\") -replace "\\", "/"
                 $extension = $_.Extension.ToLowerInvariant()
-                $relative -match "(?i)(^|/)(\.venv|node_modules|data|runs|config|faster[_-]?whisper|paddle(?:ocr|paddle)?|huggingface|modelscope|torch)(/|$)" -or
+                $allowedRuntimeAsset =
+                    $relative -eq "backend/_internal/faster_whisper/assets/silero_vad_v6.onnx"
+                if ($allowedRuntimeAsset) { return $false }
+                $relative -match "(?i)^(\.venv|node_modules|data|runs|config)(/|$)" -or
+                $relative -match "(?i)(^|/)\.cache(/|$)" -or
                 $_.Name -match "(?i)(^|\.)(cookies?\.txt|keyring\.json)$" -or
                 $_.Name -match "(?i)^\.env(?:\.|$)" -or
+                $_.Name -match "(?i)^(model|pytorch_model|adapter_model)\.bin$" -or
                 $extension -in @(
                     ".cookies", ".sqlite", ".sqlite3", ".db", ".db-shm", ".db-wal",
-                    ".safetensors", ".gguf", ".onnx", ".pt"
+                    ".safetensors", ".gguf", ".onnx", ".pt", ".pth", ".ckpt",
+                    ".pdmodel", ".pdiparams", ".pdparams", ".pdopt"
                 ) -or
                 ($extension -in @(".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".flv", ".wmv") -and
                     $relative -ne "demo/evidence-demo.mp4")
@@ -176,7 +243,11 @@ function Assert-NoPrivatePayload {
 }
 
 function Assert-PortableLayout {
-    param([string]$PortableRoot)
+    param(
+        [string]$PortableRoot,
+        [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
+        [switch]$AllowLegacyBackend
+    )
 
     $allowedTopLevel = @(
         "backend",
@@ -225,7 +296,10 @@ function Assert-PortableLayout {
         throw "The portable licenses directory contains unexpected entries."
     }
 
-    Assert-BackendManifest (Join-Path $PortableRoot "backend")
+    $null = Assert-BackendManifest `
+        (Join-Path $PortableRoot "backend") `
+        $ExpectedRuntimeFlavor `
+        -AllowLegacy:$AllowLegacyBackend
 }
 
 function Write-Sha256Sums {
@@ -296,6 +370,7 @@ try {
     if (-not $ReuseSidecar) {
         $sidecarArguments = @()
         if ($SkipSidecarSmoke) { $sidecarArguments += "-SkipSmoke" }
+        if ($CoreOnly) { $sidecarArguments += "-CoreOnly" }
         if ($FfmpegDirectory) { $sidecarArguments += @("-FfmpegDirectory", $FfmpegDirectory) }
         if ($FfmpegLicensePath) { $sidecarArguments += @("-FfmpegLicensePath", $FfmpegLicensePath) }
         & (Join-Path $PSScriptRoot "build_sidecar.ps1") @sidecarArguments
@@ -305,7 +380,7 @@ try {
     Require-File (Join-Path $CanonicalBackendRoot "video2notes.exe") "Frozen backend executable"
     Require-File (Join-Path $CanonicalBackendRoot "tools\ffmpeg.exe") "Bundled ffmpeg.exe"
     Require-File (Join-Path $CanonicalBackendRoot "tools\ffprobe.exe") "Bundled ffprobe.exe"
-    Assert-BackendManifest $CanonicalBackendRoot
+    $null = Assert-BackendManifest $CanonicalBackendRoot $RuntimeFlavor
 
     if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
         throw "pnpm is unavailable. Run .\scripts\bootstrap.ps1 first."
@@ -331,7 +406,12 @@ try {
     Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination (Join-Path $safeStaging "licenses\VIDEO2NOTES_LICENSE.txt")
     Copy-Item -LiteralPath (Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $safeStaging "licenses\THIRD_PARTY_NOTICES.md")
 
-    Assert-BackendManifest (Join-Path $safeStaging "backend")
+    $StagedBackendManifest = Assert-BackendManifest (Join-Path $safeStaging "backend") $RuntimeFlavor
+    & (Join-Path $PSScriptRoot "test_sidecar.ps1") `
+        -Executable (Join-Path $safeStaging "backend\video2notes.exe") `
+        -CoreOnly:$CoreOnly `
+        -SkipHealthSmoke
+    Assert-LastExitCode "Validating the portable backend runtime imports and bundled tools"
     Assert-NoPrivatePayload $safeStaging
 
     $tauriConfiguration = Get-Content -LiteralPath (Join-Path $TauriRoot "tauri.conf.json") -Raw | ConvertFrom-Json
@@ -345,7 +425,7 @@ try {
     Assert-LastExitCode "Reading the Rust target triple"
 
     $buildInfo = [ordered]@{
-        schema = 1
+        schema = 2
         product = "Video2Notes"
         version = [string]$tauriConfiguration.version
         git_describe = $gitDescribe
@@ -355,28 +435,43 @@ try {
         target_triple = $targetTriple
         portable = $true
         sidecar_reused = [bool]$ReuseSidecar
+        runtime_flavor = $RuntimeFlavor
+        user_model_weights_included = $false
+        packaged_runtime_assets = $StagedBackendManifest.packaged_runtime_assets
+        runtime_components = $StagedBackendManifest.components
         executable_sha256 = (Get-FileHash -LiteralPath (Join-Path $safeStaging "Video2Notes.exe") -Algorithm SHA256).Hash
         sidecar_manifest_sha256 = (Get-FileHash -LiteralPath (Join-Path $safeStaging "backend\manifest.json") -Algorithm SHA256).Hash
     }
-    $buildInfo | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $safeStaging "BUILD_INFO.json") -Encoding utf8
+    $buildInfo | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $safeStaging "BUILD_INFO.json") -Encoding utf8
     [ordered]@{
-        schema = 1
+        schema = 2
         product = "Video2Notes"
         portable = $true
+        runtime_flavor = $RuntimeFlavor
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safeStaging $PortableMarkerName) -Encoding utf8
 
+    $PortableRuntimeNote = if ($CoreOnly) {
+        "这是仅供开发快速迭代的 core-only 构建，不包含本地 faster-whisper/PaddleOCR 推理运行时。"
+    }
+    else {
+        "这是默认 full 构建，已经包含本地 faster-whisper、CTranslate2、PaddleOCR 与 PaddlePaddle 运行时。"
+    }
     @"
-Video2Notes 免安装调试版
+Video2Notes 免安装版（runtime=$RuntimeFlavor）
 
 直接双击 Video2Notes.exe。backend、demo、licenses 三个目录必须与主程序一起保留。
 本版本不会创建安装项或卸载项。任务、配置和 WebView 状态默认保存在 Windows 用户 AppData，
 因此覆盖 current 程序目录不会删除既有任务。API 密钥仍保存在 Windows Credential Manager。
+$PortableRuntimeNote
+用户无需安装 Python、FFmpeg、yt-dlp 或推理 Python 包。ASR/OCR 的具体模型权重不随程序分发，
+后续由应用内模型管理器负责下载、校验、选择和清理。
 
 完整构建：.\scripts\build_portable.ps1
 快速复用后端：.\scripts\build_portable.ps1 -ReuseSidecar
+开发 core-only：.\scripts\build_portable.ps1 -CoreOnly
 "@ | Set-Content -LiteralPath (Join-Path $safeStaging "PORTABLE_README.txt") -Encoding utf8
     Write-Sha256Sums $safeStaging
-    Assert-PortableLayout $safeStaging
+    Assert-PortableLayout $safeStaging $RuntimeFlavor
     Assert-PortableChecksums $safeStaging
 
     Assert-PortableNotRunning $PortableCurrent
@@ -384,7 +479,7 @@ Video2Notes 免安装调试版
     $safeOld = Assert-ManagedPortablePath $PortableOld
     if (Test-Path -LiteralPath $safeCurrent -PathType Container) {
         Assert-ExistingPortableMarker $safeCurrent
-        Assert-PortableLayout $safeCurrent
+        Assert-PortableLayout $safeCurrent -AllowLegacyBackend
         Assert-PortableChecksums $safeCurrent
         Assert-NoPrivatePayload $safeCurrent
         Move-Item -LiteralPath $safeCurrent -Destination $safeOld
@@ -400,7 +495,7 @@ Video2Notes 免安装调试版
     }
     if (Test-Path -LiteralPath $safeOld -PathType Container) {
         Assert-ExistingPortableMarker $safeOld
-        Assert-PortableLayout $safeOld
+        Assert-PortableLayout $safeOld -AllowLegacyBackend
         Assert-PortableChecksums $safeOld
         Remove-Item -LiteralPath $safeOld -Recurse -Force
     }
@@ -421,7 +516,7 @@ Video2Notes 免安装调试版
     }
 
     $portableBytes = (Get-ChildItem -LiteralPath $safeCurrent -Recurse -File | Measure-Object -Property Length -Sum).Sum
-    Write-Host ("Portable app is ready: {0} ({1:N1} MiB)" -f (Join-Path $safeCurrent "Video2Notes.exe"), ($portableBytes / 1MB)) -ForegroundColor Green
+    Write-Host ("Portable app is ready: {0} ({1:N1} MiB; runtime={2})" -f (Join-Path $safeCurrent "Video2Notes.exe"), ($portableBytes / 1MB), $RuntimeFlavor) -ForegroundColor Green
 }
 catch {
     if (Test-Path -LiteralPath $PortableStaging -PathType Container) {

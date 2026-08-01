@@ -284,13 +284,15 @@ $env:VIDEO2NOTES_TOKEN = "请使用至少16字符的随机本地令牌"
 
 Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口，隐藏启动 Python sidecar，并在桌面程序退出时终止它。令牌只通过子进程环境变量传递。原生文件选择器只返回绝对路径；本地视频与截图 URL 经过 run 目录 canonicalize/范围检查。
 
-发布构建的 sidecar 是 PyInstaller onedir 包，携带固定版本的 Python 业务代码以及构建机提供的 `ffmpeg.exe`/`ffprobe.exe`。它不打包 Cookie、运行数据、下载视频、API Key、OCR/ASR 模型或大模型权重。安装包可以直接打开并处理内置样例；若要实际 ASR/OCR，请使用 `bootstrap.ps1 -WithAsr -WithOcr` 的源码环境和本地模型，或自行制作包含已获许可模型运行时的内部构建。
+发布构建的 sidecar 是 PyInstaller onedir 包。默认 `full` 构建携带固定版本的 Python 业务代码、`yt-dlp`、`faster-whisper`、CTranslate2、PaddleOCR、PaddlePaddle，以及构建机提供的 `ffmpeg.exe`/`ffprobe.exe`；便携版用户无需另外安装 Python、FFmpeg 或这些推理包。构建过程只冻结已经安装在仓库 `.venv` 中的运行时，不读取用户模型目录和下载缓存，因此发布前应先执行 `bootstrap.ps1 -WithAsr -WithOcr`。`-CoreOnly` 是明确的开发快速迭代开关，绝不是默认发行配置。
+
+运行时包与模型权重是两层内容：发行包包含执行 ASR/OCR 所需的程序库，但不包含用户选择的 Whisper、PaddleOCR 或大模型权重，也不包含 Cookie、任务数据、下载视频或 API Key。唯一精确允许的模型类随包资产是 faster-whisper 上游自带、默认 VAD 路径必需的小型 Silero VAD 文件；它不是用户选择的听写模型。具体 ASR/OCR 权重由后续应用内模型管理器负责下载、校验、选择与清理。
 
 构建脚本会从 FFmpeg 二进制目录或其父目录一并查找许可证；若目录布局不同，使用 `-FfmpegLicensePath` 显式指定。发行包还包含项目 MIT 许可证、第三方 notices、完整 `ffmpeg -version` 输出和对应源码引用。
 
-免安装调试版输出到 `artifacts/portable/current/`；只需双击其中的 `Video2Notes.exe`，无需安装、注册卸载项或替换 Program Files。顶层 EXE 旁的 `backend/`、`demo/`、`licenses/` 是运行资源，不能单独移动 EXE。默认仍把任务与配置放在 Windows AppData，因此反复覆盖 `current` 不会删除已有结果。完整构建会重新冻结 sidecar；只改 React/Rust 时可显式使用 `.\scripts\build_portable.ps1 -ReuseSidecar`，另加 `-Zip` 可生成搬运用压缩包。每次构建的 commit、dirty 状态和文件哈希记录在产物自己的 `BUILD_INFO.json` 与 `SHA256SUMS.txt` 中。
+免安装版输出到 `artifacts/portable/current/`；只需双击其中的 `Video2Notes.exe`，无需安装程序、注册卸载项、系统 Python 或 PATH 中的媒体工具。顶层 EXE 旁的 `backend/`、`demo/`、`licenses/` 是运行资源，不能单独移动 EXE。默认仍把任务与配置放在 Windows AppData，因此反复覆盖 `current` 不会删除已有结果。完整构建会重新冻结 full sidecar；只改 React/Rust 时可显式使用 `.\scripts\build_portable.ps1 -ReuseSidecar`，但复用的 manifest 必须同样是 full。开发者可用 `.\scripts\build_portable.ps1 -CoreOnly` 缩短冻结时间；另加 `-Zip` 可生成搬运用压缩包。每次构建的 commit、dirty 状态、runtime flavor、组件版本/状态和文件哈希记录在产物自己的 `BUILD_INFO.json`、`backend/manifest.json` 与 `SHA256SUMS.txt` 中。
 
-安装包位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。安装版和免安装版都不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。sidecar 原始资源约 355.4 MiB，主要体积来自两个静态 FFmpeg 工具。未签名的本地调试构建首次运行时，Windows SmartScreen 可能提示未知发布者；调试构建的变化哈希不硬编码在 README 中，以产物旁的校验文件为准。
+安装包位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。安装版和免安装版运行时都不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。full sidecar 会明显大于 core-only，因为它真实携带四个推理运行时和原生库；最终大小以构建输出为准。未签名的本地调试构建首次运行时，Windows SmartScreen 可能提示未知发布者；调试构建的变化哈希不硬编码在 README 中，以产物旁的校验文件为准。
 
 ## 测试与构建
 
@@ -306,6 +308,9 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 # 构建可反复覆盖、无需安装的 Windows 便携目录
 .\scripts\build_portable.ps1
+
+# 仅供开发快速迭代；输出不具备本地 ASR/OCR runtime
+.\scripts\build_portable.ps1 -CoreOnly
 ```
 
 截至 2026-07-28，完整 Python 验证已通过 **133** 个测试（约 **82%** 覆盖率）；React 已通过 ESLint、TypeScript、**12** 个 Vitest、Vite build，Rust 已通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。
@@ -339,10 +344,10 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 ## 已知非阻断限制
 
-- **模型准备是显式的。** 默认注册表只给出本地引擎占位；没有模型目录、Paddle 推理引擎或可用 provider credential 时，对应模块会保守跳过。Markdown/HTML 仍会从已有字幕、元数据和视觉状态生成。
+- **模型权重准备仍是显式的。** 默认 full 发行包已经包含 faster-whisper/CTranslate2/PaddleOCR/PaddlePaddle 程序运行时，但不携带用户 ASR/OCR 权重；在应用内模型管理器完成前，没有本地模型目录或可用 provider credential 时，对应模块会保守跳过。Markdown/HTML 仍会从已有字幕、元数据和视觉状态生成。
 - **OCR/ASR 质量尚未用带标注的大规模真实语料校准。** 自适应取帧、PTS 对齐、置信度和选择性复核的机制已经落地，但 WER/CER、专有名词和截图选择还需要按语言/内容类别建立评测集。
 - **平台可用性和清晰度受账号、地区、站点更新、源文件及平台政策影响。** 下载器会记录可用格式与低清警告；不支持 DRM 绕过。
-- **安装包不携带模型权重。** React/Tauri 安装包包含可自动启动的 Python/FFmpeg sidecar 和内置样例，但为控制体积、许可边界与显式模型选择，不包含 PaddleOCR/faster-whisper 包及权重；源码环境的 `-WithAsr -WithOcr` 是当前高精度本地推理入口。
+- **安装包不携带用户模型权重。** React/Tauri 安装包包含可自动启动的 full Python/FFmpeg sidecar、四个本地推理运行时和内置样例；用户选择的 Whisper/PaddleOCR 权重仍由后续应用内模型管理器负责。开发构建只有显式传入 `-CoreOnly` 才会省略推理运行时。
 - **显存峰值目前为空。** stage manifest 已有 `peak_vram_bytes` 字段，但通用 CPU/Paddle/faster-whisper 路径尚未接统一显存采样器；因此 benchmark 不虚报 0 B。
 - **当前本地安装包未做 Authenticode 签名。** 个人本机安装不影响功能，但 Windows SmartScreen 可能显示未知发布者；公开分发前应配置受信任的代码签名证书。
 - **HTML 的 `video2notes://seek/...` 链接是桌面集成协议。** 在普通浏览器中仍可阅读 HTML，但该自定义跳转需要宿主应用实现；截图是实验性、按证据预算选择的附加信息。

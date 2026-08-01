@@ -1,12 +1,31 @@
 [CmdletBinding()]
 param(
-    [string]$Executable = ""
+    [string]$Executable = "",
+    [switch]$CoreOnly,
+    [switch]$SkipHealthSmoke
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $Executable) {
     $Executable = Join-Path $RepoRoot "apps\desktop\src-tauri\resources\backend\video2notes.exe"
+}
+$ExpectedRuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }
+
+function Require-File {
+    param([string]$Path, [string]$Purpose)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Purpose was not found at '$Path'."
+    }
+}
+
+function Get-ManifestComponent {
+    param([object]$Manifest, [string]$Id)
+    $matches = @($Manifest.components | Where-Object { $_.id -eq $Id })
+    if ($matches.Count -ne 1) {
+        throw "The backend manifest must contain exactly one '$Id' component."
+    }
+    return $matches[0]
 }
 
 function New-SessionToken {
@@ -58,13 +77,125 @@ function Join-WindowsCommandLineArguments {
     return (($Values | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join " ")
 }
 
-if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-    throw "Packaged backend was not found at '$Executable'. Run .\scripts\build_sidecar.ps1 first."
-}
+Require-File $Executable "Packaged backend"
 $ResolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
+$BackendRoot = Split-Path -Parent $ResolvedExecutable
+$ManifestPath = Join-Path $BackendRoot "manifest.json"
+Require-File $ManifestPath "Packaged backend manifest"
+$Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+if ($Manifest.schema -ne 2 -or $Manifest.runtime_flavor -ne $ExpectedRuntimeFlavor) {
+    throw "Expected a schema-2 '$ExpectedRuntimeFlavor' backend manifest, found schema '$($Manifest.schema)' runtime '$($Manifest.runtime_flavor)'."
+}
+if ($Manifest.user_model_weights_included -ne $false) {
+    throw "The backend manifest does not explicitly exclude user model weights."
+}
+
+$FullInferenceIds = @("faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle")
+$RequiredPythonIds = @("yt-dlp", "psutil")
+if (-not $CoreOnly) { $RequiredPythonIds += $FullInferenceIds }
+foreach ($componentId in $RequiredPythonIds) {
+    $component = Get-ManifestComponent $Manifest $componentId
+    if (
+        $component.kind -ne "python-package" -or
+        $component.included -ne $true -or
+        $component.import_verified -ne $true -or
+        $component.status -ne "bundled" -or
+        -not $component.version
+    ) {
+        throw "Manifest component '$componentId' is not a versioned, import-verified bundled Python runtime."
+    }
+}
+if ($CoreOnly) {
+    foreach ($componentId in $FullInferenceIds) {
+        $component = Get-ManifestComponent $Manifest $componentId
+        if ($component.included -ne $false -or $component.status -ne "excluded-core-only") {
+            throw "Core-only manifest component '$componentId' was not marked excluded-core-only."
+        }
+    }
+}
+
+foreach ($toolName in @("ffmpeg", "ffprobe")) {
+    $toolPath = Join-Path $BackendRoot "tools\$toolName.exe"
+    Require-File $toolPath "Bundled $toolName.exe"
+    $component = Get-ManifestComponent $Manifest $toolName
+    if (
+        $component.kind -ne "executable" -or
+        $component.included -ne $true -or
+        $component.executable_verified -ne $true -or
+        $component.status -ne "bundled" -or
+        -not $component.version
+    ) {
+        throw "Manifest component '$toolName' is not a versioned, verified bundled executable."
+    }
+    $null = & $toolPath -version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Bundled $toolName.exe did not provide a valid -version response."
+    }
+}
+
+$probeFileBase = Join-Path (
+    [IO.Path]::GetTempPath()
+) ("video2notes-runtime-probe-" + [Guid]::NewGuid().ToString("N"))
+$probeStdout = "$probeFileBase.stdout.log"
+$probeStderr = "$probeFileBase.stderr.log"
+$previousProbe = $env:VIDEO2NOTES_RUNTIME_PROBE
+$hadPreviousProbe = Test-Path Env:VIDEO2NOTES_RUNTIME_PROBE
+try {
+    $env:VIDEO2NOTES_RUNTIME_PROBE = "1"
+    $probeProcess = Start-Process `
+        -FilePath $ResolvedExecutable `
+        -WorkingDirectory $BackendRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $probeStdout `
+        -RedirectStandardError $probeStderr `
+        -PassThru `
+        -Wait
+    $probeExitCode = $probeProcess.ExitCode
+    $probeOutput = @(
+        if (Test-Path -LiteralPath $probeStdout) { Get-Content -LiteralPath $probeStdout }
+        if (Test-Path -LiteralPath $probeStderr) { Get-Content -LiteralPath $probeStderr }
+    )
+}
+finally {
+    if ($hadPreviousProbe) { $env:VIDEO2NOTES_RUNTIME_PROBE = $previousProbe }
+    else { Remove-Item Env:VIDEO2NOTES_RUNTIME_PROBE -ErrorAction SilentlyContinue }
+    foreach ($probeLog in @($probeStdout, $probeStderr)) {
+        if (Test-Path -LiteralPath $probeLog) {
+            Remove-Item -LiteralPath $probeLog -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+$probeJsonLines = @(
+    $probeOutput |
+        ForEach-Object { [string]$_ } |
+        Where-Object { $_.TrimStart().StartsWith("{") }
+)
+if ($probeExitCode -ne 0 -or $probeJsonLines.Count -eq 0) {
+    throw "Packaged runtime import probe failed with exit code $probeExitCode. $($probeOutput -join ' ')"
+}
+$probe = $probeJsonLines[-1] | ConvertFrom-Json
+if ($probe.schema -ne 1 -or $probe.runtime_flavor -ne $ExpectedRuntimeFlavor) {
+    throw "Packaged runtime probe returned an unexpected schema or runtime flavor."
+}
+foreach ($componentId in $RequiredPythonIds) {
+    $matches = @($probe.components | Where-Object { $_.id -eq $componentId })
+    if ($matches.Count -ne 1 -or $matches[0].importable -ne $true) {
+        throw "Packaged runtime could not import '$componentId'."
+    }
+    $manifestComponent = Get-ManifestComponent $Manifest $componentId
+    if ($matches[0].version -ne $manifestComponent.version) {
+        throw "Packaged '$componentId' version '$($matches[0].version)' differs from manifest '$($manifestComponent.version)'."
+    }
+}
+
 $help = & $ResolvedExecutable --help 2>&1
 if ($LASTEXITCODE -ne 0 -or ($help -join "`n") -notmatch "evidence-first") {
     throw "The packaged sidecar did not provide a valid --help response."
+}
+
+if ($SkipHealthSmoke) {
+    Write-Host "Packaged runtime imports, tools, manifest, and --help checks passed (runtime=$ExpectedRuntimeFlavor)." -ForegroundColor Green
+    return
 }
 
 $port = Get-Random -Minimum 44000 -Maximum 48000
@@ -112,7 +243,7 @@ try {
         }
     }
     if (-not $ready) { throw "Packaged sidecar did not become healthy within 20 seconds." }
-    Write-Host "Packaged backend --help and loopback health smoke passed." -ForegroundColor Green
+    Write-Host "Packaged backend runtime imports, bundled tools, --help, and loopback health smoke passed (runtime=$ExpectedRuntimeFlavor)." -ForegroundColor Green
 }
 finally {
     if ($process -and -not $process.HasExited) {

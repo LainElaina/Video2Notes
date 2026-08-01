@@ -29,12 +29,15 @@ environment.  Notable components include:
 | --- | --- | --- |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`2026.7.4`) | Local Bilibili/YouTube/X acquisition adapter | Upstream project and its license |
 | [PyAV](https://github.com/PyAV-Org/PyAV) | Container PTS/time-base decode | Upstream project and its license |
+| [psutil](https://github.com/giampaolo/psutil) | Live CPU, memory and disk headroom used by the local scheduler | BSD 3-Clause |
 | [FFmpeg](https://ffmpeg.org/) | Media probe/extraction/processing; sourced from `PATH` in development and copied into Windows release builds | The selected binary distribution determines its license; release builds include `FFMPEG_LICENSE.txt` and exact `FFMPEG_BUILD_INFO.txt` beside the bundled tools |
-| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (optional) | Local ASR | MIT (see upstream) |
-| [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (optional) | Local OCR | Apache License 2.0 (see upstream) |
-| [PaddlePaddle](https://github.com/PaddlePaddle/Paddle) (optional) | PaddleOCR inference engine | Apache License 2.0 (see upstream) |
+| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | Local ASR; bundled in the default full Windows runtime | MIT (see upstream) |
+| [CTranslate2](https://github.com/OpenNMT/CTranslate2) | Native inference engine used by faster-whisper; bundled in the default full Windows runtime | MIT (see upstream) |
+| [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) | Local OCR; bundled in the default full Windows runtime | Apache License 2.0 (see upstream) |
+| [PaddlePaddle](https://github.com/PaddlePaddle/Paddle) | PaddleOCR inference engine; bundled in the default full Windows runtime | Apache License 2.0 (see upstream) |
 | [FastAPI](https://github.com/fastapi/fastapi), Uvicorn (optional) | Local loopback API | Upstream projects and their licenses |
 | [React](https://react.dev/), [Tauri](https://tauri.app/) | Desktop UI and Windows shell | Upstream projects and their licenses |
+| [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC), distributed through [Fontsource](https://fontsource.org/fonts/noto-sans-sc) (`@fontsource-variable/noto-sans-sc` 5.3.0) | Bundled Simplified Chinese interface font | Noto Sans SC: SIL Open Font License 1.1; Fontsource packaging/code: MIT |
 | [PyInstaller](https://pyinstaller.org/) | Builds the Windows local sidecar | GPL 2.0 with the upstream exception for distributing bundled applications |
 | [Playwright](https://playwright.dev/) (development only) | Browser workflow verification | Apache License 2.0 (see upstream) |
 
@@ -54,14 +57,25 @@ identifies those binaries as GPLv3.  See
 [Gyan FFmpeg builds](https://www.gyan.dev/ffmpeg/builds/) and the
 [FFmpeg source repository](https://github.com/FFmpeg/FFmpeg).
 
+The default Windows `full` build freezes the installed inference **program
+runtimes** from the repository `.venv`; its backend manifest records the exact
+package versions and import-verification state.  `-CoreOnly` deliberately omits
+those four inference runtimes and is intended only for fast development
+iteration.  The build does not traverse a user model directory or a package
+manager cache.  The small `silero_vad_v6.onnx` shipped by faster-whisper itself
+is precisely allow-listed because Video2Notes enables that upstream VAD path by
+default; it is a package-owned support asset, not a user-selected Whisper
+transcription model.
+
 ## Models and model providers
 
-Model weights, local OCR/ASR engines, Ollama models and OpenAI-compatible
+User-selected Whisper/PaddleOCR weights, Ollama models and OpenAI-compatible
 providers are selected by the user and are not redistributed by this repository.
 They may carry separate licenses, acceptable-use terms, privacy obligations and
-hardware requirements.  Video2Notes stores provider secret values in the local
-credential manager when configured through its API; it does not include those
-secrets in repository files or task manifests.
+hardware requirements.  A later in-app model manager is responsible for model
+download, verification, selection and removal.  Video2Notes stores provider
+secret values in the local credential manager when configured through its API;
+it does not include those secrets in repository files or task manifests.
 
 ## Self-authored demo media
 
