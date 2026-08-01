@@ -22,6 +22,7 @@ import {
   type ReportRevisionSummary,
 } from '../components/ReportRevisionDrawer'
 import { ReworkDrawer } from '../components/ReworkDrawer'
+import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SupportingMaterialsDrawer } from '../components/SupportingMaterialsDrawer'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import type { EvidenceKind, NoteDocument, ProcessingTask } from '../domain'
@@ -71,6 +72,9 @@ export function ReaderPage() {
   const selectEvidence = useStudioStore(state => state.selectEvidence)
   const toggleContext = useStudioStore(state => state.toggleContext)
   const downloadArtifact = useStudioStore(state => state.downloadArtifact)
+  const downloadRunArtifact = useStudioStore(state => state.downloadRunArtifact)
+  const restartTask = useStudioStore(state => state.restartTask)
+  const navigate = useStudioStore(state => state.navigate)
   const refreshReportRevisions = useStudioStore(
     state => state.refreshReportRevisions,
   )
@@ -95,6 +99,12 @@ export function ReaderPage() {
   }>()
 
   const activeTask = tasks.find(task => task.id === activeTaskId)
+  const terminalTask =
+    activeTask &&
+    !activeTask.note &&
+    (activeTask.status === 'failed' || activeTask.status === 'cancelled')
+      ? activeTask
+      : undefined
   const task = activeTask?.note ? activeTask : tasks.find(item => item.note)
   const note = task?.note
 
@@ -111,6 +121,21 @@ export function ReaderPage() {
   const selectedEvidence = task?.evidence.find(item => item.id === selectedEvidenceId)
   const evidenceList =
     task?.evidence.filter(item => evidenceFilter === 'all' || item.kind === evidenceFilter) ?? []
+
+  if (terminalTask) {
+    return (
+      <div className="reader-page reader-recovery-page">
+        <RunDiagnosticsPanel
+          task={terminalTask}
+          onRetry={() => restartTask(terminalTask.id)}
+          onCreateNew={() => navigate('create')}
+          onDownloadArtifact={artifact =>
+            downloadRunArtifact(terminalTask.id, artifact)
+          }
+        />
+      </div>
+    )
+  }
 
   if (!task || !note) {
     return (

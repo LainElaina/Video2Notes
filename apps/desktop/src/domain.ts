@@ -4,7 +4,7 @@ export type ProcessingMode = 'fast' | 'balanced' | 'accurate'
 export type SamplingMode = 'adaptive' | 'fixed_interval' | 'skip'
 export type ReportPreset = 'concise' | 'detailed' | 'professional' | 'beginner' | 'executive'
 export type TaskStatus = 'running' | 'paused' | 'cancelled' | 'completed' | 'failed'
-export type StageStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type StageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type EvidenceKind = 'asr' | 'ocr' | 'visual' | 'chapter'
 export type ProviderStatus = 'connected' | 'disconnected' | 'testing'
 export type TelemetryValue = string | number | boolean | null
@@ -80,6 +80,8 @@ export interface TaskStage {
   metrics: Record<string, TelemetryValue>
   warnings: string[]
   outputArtifacts: StageOutputArtifact[]
+  backendStages?: string[]
+  errorTypes?: string[]
   metric?: string
 }
 
@@ -224,6 +226,22 @@ export interface NoteDocument {
   generatedAt: string
 }
 
+export interface TaskFailureDiagnostic {
+  failedStages: Array<{
+    stage: string
+    errorType?: string
+  }>
+  completedStages: string[]
+  errorType?: string
+  message?: string
+}
+
+export interface TaskRecoveryCapability {
+  canRetry: boolean
+  strategy: 'new_run' | 'demo_restart' | 'manual_recreate'
+  reason: string
+}
+
 export interface ProcessingTask {
   id: string
   source: SourceManifest
@@ -250,6 +268,8 @@ export interface ProcessingTask {
     noteDocument?: string
     media?: string
   }
+  failure?: TaskFailureDiagnostic
+  recovery?: TaskRecoveryCapability
   mediaUrl?: string
   realBackend?: boolean
 }

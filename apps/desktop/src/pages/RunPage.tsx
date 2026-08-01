@@ -4,18 +4,26 @@ import {
   Check,
   CircleStop,
   Clock3,
+  Download,
   ExternalLink,
-  FileStack,
   Pause,
   Play,
   RefreshCcw,
-  RotateCcw,
   TriangleAlert,
 } from 'lucide-react'
 import { EvidenceRail } from '../components/EvidenceRail'
+import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import { formatTime, statusLabel } from '../domain'
 import { useStudioStore } from '../store'
+
+const stageStatusLabel = {
+  pending: '等待',
+  running: '正在运行',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+} as const
 
 export function RunPage() {
   const tasks = useStudioStore(state => state.tasks)
@@ -28,15 +36,27 @@ export function RunPage() {
   const resumeTask = useStudioStore(state => state.resumeTask)
   const cancelTask = useStudioStore(state => state.cancelTask)
   const restartTask = useStudioStore(state => state.restartTask)
+  const downloadRunArtifact = useStudioStore(state => state.downloadRunArtifact)
   const selectTask = useStudioStore(state => state.selectTask)
   const refreshTasks = useStudioStore(state => state.refreshTasks)
+  const navigate = useStudioStore(state => state.navigate)
   const [selectedStageId, setSelectedStageId] = useState<string>()
   const [showArtifacts, setShowArtifacts] = useState(false)
 
   const task = tasks.find(item => item.id === activeTaskId) ?? tasks[0]
   const liveStage = task?.stages.find(stage => stage.status === 'running')
+  const terminalStage = task?.stages.find(
+    stage => stage.status === 'failed' || stage.status === 'cancelled',
+  )
+  const lastCompletedStage = [...(task?.stages ?? [])]
+    .reverse()
+    .find(stage => stage.status === 'completed')
   const selectedStage =
-    task?.stages.find(stage => stage.id === selectedStageId) ?? liveStage ?? task?.stages.at(-1)
+    task?.stages.find(stage => stage.id === selectedStageId) ??
+    liveStage ??
+    terminalStage ??
+    lastCompletedStage ??
+    task?.stages[0]
   const visibleEvidence = useMemo(() => {
     if (!task) return []
     const processedUntil = task.source.durationSeconds * Math.max(0.08, task.progress / 100)
@@ -58,8 +78,11 @@ export function RunPage() {
     else if (task.status === 'running') pauseTask(task.id)
     else if (task.status === 'paused') resumeTask(task.id)
     else if (task.status === 'completed') selectTask(task.id, 'reader')
-    else restartTask(task.id)
   }
+
+  const selectedArtifacts = task.realBackend
+    ? (selectedStage?.outputArtifacts ?? [])
+    : []
 
   return (
     <div className="run-page">
@@ -86,28 +109,25 @@ export function RunPage() {
           </div>
         </div>
         <div className="run-actions">
-          <button className="button button-primary" type="button" onClick={taskAction}>
-            {task.status === 'running' &&
-              (task.realBackend ? (
-                <RefreshCcw size={16} aria-hidden="true" />
-              ) : (
-                <Pause size={16} aria-hidden="true" />
-              ))}
-            {task.status === 'paused' && <Play size={16} aria-hidden="true" />}
-            {task.status === 'completed' && <ExternalLink size={16} aria-hidden="true" />}
-            {['cancelled', 'failed'].includes(task.status) && (
-              <RotateCcw size={16} aria-hidden="true" />
-            )}
-            {task.status === 'running'
-              ? task.realBackend
-                ? '刷新状态'
-                : '暂停'
-              : task.status === 'paused'
-                ? '继续'
-                : task.status === 'completed'
-                  ? '阅读笔记'
-                  : '重新开始'}
-          </button>
+          {!['cancelled', 'failed'].includes(task.status) && (
+            <button className="button button-primary" type="button" onClick={taskAction}>
+              {task.status === 'running' &&
+                (task.realBackend ? (
+                  <RefreshCcw size={16} aria-hidden="true" />
+                ) : (
+                  <Pause size={16} aria-hidden="true" />
+                ))}
+              {task.status === 'paused' && <Play size={16} aria-hidden="true" />}
+              {task.status === 'completed' && <ExternalLink size={16} aria-hidden="true" />}
+              {task.status === 'running'
+                ? task.realBackend
+                  ? '刷新状态'
+                  : '暂停'
+                : task.status === 'paused'
+                  ? '继续'
+                  : '阅读笔记'}
+            </button>
+          )}
           {['running', 'paused'].includes(task.status) && (
             <button
               className="button button-quiet"
@@ -121,6 +141,13 @@ export function RunPage() {
         </div>
       </section>
 
+      <RunDiagnosticsPanel
+        task={task}
+        onRetry={() => restartTask(task.id)}
+        onCreateNew={() => navigate('create')}
+        onDownloadArtifact={artifact => downloadRunArtifact(task.id, artifact)}
+      />
+
       <section className="stage-rail" aria-label="处理阶段">
         {task.stages.map((stage, index) => (
           <button
@@ -130,7 +157,7 @@ export function RunPage() {
             type="button"
             key={stage.id}
             onClick={() => setSelectedStageId(stage.id)}
-            aria-label={`${stage.label}，${stage.status}，${stage.progress}%`}
+            aria-label={`${stage.label}，${stageStatusLabel[stage.status]}，${stage.progress}%`}
           >
             <span className="stage-number">
               {stage.status === 'completed' ? (
@@ -146,7 +173,11 @@ export function RunPage() {
                   ? `${(stage.durationSeconds ?? 0).toFixed(1)}s`
                   : stage.status === 'running'
                     ? `${stage.progress}%`
-                    : '等待'}
+                    : stage.status === 'failed'
+                      ? '失败'
+                      : stage.status === 'cancelled'
+                        ? '已取消'
+                      : '等待'}
               </small>
             </span>
           </button>
@@ -161,7 +192,7 @@ export function RunPage() {
               <h3>{selectedStage?.label ?? '等待开始'}</h3>
             </div>
             <span className={`stage-state state-${selectedStage?.status}`}>
-              {selectedStage?.status === 'running' ? '正在运行' : selectedStage?.status}
+              {stageStatusLabel[selectedStage?.status ?? 'pending']}
             </span>
           </div>
           <p className="stage-description">{selectedStage?.detail}</p>
@@ -202,27 +233,35 @@ export function RunPage() {
           </button>
           {showArtifacts && (
             <div className="artifact-list">
-              <div>
-                <FileStack size={15} aria-hidden="true" />
-                <span>
-                  <strong>stage-manifest.json</strong>
-                  <small>输入输出哈希、版本、耗时与恢复点</small>
-                </span>
-                <Check size={14} aria-hidden="true" />
-              </div>
-              <div>
-                <RefreshCcw size={15} aria-hidden="true" />
-                <span>
-                  <strong>checkpoint.latest</strong>
-                  <small>可从最近成功点恢复</small>
-                </span>
-                <Check size={14} aria-hidden="true" />
-              </div>
+              {selectedArtifacts.map(artifact => (
+                <button
+                  type="button"
+                  key={`${artifact.relativePath}:${artifact.sha256}`}
+                  onClick={() => downloadRunArtifact(task.id, artifact)}
+                  aria-label={`下载产物 ${artifact.relativePath}`}
+                >
+                  <Download size={15} aria-hidden="true" />
+                  <span>
+                    <strong>{artifact.relativePath.split('/').at(-1)}</strong>
+                    <small>
+                      {artifact.stage} · {artifact.kind} · {(artifact.sizeBytes / 1024).toFixed(1)} KiB
+                    </small>
+                  </span>
+                  <ExternalLink size={14} aria-hidden="true" />
+                </button>
+              ))}
+              {selectedArtifacts.length === 0 && (
+                <p className="artifact-empty">
+                  {task.realBackend
+                    ? '该阶段尚未在后端 manifest 中登记产物。'
+                    : '演示模式不会写入真实阶段产物。'}
+                </p>
+              )}
             </div>
           )}
           <div className="stage-footnote">
             <Clock3 size={14} aria-hidden="true" />
-            每个阶段完成后立即持久化，暂停或退出应用不会丢失已完成工作。
+            列表只显示后端 manifest 已登记的真实文件；阶段内尚未提交的中间状态不承诺可恢复。
           </div>
         </section>
 

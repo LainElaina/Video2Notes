@@ -370,6 +370,7 @@ describe('studio store against the real loopback API contract', () => {
   let operationSequence = 0
   let componentsReady = false
   let failedEstimateMode: 'fast' | 'balanced' | 'accurate' | undefined
+  let listedRuns: ApiRunManifest[] = []
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -389,6 +390,7 @@ describe('studio store against the real loopback API contract', () => {
     operationSequence = 0
     componentsReady = false
     failedEstimateMode = undefined
+    listedRuns = []
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -529,7 +531,7 @@ describe('studio store against the real loopback API contract', () => {
           }),
         )
       }
-      if (url.pathname === '/api/runs') return Promise.resolve(json([]))
+      if (url.pathname === '/api/runs') return Promise.resolve(json(listedRuns))
       if (url.pathname === '/api/sources/probe') {
         return Promise.resolve(
           json({
@@ -1423,6 +1425,117 @@ describe('studio store against the real loopback API contract', () => {
     expect(useStudioStore.getState().processingEstimates.balanced).toBeDefined()
     expect(useStudioStore.getState().processingEstimates.accurate).toBeUndefined()
     expect(useStudioStore.getState().processingEstimateError).toContain('accurate')
+  })
+
+  it('maps safe failure diagnostics, completed stages, real artifacts, and retry availability', async () => {
+    currentJob = {
+      ...runningJob,
+      state: 'failed',
+      stage: 'audio.asr',
+      progress: 0.45,
+      message: '语音模型初始化失败',
+      error_type: 'ModelLoadError',
+      finished_at: createdAt,
+      events: [
+        ...runningJob.events,
+        {
+          sequence: 4,
+          run_id: 'run-real-01',
+          state: 'failed',
+          stage: 'audio.asr',
+          progress: 0.45,
+          message: '语音模型初始化失败',
+          metrics: {},
+          created_at: '2026-07-28T12:00:03Z',
+        },
+      ],
+    }
+    currentRun = {
+      ...runningRun,
+      status: 'failed',
+      stages: {
+        ...runningRun.stages,
+        'audio.asr': {
+          ...runningRun.stages['audio.asr'],
+          status: 'failed',
+          error: 'ModelLoadError',
+        },
+      },
+    }
+    listedRuns = [currentRun]
+
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+    await vi.waitFor(() => expect(useStudioStore.getState().tasks[0]?.status).toBe('failed'))
+
+    const failed = useStudioStore.getState().tasks[0]
+    expect(failed?.failure).toEqual({
+      failedStages: [{ stage: 'audio.asr', errorType: 'ModelLoadError' }],
+      completedStages: ['source.acquire', 'audio.extract'],
+      errorType: 'ModelLoadError',
+      message: '语音模型初始化失败',
+    })
+    expect(failed?.recovery).toMatchObject({
+      canRetry: false,
+      strategy: 'manual_recreate',
+    })
+    expect(failed?.stages.find(stage => stage.id === 'speech')).toMatchObject({
+      status: 'failed',
+      backendStages: ['audio.extract', 'audio.asr'],
+      errorTypes: ['ModelLoadError'],
+      artifactCount: 2,
+    })
+    expect(
+      failed?.stages
+        .flatMap(stage => stage.outputArtifacts)
+        .some(artifact => artifact.relativePath === 'source/source.mp4'),
+    ).toBe(true)
+  })
+
+  it('offers a new-run retry only while the original submission remains in this session', async () => {
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+
+    const store = useStudioStore.getState()
+    store.setDraftInput('https://www.youtube.com/watch?v=real-api-test')
+    store.probeSource()
+    await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
+    store.createTask()
+    await vi.waitFor(() => expect(useStudioStore.getState().tasks[0]?.id).toBe('run-real-01'))
+
+    currentJob = {
+      ...runningJob,
+      state: 'failed',
+      stage: 'audio.asr',
+      message: '语音模型初始化失败',
+      error_type: 'ModelLoadError',
+      finished_at: createdAt,
+    }
+    currentRun = {
+      ...runningRun,
+      status: 'failed',
+      stages: {
+        ...runningRun.stages,
+        'audio.asr': {
+          ...runningRun.stages['audio.asr'],
+          status: 'failed',
+          error: 'ModelLoadError',
+        },
+      },
+    }
+    await new Promise(resolve => window.setTimeout(resolve, 0))
+    useStudioStore.getState().refreshTasks()
+
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.status).toBe('failed'),
+    )
+    expect(useStudioStore.getState().tasks[0]?.recovery).toMatchObject({
+      canRetry: true,
+      strategy: 'new_run',
+    })
+    expect(useStudioStore.getState().tasks[0]?.recovery?.reason).toContain(
+      '暂未提供同一任务从失败阶段续跑',
+    )
   })
 
   it('loads component inventory and prepares the recommended local models in one request', async () => {

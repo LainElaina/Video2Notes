@@ -148,6 +148,41 @@ describe('desktop workflow', () => {
     expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument()
   })
 
+  it('keeps a failed active task visible in Notes instead of silently opening another note', () => {
+    const state = useStudioStore.getState()
+    const failed = {
+      ...state.tasks[0],
+      id: 'task-reader-failed',
+      status: 'failed' as const,
+      note: undefined,
+      realBackend: true,
+      failure: {
+        failedStages: [{ stage: 'notes.compose', errorType: 'ProviderUnavailable' }],
+        completedStages: ['source.acquire', 'media.probe', 'audio.asr'],
+        errorType: 'ProviderUnavailable',
+        message: '笔记模型暂时不可用',
+      },
+      recovery: {
+        canRetry: false,
+        strategy: 'manual_recreate' as const,
+        reason: '当前会话没有可重放请求。',
+      },
+    }
+    useStudioStore.setState({
+      view: 'reader',
+      activeTaskId: failed.id,
+      tasks: [failed, ...state.tasks.slice(1)],
+    })
+
+    render(<App />)
+
+    expect(
+      screen.getByRole('heading', { name: '处理在 notes.compose 停止' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('ProviderUnavailable')).toBeInTheDocument()
+    expect(screen.queryByText('事实支持度检查已通过')).not.toBeInTheDocument()
+  })
+
   it('changes a compatible role binding from the model settings page', () => {
     useStudioStore.getState().navigate('models')
     render(<App />)

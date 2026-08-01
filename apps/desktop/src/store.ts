@@ -257,6 +257,7 @@ interface StudioActions {
   saveProviderSecret: (providerId: string, secret: string) => void
   deleteProviderSecret: (providerId: string) => void
   bindRole: (roleId: string, modelId: string) => void
+  downloadRunArtifact: (taskId: string, artifact: StageOutputArtifact) => void
   downloadArtifact: (taskId: string, kind: 'markdown' | 'html' | 'pdf') => void
   clearNotice: () => void
   resetDemo: () => void
@@ -912,14 +913,27 @@ const mapStages = (run: ApiRunManifest, job?: ApiJobSnapshot): TaskStage[] =>
       records.length === backendNames.length &&
       records.length > 0 &&
       records.every(({ record }) => record.status === 'completed')
-    const status: TaskStage['status'] =
-      failed || cancelled ? 'failed' : active ? 'running' : completed ? 'completed' : 'pending'
+    const status: TaskStage['status'] = failed
+      ? 'failed'
+      : cancelled
+        ? 'cancelled'
+        : active
+          ? 'running'
+          : completed
+            ? 'completed'
+            : 'pending'
     const durations = records
       .map(({ record }) => record.wall_time_seconds)
       .filter((value): value is number => value !== undefined)
     const metrics = stageMetrics(records)
     const warnings = records.flatMap(({ record }) => record.warnings)
     const outputArtifacts = stageOutputArtifacts(records)
+    const backendStages = records.map(
+      ({ backendName, record }) => record.stage_name || backendName,
+    )
+    const errorTypes = records
+      .map(({ record }) => record.error)
+      .filter((error): error is string => Boolean(error))
     return {
       ...stage,
       status,
@@ -930,7 +944,9 @@ const mapStages = (run: ApiRunManifest, job?: ApiJobSnapshot): TaskStage[] =>
       metrics,
       warnings,
       outputArtifacts,
-      metric: active ? job?.message : warnings[0],
+      backendStages,
+      errorTypes,
+      metric: active ? job?.message : errorTypes[0] ?? warnings[0],
     }
   })
 
@@ -952,6 +968,56 @@ const taskStatus = (
   if (value === 'failed') return 'failed'
   if (value === 'cancelled') return 'cancelled'
   return 'running'
+}
+
+const taskFailureDiagnostic = (
+  run: ApiRunManifest,
+  job?: ApiJobSnapshot,
+): ProcessingTask['failure'] => {
+  const failedStages = Object.entries(run.stages)
+    .filter(([, record]) => record.status === 'failed')
+    .map(([backendName, record]) => ({
+      stage: record.stage_name || backendName,
+      errorType: record.error,
+    }))
+  if (failedStages.length === 0 && job?.state !== 'failed' && run.status !== 'failed') {
+    return undefined
+  }
+  if (failedStages.length === 0 && job?.stage) {
+    failedStages.push({ stage: job.stage, errorType: job.error_type })
+  }
+  const completedStages = Object.entries(run.stages)
+    .filter(([, record]) => record.status === 'completed')
+    .map(([backendName, record]) => record.stage_name || backendName)
+  return {
+    failedStages,
+    completedStages,
+    errorType:
+      job?.error_type ?? failedStages.find(stage => stage.errorType)?.errorType,
+    message: job?.message,
+  }
+}
+
+const taskRecoveryCapability = (
+  run: ApiRunManifest,
+  job?: ApiJobSnapshot,
+): ProcessingTask['recovery'] => {
+  const status = taskStatus(run, job)
+  if (status !== 'failed' && status !== 'cancelled') return undefined
+  if (submissionByRun.has(run.run_id)) {
+    return {
+      canRetry: true,
+      strategy: 'new_run',
+      reason:
+        '本地 API 暂未提供同一任务从失败阶段续跑；可用当前会话保留的来源、认证引用与处理参数创建一个新的可追溯任务，原任务与产物保持不变。',
+    }
+  }
+  return {
+    canRetry: false,
+    strategy: 'manual_recreate',
+    reason:
+      '这是应用启动前创建的历史任务，当前会话没有可安全重放的认证与采样请求；请回到新建任务重新选择来源。',
+  }
 }
 
 const inferPlatform = (run: ApiRunManifest): SourceManifest['platform'] => {
@@ -1232,6 +1298,8 @@ const taskFromRun = (
       noteDocument: stageArtifact(run, 'note', 'document.json'),
       media,
     },
+    failure: taskFailureDiagnostic(run, job),
+    recovery: taskRecoveryCapability(run, job),
     realBackend: true,
   }
 }
@@ -2618,7 +2686,16 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set(state => ({
         tasks: state.tasks.map(task =>
           task.id === taskId && ['running', 'paused'].includes(task.status)
-            ? { ...task, status: 'cancelled', etaSeconds: 0 }
+            ? {
+                ...task,
+                status: 'cancelled',
+                etaSeconds: 0,
+                stages: task.stages.map(stage =>
+                  stage.status === 'running'
+                    ? { ...stage, status: 'cancelled' as const }
+                    : stage,
+                ),
+              }
             : task,
         ),
         notice: '任务已取消；已产生的 artifact 仍保留在本地。',
@@ -2660,15 +2737,22 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
               }
             : task,
         ),
-        notice: '演示任务已重新开始。',
+        notice: '演示任务已从头重新开始；演示模式不会写入真实产物。',
       }))
       return
     }
     const previous = submissionByRun.get(taskId)
     if (!previous) {
-      set({ notice: '该历史任务没有可安全复用的认证引用，请在新建任务页重新提交。' })
+      set({
+        notice:
+          '无法一键重试：该历史任务没有可安全复用的认证与采样请求，请在新建任务页重新选择来源。',
+      })
       return
     }
+    set({
+      notice:
+        '正在按原配置创建新的可追溯任务；当前后端不支持在原任务内从失败阶段续跑。',
+    })
     void api
       .submitJob(previous)
       .then(response => {
@@ -2684,7 +2768,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         set(state => ({
           tasks: [next, ...state.tasks],
           activeTaskId: next.id,
-          notice: '已创建新的可追溯重试任务；原任务 artifact 保持不变。',
+          notice:
+            '已按原配置创建新的可追溯重试任务；原任务与已完成产物保持不变。',
         }))
       })
       .catch(error => set({ notice: errorMessage(error) }))
@@ -3932,6 +4017,30 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           roles: state.roles.map(item => (item.id === roleId ? { ...item, modelId } : item)),
           notice: `${role.label} 已持久化绑定到 ${model.label}。`,
         }))
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+
+  downloadRunArtifact: (taskId, artifact) => {
+    const task = get().tasks.find(item => item.id === taskId)
+    if (!task?.realBackend) {
+      set({ notice: '演示模式不会写入可下载的真实阶段产物。' })
+      return
+    }
+    if (!api) {
+      set({ notice: '本地后端当前未连接，暂时无法读取阶段产物。' })
+      return
+    }
+    void api
+      .artifactBlobUrl(taskId, artifact.relativePath)
+      .then(url => {
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download =
+          artifact.relativePath.split('/').at(-1) || `${artifact.kind}-artifact`
+        anchor.click()
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+        set({ notice: `已导出阶段产物 ${anchor.download}。` })
       })
       .catch(error => set({ notice: errorMessage(error) }))
   },
