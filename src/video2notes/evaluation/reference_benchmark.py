@@ -251,7 +251,9 @@ def run_worker(
     try:
         source_path = Path(source).expanduser().resolve()
         registry = ModelRegistry.load(registry_path)
-        hardware = detect_hardware(disk_path=Path(runs_root))
+        resolved_runs_root = Path(runs_root).expanduser().resolve()
+        resolved_runs_root.mkdir(parents=True, exist_ok=True)
+        hardware = detect_hardware(disk_path=resolved_runs_root)
         threads = max(1, cpu_threads)
         built = build_pipeline_runtime(
             registry,
@@ -271,7 +273,7 @@ def run_worker(
             ffmpeg_path=ffmpeg_path,
             ffprobe_path=ffprobe_path,
         )
-        pipeline = Video2NotesPipeline(runs_root, runtime=built.runtime)
+        pipeline = Video2NotesPipeline(resolved_runs_root, runtime=built.runtime)
         acquisition_mode = (
             AcquisitionQualityMode.FAST
             if profile is QualityMode.FAST
@@ -308,7 +310,12 @@ def run_worker(
             }
             if message is not None:
                 payload["message"] = message
-            print(json.dumps(payload, ensure_ascii=False), flush=True)
+            try:
+                print(json.dumps(payload, ensure_ascii=False), flush=True)
+            except OSError:
+                # A detached benchmark must not fail recognition merely because its
+                # optional progress console was closed by the invoking terminal.
+                pass
 
         outcome = pipeline.run(workspace, request, emit=emit)
         _atomic_write_json(
