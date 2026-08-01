@@ -112,10 +112,10 @@ describe('desktop workflow', () => {
     const roleSelect = screen.getByLabelText('为主要语音识别选择模型')
     fireEvent.change(roleSelect, { target: { value: 'model-funasr' } })
 
-    expect(useStudioStore.getState().roles.find(role => role.id === 'asr-primary')?.modelId).toBe(
+    expect(useStudioStore.getState().roles.find(role => role.id === 'asr.primary')?.modelId).toBe(
       'model-funasr',
     )
-    expect(screen.getByRole('status')).toHaveTextContent('主要语音识别 已绑定到 FunASR Paraformer')
+    expect(screen.getByText('主要语音识别 已绑定到 FunASR Paraformer。')).toBeInTheDocument()
   })
 
   it('opens the detailed evidence, local rework, materials, and report workbenches', async () => {

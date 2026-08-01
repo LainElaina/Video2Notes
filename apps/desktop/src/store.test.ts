@@ -295,12 +295,12 @@ describe('studio store', () => {
 
   it('rejects a role binding when the model lacks capabilities', () => {
     const store = useStudioStore.getState()
-    const before = store.roles.find(role => role.id === 'asr-primary')?.modelId
+    const before = store.roles.find(role => role.id === 'asr.primary')?.modelId
 
-    store.bindRole('asr-primary', 'model-text-local')
+    store.bindRole('asr.primary', 'model-text-local')
 
     const state = useStudioStore.getState()
-    expect(state.roles.find(role => role.id === 'asr-primary')?.modelId).toBe(before)
+    expect(state.roles.find(role => role.id === 'asr.primary')?.modelId).toBe(before)
     expect(state.notice).toContain('能力')
   })
 

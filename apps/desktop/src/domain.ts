@@ -9,6 +9,52 @@ export type EvidenceKind = 'asr' | 'ocr' | 'visual' | 'chapter'
 export type ProviderStatus = 'connected' | 'disconnected' | 'testing'
 export type TelemetryValue = string | number | boolean | null
 
+export type ModelCapability =
+  | 'text'
+  | 'vision'
+  | 'structured_output'
+  | 'long_context'
+  | 'embeddings'
+  | 'asr'
+  | 'language_id'
+  | 'segment_timestamps'
+  | 'word_timestamps'
+  | 'word_confidence'
+  | 'ocr'
+  | 'ocr_boxes'
+  | 'ocr_confidence'
+  | 'video_frame_metrics'
+
+export type ProviderKind =
+  | 'local'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'openai_compatible'
+  | 'ollama'
+  | 'custom'
+
+export type ProviderProtocol =
+  | 'local'
+  | 'openai_responses'
+  | 'openai_chat_completions'
+  | 'openai_audio_transcriptions'
+  | 'anthropic_messages'
+  | 'gemini_generate_content'
+  | 'gemini_interactions'
+  | 'ollama_native_chat'
+  | 'custom_http'
+
+export type ProviderAuthScheme =
+  | 'none'
+  | 'bearer'
+  | 'x_api_key'
+  | 'x_goog_api_key'
+  | 'custom_header'
+
+export type ExperienceMode = 'guided' | 'professional'
+export type ResourcePreference = 'responsive' | 'balanced' | 'throughput'
+
 export interface SourceManifest {
   id: string
   platform: SourcePlatform
@@ -214,14 +260,22 @@ export interface ModelDefinition {
   label: string
   modelId: string
   locality: 'local' | 'cloud'
-  capabilities: Array<'text' | 'vision' | 'asr' | 'ocr' | 'json' | 'timestamps'>
+  capabilities: ModelCapability[]
+  contextWindow?: number
+  enabled: boolean
 }
 
 export interface ProviderDefinition {
   id: string
   name: string
-  kind: 'local' | 'openai-compatible' | 'ollama'
+  kind: ProviderKind
+  protocol: ProviderProtocol
+  authScheme: ProviderAuthScheme
   endpoint: string
+  locality: 'local' | 'cloud'
+  enabled: boolean
+  timeoutSeconds: number
+  protocolOptions: Record<string, unknown>
   status: ProviderStatus
   credentialState: 'not-needed' | 'stored-locally' | 'missing'
   lastChecked?: string
@@ -235,6 +289,150 @@ export interface RoleBinding {
   requiredCapabilities: ModelDefinition['capabilities']
   modelId: string
   fallbackModelId?: string
+}
+
+export interface ProtocolCatalogDefinition {
+  protocol: ProviderProtocol
+  displayName: string
+  defaultAuthScheme: ProviderAuthScheme
+  defaultBaseUrl?: string
+  requestPath?: string
+  discoveryPath?: string
+  requestContentType: string
+  structuredGenerationAdapter: boolean
+  supportsJsonSchemaTransport: boolean
+  supportsImageTransport: boolean
+  supportsStreamingTransport: boolean
+  streamTransport: string
+}
+
+export interface RoleCatalogDefinition {
+  role: string
+  requiredCapabilities: ModelCapability[]
+}
+
+export interface ConfigurationCatalogDefinition {
+  protocols: ProtocolCatalogDefinition[]
+  roles: RoleCatalogDefinition[]
+  capabilities: ModelCapability[]
+}
+
+export interface DiscoveredModelDefinition {
+  modelId: string
+  displayName: string
+  contextWindow?: number
+}
+
+export interface ResourceReserve {
+  cpuReserveRatio: number
+  memoryReserveRatio: number
+  gpuReserveRatio: number
+  vramReserveRatio: number
+  diskReserveRatio: number
+  cpuReserveCores: number
+  memoryReserveBytes: number
+  vramReserveBytes: number
+  diskReserveBytes: number
+  cpuSafetyFactor: number
+  memorySafetyFactor: number
+  gpuSafetyFactor: number
+  vramSafetyFactor: number
+  diskSafetyFactor: number
+}
+
+export interface PerformanceOverrides {
+  decodeBackend?: 'software' | 'auto_hw'
+  concurrentGpuStages?: number
+  cpuWorkers?: number
+  remoteModelConcurrency?: number
+  visualDecodeThreads?: number
+  maxFixedSamples?: number
+  analysisWidth?: number
+  cheapScanFps?: number
+  expensiveScanFps?: number
+  ocrModelClass?: 'mobile' | 'medium'
+  ocrDevice?: 'auto' | 'cpu' | 'cuda'
+  ocrBatchSize?: number
+  ocrCpuThreads?: number
+  asrModelClass?: string
+  asrDevice?: 'auto' | 'cpu' | 'cuda'
+  asrComputeType?: 'default' | 'int8' | 'int8_float16' | 'float16' | 'float32'
+  asrBatchSize?: number
+  asrCpuThreads?: number
+  asrBeamSize?: number
+  verificationPasses?: number
+  screenshotBudgetPerSection?: number
+  learnedSceneDetector?: boolean
+}
+
+export interface PerformanceSettings {
+  schemaVersion: 1
+  experienceMode: ExperienceMode
+  preference: ResourcePreference
+  reserve?: ResourceReserve
+  overrides: PerformanceOverrides
+}
+
+export interface ResourceBudget {
+  cpuAvailableEquivalent: number
+  cpuBudgetEquivalent: number
+  cpuWorkers: number
+  memoryAvailableBytes?: number
+  memoryBudgetBytes?: number
+  diskAvailableBytes?: number
+  diskBudgetBytes?: number
+  gpuName?: string
+  gpuComputeAvailableRatio?: number
+  gpuComputeBudgetRatio?: number
+  vramAvailableBytes?: number
+  vramBudgetBytes?: number
+  gpuStageSlots: number
+  remoteModelConcurrency: number
+}
+
+export interface ResourceRecommendation {
+  experienceMode: ExperienceMode
+  preference: ResourcePreference
+  reserve: ResourceReserve
+  budget: ResourceBudget
+  notes: string[]
+}
+
+export interface ExecutionPlan {
+  hardwareTier: string
+  qualityMode: ProcessingMode
+  experienceMode: ExperienceMode
+  resourcePreference: ResourcePreference
+  decodeBackend: string
+  concurrentGpuStages: number
+  cpuWorkers: number
+  remoteModelConcurrency: number
+  visualDecodeThreads: number
+  maxFixedSamples: number
+  analysisWidth: number
+  cheapScanFps: number
+  expensiveScanFps: number
+  ocrModelClass: string
+  ocrDevice: string
+  ocrBatchSize: number
+  ocrCpuThreads: number
+  asrModelClass: string
+  asrDevice: string
+  asrComputeType: string
+  asrBatchSize: number
+  asrCpuThreads: number
+  asrBeamSize: number
+  verificationPasses: number
+  screenshotBudgetPerSection: number
+  learnedSceneDetector: boolean
+  notes: string[]
+}
+
+export interface PerformanceSystemReport {
+  recommendedTier: string
+  performance: PerformanceSettings
+  recommendation: ResourceRecommendation
+  plans: Partial<Record<ProcessingMode, ExecutionPlan>>
 }
 
 export interface MachineProfile {

@@ -12,9 +12,12 @@ import type {
   ApiArtifactRef,
   ApiAuthSpec,
   ApiEvidenceSpan,
+  ApiConfigurationCatalog,
+  ApiExecutionPlan,
   ApiJobEvent,
   ApiJobSnapshot,
   ApiModelRegistry,
+  ApiPerformanceSettings,
   ApiNoteDocument,
   ApiProcessingRun,
   ApiReportRevision,
@@ -25,6 +28,7 @@ import type {
   ApiStageRecord,
   ApiSourceInput,
   ApiSourceManifest,
+  ApiSystemReport,
   PipelineSubmission,
 } from './api'
 import {
@@ -43,14 +47,22 @@ import {
 import type {
   BackendProfile,
   BrowserProfile,
+  ConfigurationCatalogDefinition,
+  DiscoveredModelDefinition,
   DraftState,
   EvidenceItem,
   MachineProfile,
   ModelDefinition,
+  ModelCapability,
   NoteDocument,
   ProcessingMode,
   ProcessingTask,
+  PerformanceSettings,
+  PerformanceSystemReport,
+  ProviderAuthScheme,
   ProviderDefinition,
+  ProviderKind,
+  ProviderProtocol,
   ReportPreset,
   ReportRevision,
   ReportRevisionFormat,
@@ -88,6 +100,12 @@ interface StudioData {
   providers: ProviderDefinition[]
   models: ModelDefinition[]
   roles: RoleBinding[]
+  configurationCatalog: ConfigurationCatalogDefinition
+  performance: PerformanceSettings
+  systemReport?: PerformanceSystemReport
+  discoveredModels: DiscoveredModelDefinition[]
+  discoveryProviderId?: string
+  providerDiscoveryStatus: 'idle' | 'loading' | 'ready' | 'error'
 }
 
 interface StudioActions {
@@ -191,13 +209,28 @@ interface StudioActions {
   setCurrentTime: (seconds: number) => void
   selectEvidence: (evidenceId: string, timeSeconds?: number) => void
   selectProvider: (providerId: string) => void
-  addProvider: (input: {
+  savePerformance: (settings: PerformanceSettings) => void
+  saveProvider: (input: {
     id: string
     name: string
-    kind: 'openai_compatible' | 'ollama'
+    kind: ProviderKind
+    protocol: ProviderProtocol
+    authScheme: ProviderAuthScheme
     baseUrl: string
+    locality: 'local' | 'cloud'
+    enabled: boolean
+    timeoutSeconds: number
+    protocolOptions: Record<string, unknown>
+    credential?: string
+  }) => void
+  discoverProviderModels: (providerId: string) => void
+  createModel: (input: {
+    providerId: string
     modelId: string
-    vision: boolean
+    displayName: string
+    contextWindow?: number
+    capabilities: ModelCapability[]
+    locality: 'local' | 'cloud'
   }) => void
   testProvider: (providerId: string) => void
   saveProviderSecret: (providerId: string, secret: string) => void
@@ -223,6 +256,242 @@ let samplingOverrideSequence = 0
 const MICROSECONDS_PER_SECOND = 1_000_000
 const MIN_OPERATION_INTERVAL_US = 100_000
 const MAX_OPERATION_FIXED_SAMPLES = 5_000
+
+const modelCapabilities: ModelCapability[] = [
+  'text',
+  'vision',
+  'structured_output',
+  'long_context',
+  'embeddings',
+  'asr',
+  'language_id',
+  'segment_timestamps',
+  'word_timestamps',
+  'word_confidence',
+  'ocr',
+  'ocr_boxes',
+  'ocr_confidence',
+  'video_frame_metrics',
+]
+
+const demoConfigurationCatalog: ConfigurationCatalogDefinition = {
+  protocols: [
+    ['local', '本机进程内引擎', 'none', undefined, undefined],
+    ['openai_responses', 'OpenAI Responses', 'bearer', 'https://api.openai.com/v1', '/models'],
+    ['openai_chat_completions', 'OpenAI Chat Completions', 'bearer', 'https://api.openai.com/v1', '/models'],
+    ['openai_audio_transcriptions', 'OpenAI Audio Transcriptions', 'bearer', 'https://api.openai.com/v1', '/models'],
+    ['anthropic_messages', 'Anthropic Messages', 'x_api_key', 'https://api.anthropic.com/v1', '/models'],
+    ['gemini_generate_content', 'Gemini generateContent', 'x_goog_api_key', 'https://generativelanguage.googleapis.com/v1beta', '/models'],
+    ['gemini_interactions', 'Gemini Interactions', 'x_goog_api_key', 'https://generativelanguage.googleapis.com/v1beta', '/models'],
+    ['ollama_native_chat', 'Ollama 原生对话', 'none', 'http://127.0.0.1:11434', '/api/tags'],
+    ['custom_http', '自定义 HTTP（实验）', 'custom_header', undefined, undefined],
+  ].map(([protocol, displayName, defaultAuthScheme, defaultBaseUrl, discoveryPath]) => ({
+    protocol: protocol as ProviderProtocol,
+    displayName: String(displayName),
+    defaultAuthScheme: defaultAuthScheme as ProviderAuthScheme,
+    defaultBaseUrl: defaultBaseUrl as string | undefined,
+    discoveryPath: discoveryPath as string | undefined,
+    requestContentType: protocol === 'local' ? 'in-process' : 'application/json',
+    structuredGenerationAdapter: protocol !== 'local' && protocol !== 'custom_http',
+    supportsJsonSchemaTransport: protocol !== 'local' && protocol !== 'custom_http',
+    supportsImageTransport: [
+      'openai_responses',
+      'openai_chat_completions',
+      'anthropic_messages',
+      'gemini_generate_content',
+      'gemini_interactions',
+      'ollama_native_chat',
+    ].includes(String(protocol)),
+    supportsStreamingTransport: protocol !== 'local' && protocol !== 'custom_http',
+    streamTransport: protocol === 'ollama_native_chat' ? 'ndjson' : protocol === 'local' ? 'none' : 'sse',
+  })),
+  roles: [
+    ['vision.change_detector', ['video_frame_metrics']],
+    ['vision.text_detector', ['ocr', 'ocr_boxes']],
+    ['vision.frame_explainer', ['text', 'vision']],
+    ['ocr.primary', ['ocr', 'ocr_boxes']],
+    ['ocr.escalation', ['text', 'vision']],
+    ['asr.primary', ['asr', 'segment_timestamps']],
+    ['asr.secondary', ['asr', 'segment_timestamps']],
+    ['asr.adjudicator', ['text']],
+    ['notes.fact_extractor', ['text', 'structured_output']],
+    ['notes.drafter', ['text', 'long_context']],
+    ['notes.verifier', ['text', 'structured_output']],
+    ['translation', ['text']],
+  ].map(([role, requiredCapabilities]) => ({
+    role: String(role),
+    requiredCapabilities: requiredCapabilities as ModelCapability[],
+  })),
+  capabilities: modelCapabilities,
+}
+
+const balancedReserve = {
+  cpuReserveRatio: 0.25,
+  memoryReserveRatio: 0.25,
+  gpuReserveRatio: 0.2,
+  vramReserveRatio: 0.2,
+  diskReserveRatio: 0.1,
+  cpuReserveCores: 1,
+  memoryReserveBytes: 3 * 1024 ** 3,
+  vramReserveBytes: 1024 ** 3,
+  diskReserveBytes: 10 * 1024 ** 3,
+  cpuSafetyFactor: 0.9,
+  memorySafetyFactor: 0.9,
+  gpuSafetyFactor: 0.9,
+  vramSafetyFactor: 0.85,
+  diskSafetyFactor: 0.9,
+}
+
+const defaultPerformance = (): PerformanceSettings => ({
+  schemaVersion: 1,
+  experienceMode: 'guided',
+  preference: 'balanced',
+  reserve: { ...balancedReserve },
+  overrides: {},
+})
+
+const demoSystemReport = (): PerformanceSystemReport => ({
+  recommendedTier: 'gpu_24gb_plus',
+  performance: defaultPerformance(),
+  recommendation: {
+    experienceMode: 'guided',
+    preference: 'balanced',
+    reserve: { ...balancedReserve },
+    budget: {
+      cpuAvailableEquivalent: 28,
+      cpuBudgetEquivalent: 20,
+      cpuWorkers: 16,
+      memoryAvailableBytes: 48 * 1024 ** 3,
+      memoryBudgetBytes: 38 * 1024 ** 3,
+      gpuName: 'RTX 5090 D',
+      gpuComputeAvailableRatio: 0.92,
+      gpuComputeBudgetRatio: 0.72,
+      vramAvailableBytes: 22 * 1024 ** 3,
+      vramBudgetBytes: 18 * 1024 ** 3,
+      gpuStageSlots: 3,
+      remoteModelConcurrency: 4,
+    },
+    notes: ['保留前台交互余量，视觉粗扫与语音识别可并行。'],
+  },
+  plans: {
+    balanced: {
+      hardwareTier: 'gpu_24gb_plus',
+      qualityMode: 'balanced',
+      experienceMode: 'guided',
+      resourcePreference: 'balanced',
+      decodeBackend: 'auto_hw',
+      concurrentGpuStages: 3,
+      cpuWorkers: 16,
+      remoteModelConcurrency: 4,
+      visualDecodeThreads: 8,
+      maxFixedSamples: 5_000,
+      analysisWidth: 1_280,
+      cheapScanFps: 3,
+      expensiveScanFps: 12,
+      ocrModelClass: 'medium',
+      ocrDevice: 'cuda',
+      ocrBatchSize: 8,
+      ocrCpuThreads: 8,
+      asrModelClass: 'large-v3',
+      asrDevice: 'cuda',
+      asrComputeType: 'float16',
+      asrBatchSize: 8,
+      asrCpuThreads: 8,
+      asrBeamSize: 5,
+      verificationPasses: 2,
+      screenshotBudgetPerSection: 4,
+      learnedSceneDetector: true,
+      notes: ['平衡模式会并行粗扫、OCR 与 ASR，并为前台保留资源。'],
+    },
+  },
+})
+
+const roleMetadata = (
+  id: string,
+): Pick<RoleBinding, 'group' | 'label' | 'description'> => {
+  const metadata: Record<
+    string,
+    Pick<RoleBinding, 'group' | 'label' | 'description'>
+  > = {
+    'vision.change_detector': {
+      group: '视觉',
+      label: '画面变化检测',
+      description: '低成本扫描内容变化并定位候选区间',
+    },
+    'vision.text_detector': {
+      group: '视觉',
+      label: '屏幕文字检测',
+      description: '定位文本区域并保留文字框坐标',
+    },
+    'vision.frame_explainer': {
+      group: '视觉',
+      label: '关键帧解释',
+      description: '解释已筛选的高价值画面',
+    },
+    'ocr.primary': {
+      group: '视觉',
+      label: '主要 OCR',
+      description: '读取屏幕文字与位置',
+    },
+    'ocr.escalation': {
+      group: '视觉',
+      label: 'OCR 视觉复核',
+      description: '仅复核低置信或复杂版面',
+    },
+    'asr.primary': {
+      group: '语音',
+      label: '主要语音识别',
+      description: '默认输出分段时间戳与文本',
+    },
+    'asr.secondary': {
+      group: '语音',
+      label: '低置信复核',
+      description: '只处理噪声、冲突与不确定片段',
+    },
+    'asr.adjudicator': {
+      group: '语音',
+      label: '语音结果仲裁',
+      description: '在多个识别候选之间判断可信文本',
+    },
+    'notes.fact_extractor': {
+      group: '笔记',
+      label: '事实提取',
+      description: '把对齐证据转为结构化事实卡',
+    },
+    'notes.drafter': {
+      group: '笔记',
+      label: '章节写作',
+      description: '根据事实卡生成长篇结构化笔记',
+    },
+    'notes.verifier': {
+      group: '笔记',
+      label: '事实验证',
+      description: '检查陈述支持度与章节覆盖率',
+    },
+    translation: {
+      group: '笔记',
+      label: '翻译与术语统一',
+      description: '处理多语言内容并统一术语',
+    },
+  }
+  return metadata[id] ?? {
+    group: '笔记',
+    label: id,
+    description: '由后端配置目录提供的处理角色',
+  }
+}
+
+const demoRoles = (): RoleBinding[] =>
+  demoConfigurationCatalog.roles.map(catalogRole => {
+    const binding = roleFixtures.find(role => role.id === catalogRole.role)
+    return {
+      id: catalogRole.role,
+      ...roleMetadata(catalogRole.role),
+      requiredCapabilities: [...catalogRole.requiredCapabilities],
+      modelId: binding?.modelId ?? '',
+      fallbackModelId: binding?.fallbackModelId,
+    }
+  })
 
 const emptyDraft = (): DraftState => ({
   input: '',
@@ -273,12 +542,14 @@ const initialData = (demo = false): StudioData => ({
   models: demo
     ? modelFixtures.map(model => ({ ...model, capabilities: [...model.capabilities] }))
     : [],
-  roles: demo
-    ? roleFixtures.map(role => ({
-        ...role,
-        requiredCapabilities: [...role.requiredCapabilities],
-      }))
-    : [],
+  roles: demo ? demoRoles() : [],
+  configurationCatalog: demo
+    ? structuredClone(demoConfigurationCatalog)
+    : { protocols: [], roles: [], capabilities: [] },
+  performance: defaultPerformance(),
+  systemReport: demo ? demoSystemReport() : undefined,
+  discoveredModels: [],
+  providerDiscoveryStatus: 'idle',
 })
 
 const isUrl = (value: string): boolean => /^https?:\/\//i.test(value.trim())
@@ -335,7 +606,7 @@ const detectSourceFixture = (input: string): SourceManifest | undefined => {
   return undefined
 }
 
-const formatMemory = (bytes?: number): string =>
+const formatMemory = (bytes?: number | null): string =>
   bytes ? `${(bytes / 1024 ** 3).toFixed(1)} GB RAM` : '内存未知'
 
 const mapMachine = (report: Awaited<ReturnType<Video2NotesApi['system']>>): MachineProfile => {
@@ -892,67 +1163,249 @@ const taskFromRun = (
   }
 }
 
-const mapCapabilities = (values: string[]): ModelDefinition['capabilities'] => {
-  const result = new Set<ModelDefinition['capabilities'][number]>()
-  for (const value of values) {
-    if (value === 'text') result.add('text')
-    if (value === 'vision' || value === 'video_frame_metrics') result.add('vision')
-    if (value === 'asr') result.add('asr')
-    if (value === 'ocr' || value.startsWith('ocr_')) result.add('ocr')
-    if (value === 'structured_output') result.add('json')
-    if (value.includes('timestamp')) result.add('timestamps')
-  }
-  return [...result]
-}
-
 const rolePresentation = (
   id: string,
+  requiredCapabilities: ModelCapability[],
 ): Pick<RoleBinding, 'group' | 'label' | 'description' | 'requiredCapabilities'> => {
-  if (id.startsWith('asr.')) {
-    return {
-      group: '语音',
-      label: id === 'asr.primary' ? '主要语音识别' : '低置信复核',
-      description: id === 'asr.primary' ? '输出分段/词级时间戳' : '只处理不确定或冲突窗口',
-      requiredCapabilities: ['asr', 'timestamps'],
-    }
-  }
-  if (id.startsWith('ocr.') || id.startsWith('vision.')) {
-    return {
-      group: '视觉',
-      label: id === 'ocr.primary' ? '屏幕文字' : id.replace('vision.', ''),
-      description: '关键帧、变化或屏幕文字处理',
-      requiredCapabilities: id === 'ocr.primary' ? ['ocr'] : ['vision'],
-    }
-  }
   return {
-    group: '笔记',
-    label: id.endsWith('fact_extractor')
-      ? '事实提取'
-      : id.endsWith('drafter')
-        ? '章节写作'
-        : id.endsWith('verifier')
-          ? '事实验证'
-          : id,
-    description: '证据约束的结构化笔记角色',
-    requiredCapabilities: id.endsWith('drafter') ? ['text'] : ['text', 'json'],
+    ...roleMetadata(id),
+    requiredCapabilities: [...requiredCapabilities],
+  }
+}
+
+const mapConfigurationCatalog = (
+  value: ApiConfigurationCatalog,
+): ConfigurationCatalogDefinition => ({
+  protocols: value.protocols.map(protocol => ({
+    protocol: protocol.protocol,
+    displayName: protocol.display_name,
+    defaultAuthScheme: protocol.default_auth_scheme,
+    defaultBaseUrl: protocol.default_base_url ?? undefined,
+    requestPath: protocol.request_path ?? undefined,
+    discoveryPath: protocol.discovery_path ?? undefined,
+    requestContentType: protocol.request_content_type,
+    structuredGenerationAdapter: protocol.structured_generation_adapter,
+    supportsJsonSchemaTransport: protocol.supports_json_schema_transport,
+    supportsImageTransport: protocol.supports_image_transport,
+    supportsStreamingTransport: protocol.supports_streaming_transport,
+    streamTransport: protocol.stream_transport,
+  })),
+  roles: value.roles.map(role => ({
+    role: role.role,
+    requiredCapabilities: [...role.required_capabilities],
+  })),
+  capabilities: [...value.capabilities],
+})
+
+const mapReserve = (
+  reserve: NonNullable<ApiPerformanceSettings['reserve']>,
+): NonNullable<PerformanceSettings['reserve']> => ({
+  cpuReserveRatio: reserve.cpu_reserve_ratio,
+  memoryReserveRatio: reserve.memory_reserve_ratio,
+  gpuReserveRatio: reserve.gpu_reserve_ratio,
+  vramReserveRatio: reserve.vram_reserve_ratio,
+  diskReserveRatio: reserve.disk_reserve_ratio,
+  cpuReserveCores: reserve.cpu_reserve_cores,
+  memoryReserveBytes: reserve.memory_reserve_bytes,
+  vramReserveBytes: reserve.vram_reserve_bytes,
+  diskReserveBytes: reserve.disk_reserve_bytes,
+  cpuSafetyFactor: reserve.cpu_safety_factor,
+  memorySafetyFactor: reserve.memory_safety_factor,
+  gpuSafetyFactor: reserve.gpu_safety_factor,
+  vramSafetyFactor: reserve.vram_safety_factor,
+  diskSafetyFactor: reserve.disk_safety_factor,
+})
+
+const serializeReserve = (
+  reserve: NonNullable<PerformanceSettings['reserve']>,
+): NonNullable<ApiPerformanceSettings['reserve']> => ({
+  cpu_reserve_ratio: reserve.cpuReserveRatio,
+  memory_reserve_ratio: reserve.memoryReserveRatio,
+  gpu_reserve_ratio: reserve.gpuReserveRatio,
+  vram_reserve_ratio: reserve.vramReserveRatio,
+  disk_reserve_ratio: reserve.diskReserveRatio,
+  cpu_reserve_cores: reserve.cpuReserveCores,
+  memory_reserve_bytes: reserve.memoryReserveBytes,
+  vram_reserve_bytes: reserve.vramReserveBytes,
+  disk_reserve_bytes: reserve.diskReserveBytes,
+  cpu_safety_factor: reserve.cpuSafetyFactor,
+  memory_safety_factor: reserve.memorySafetyFactor,
+  gpu_safety_factor: reserve.gpuSafetyFactor,
+  vram_safety_factor: reserve.vramSafetyFactor,
+  disk_safety_factor: reserve.diskSafetyFactor,
+})
+
+const defined = <T,>(value: T | null | undefined): T | undefined =>
+  value ?? undefined
+
+const mapPerformance = (value: ApiPerformanceSettings): PerformanceSettings => ({
+  schemaVersion: 1,
+  experienceMode: value.experience_mode,
+  preference: value.preference,
+  reserve: value.reserve ? mapReserve(value.reserve) : undefined,
+  overrides: {
+    decodeBackend: defined(value.overrides.decode_backend),
+    concurrentGpuStages: defined(value.overrides.concurrent_gpu_stages),
+    cpuWorkers: defined(value.overrides.cpu_workers),
+    remoteModelConcurrency: defined(value.overrides.remote_model_concurrency),
+    visualDecodeThreads: defined(value.overrides.visual_decode_threads),
+    maxFixedSamples: defined(value.overrides.max_fixed_samples),
+    analysisWidth: defined(value.overrides.analysis_width),
+    cheapScanFps: defined(value.overrides.cheap_scan_fps),
+    expensiveScanFps: defined(value.overrides.expensive_scan_fps),
+    ocrModelClass: defined(value.overrides.ocr_model_class),
+    ocrDevice: defined(value.overrides.ocr_device),
+    ocrBatchSize: defined(value.overrides.ocr_batch_size),
+    ocrCpuThreads: defined(value.overrides.ocr_cpu_threads),
+    asrModelClass: defined(value.overrides.asr_model_class),
+    asrDevice: defined(value.overrides.asr_device),
+    asrComputeType: defined(value.overrides.asr_compute_type),
+    asrBatchSize: defined(value.overrides.asr_batch_size),
+    asrCpuThreads: defined(value.overrides.asr_cpu_threads),
+    asrBeamSize: defined(value.overrides.asr_beam_size),
+    verificationPasses: defined(value.overrides.verification_passes),
+    screenshotBudgetPerSection: defined(value.overrides.screenshot_budget_per_section),
+    learnedSceneDetector: defined(value.overrides.learned_scene_detector),
+  },
+})
+
+const serializePerformance = (value: PerformanceSettings): ApiPerformanceSettings => ({
+  schema_version: 1,
+  experience_mode: value.experienceMode,
+  preference: value.preference,
+  reserve: value.reserve ? serializeReserve(value.reserve) : null,
+  overrides:
+    value.experienceMode === 'guided'
+      ? {}
+      : {
+          decode_backend: value.overrides.decodeBackend,
+          concurrent_gpu_stages: value.overrides.concurrentGpuStages,
+          cpu_workers: value.overrides.cpuWorkers,
+          remote_model_concurrency: value.overrides.remoteModelConcurrency,
+          visual_decode_threads: value.overrides.visualDecodeThreads,
+          max_fixed_samples: value.overrides.maxFixedSamples,
+          analysis_width: value.overrides.analysisWidth,
+          cheap_scan_fps: value.overrides.cheapScanFps,
+          expensive_scan_fps: value.overrides.expensiveScanFps,
+          ocr_model_class: value.overrides.ocrModelClass,
+          ocr_device: value.overrides.ocrDevice,
+          ocr_batch_size: value.overrides.ocrBatchSize,
+          ocr_cpu_threads: value.overrides.ocrCpuThreads,
+          asr_model_class: value.overrides.asrModelClass,
+          asr_device: value.overrides.asrDevice,
+          asr_compute_type: value.overrides.asrComputeType,
+          asr_batch_size: value.overrides.asrBatchSize,
+          asr_cpu_threads: value.overrides.asrCpuThreads,
+          asr_beam_size: value.overrides.asrBeamSize,
+          verification_passes: value.overrides.verificationPasses,
+          screenshot_budget_per_section: value.overrides.screenshotBudgetPerSection,
+          learned_scene_detector: value.overrides.learnedSceneDetector,
+        },
+})
+
+const mapExecutionPlan = (plan: ApiExecutionPlan) => ({
+  hardwareTier: plan.hardware_tier,
+  qualityMode: plan.quality_mode,
+  experienceMode: plan.experience_mode,
+  resourcePreference: plan.resource_preference,
+  decodeBackend: plan.decode_backend,
+  concurrentGpuStages: plan.concurrent_gpu_stages,
+  cpuWorkers: plan.cpu_workers,
+  remoteModelConcurrency: plan.remote_model_concurrency,
+  visualDecodeThreads: plan.visual_decode_threads,
+  maxFixedSamples: plan.max_fixed_samples,
+  analysisWidth: plan.analysis_width,
+  cheapScanFps: plan.cheap_scan_fps,
+  expensiveScanFps: plan.expensive_scan_fps,
+  ocrModelClass: plan.ocr_model_class,
+  ocrDevice: plan.ocr_device,
+  ocrBatchSize: plan.ocr_batch_size,
+  ocrCpuThreads: plan.ocr_cpu_threads,
+  asrModelClass: plan.asr_model_class,
+  asrDevice: plan.asr_device,
+  asrComputeType: plan.asr_compute_type,
+  asrBatchSize: plan.asr_batch_size,
+  asrCpuThreads: plan.asr_cpu_threads,
+  asrBeamSize: plan.asr_beam_size,
+  verificationPasses: plan.verification_passes,
+  screenshotBudgetPerSection: plan.screenshot_budget_per_section,
+  learnedSceneDetector: plan.learned_scene_detector,
+  notes: [...(plan.notes ?? [])],
+})
+
+const mapSystemReport = (
+  report: ApiSystemReport,
+  persistedPerformance?: ApiPerformanceSettings,
+): PerformanceSystemReport => {
+  const fallback = defaultPerformance()
+  const performance = persistedPerformance
+    ? mapPerformance(persistedPerformance)
+    : report.performance
+      ? mapPerformance(report.performance)
+      : fallback
+  const recommendation = report.recommendation
+  return {
+    recommendedTier: report.recommended_tier,
+    performance,
+    recommendation: recommendation
+      ? {
+          experienceMode: recommendation.experience_mode,
+          preference: recommendation.preference,
+          reserve: mapReserve(recommendation.reserve),
+          budget: {
+            cpuAvailableEquivalent: recommendation.budget.cpu_available_equivalent,
+            cpuBudgetEquivalent: recommendation.budget.cpu_budget_equivalent,
+            cpuWorkers: recommendation.budget.cpu_workers,
+            memoryAvailableBytes: defined(recommendation.budget.memory_available_bytes),
+            memoryBudgetBytes: defined(recommendation.budget.memory_budget_bytes),
+            diskAvailableBytes: defined(recommendation.budget.disk_available_bytes),
+            diskBudgetBytes: defined(recommendation.budget.disk_budget_bytes),
+            gpuName: defined(recommendation.budget.gpu_name),
+            gpuComputeAvailableRatio: defined(recommendation.budget.gpu_compute_available_ratio),
+            gpuComputeBudgetRatio: defined(recommendation.budget.gpu_compute_budget_ratio),
+            vramAvailableBytes: defined(recommendation.budget.vram_available_bytes),
+            vramBudgetBytes: defined(recommendation.budget.vram_budget_bytes),
+            gpuStageSlots: recommendation.budget.gpu_stage_slots,
+            remoteModelConcurrency: recommendation.budget.remote_model_concurrency,
+          },
+          notes: [...recommendation.notes],
+        }
+      : demoSystemReport().recommendation,
+    plans: Object.fromEntries(
+      Object.entries(report.plans ?? {}).map(([mode, plan]) => [mode, mapExecutionPlan(plan)]),
+    ),
   }
 }
 
 const registryPresentation = (
   value: ApiModelRegistry,
+  catalog: ConfigurationCatalogDefinition,
   secretStates: Record<string, string> = {},
 ): Pick<StudioData, 'providers' | 'models' | 'roles' | 'selectedProviderId'> => {
   const providers: ProviderDefinition[] = Object.values(value.providers).map(provider => ({
     id: provider.id,
     name: provider.display_name,
-    kind:
-      provider.kind === 'openai_compatible'
-        ? 'openai-compatible'
-        : provider.kind,
+    kind: provider.kind,
+    protocol:
+      provider.protocol ??
+      (provider.kind === 'local'
+        ? 'local'
+        : provider.kind === 'ollama'
+          ? 'ollama_native_chat'
+          : provider.endpoint_style === 'responses'
+            ? 'openai_responses'
+            : 'openai_chat_completions'),
+    authScheme:
+      provider.auth_scheme ??
+      (provider.kind === 'local' || provider.kind === 'ollama' ? 'none' : 'bearer'),
     endpoint: provider.base_url || '本机 worker',
+    locality: provider.locality,
+    enabled: provider.enabled,
+    timeoutSeconds: provider.request_timeout_seconds,
+    protocolOptions: { ...(provider.protocol_options ?? {}) },
     status: provider.kind === 'local' && provider.enabled ? 'connected' : 'disconnected',
     credentialState:
-      provider.kind === 'local'
+      (provider.auth_scheme ?? (provider.kind === 'local' ? 'none' : 'bearer')) === 'none'
         ? 'not-needed'
         : secretStates[provider.id] === 'configured' || Boolean(provider.credential_ref)
           ? 'stored-locally'
@@ -964,14 +1417,19 @@ const registryPresentation = (
     label: model.display_name,
     modelId: model.model_id,
     locality: model.locality,
-    capabilities: mapCapabilities(model.capabilities),
+    capabilities: [...model.capabilities],
+    contextWindow: model.context_window ?? undefined,
+    enabled: model.enabled,
   }))
-  const roles = Object.entries(value.roles).map(([id, binding]) => ({
-    id,
-    ...rolePresentation(id),
-    modelId: binding.primary_model_id,
-    fallbackModelId: binding.fallback_model_ids[0],
-  }))
+  const roles = catalog.roles.map(catalogRole => {
+    const binding = value.roles[catalogRole.role]
+    return {
+      id: catalogRole.role,
+      ...rolePresentation(catalogRole.role, catalogRole.requiredCapabilities),
+      modelId: binding?.primary_model_id ?? '',
+      fallbackModelId: binding?.fallback_model_ids[0],
+    }
+  })
   return {
     providers,
     models,
@@ -1363,8 +1821,10 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         }
         const nextApi = new Video2NotesApi(resolved.connection)
         const health = await nextApi.waitForHealth()
-        const [system, runtime, profiles, loadedRegistry, runs] = await Promise.all([
+        const [system, performancePayload, catalogPayload, runtime, profiles, loadedRegistry, runs] = await Promise.all([
           nextApi.system(),
+          nextApi.performance(),
+          nextApi.configurationCatalog(),
           nextApi.runtime(),
           nextApi.browserProfiles(),
           nextApi.providers(),
@@ -1372,6 +1832,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         ])
         api = nextApi
         registry = loadedRegistry
+        const configurationCatalog = mapConfigurationCatalog(catalogPayload)
         const secretPairs = await Promise.all(
           Object.values(loadedRegistry.providers)
             .filter(provider => provider.kind !== 'local')
@@ -1385,13 +1846,21 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
             }),
         )
         const secretStates = Object.fromEntries(secretPairs)
-        const presentation = registryPresentation(loadedRegistry, secretStates)
+        const presentation = registryPresentation(
+          loadedRegistry,
+          configurationCatalog,
+          secretStates,
+        )
+        const systemReport = mapSystemReport(system, performancePayload)
         const tasks = await Promise.all(
           runs.map(run => hydrateTask(taskFromRun(run))),
         )
         const warnings = runtime.warnings
         set({
           ...presentation,
+          configurationCatalog,
+          performance: systemReport.performance,
+          systemReport,
           backend: {
             mode: 'real',
             version: health.version,
@@ -2677,47 +3146,175 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       currentTimeSeconds: timeSeconds ?? state.currentTimeSeconds,
     })),
   selectProvider: selectedProviderId => set({ selectedProviderId }),
-  addProvider: input => {
+  savePerformance: settings => {
+    const normalized: PerformanceSettings = {
+      ...settings,
+      overrides: settings.experienceMode === 'guided' ? {} : { ...settings.overrides },
+    }
+    if (!api || get().backend.mode !== 'real') {
+      set(state => ({
+        performance: normalized,
+        systemReport: state.systemReport
+          ? { ...state.systemReport, performance: normalized }
+          : state.systemReport,
+        notice: '演示模式已更新性能偏好；没有写入本机配置文件。',
+      }))
+      return
+    }
+    set({ notice: '正在保存性能与资源配置…' })
+    void api
+      .savePerformance(serializePerformance(normalized))
+      .then(async saved => {
+        const system = await api!.system()
+        const systemReport = mapSystemReport(system, saved)
+        set({
+          performance: systemReport.performance,
+          systemReport,
+          machine: mapMachine(system),
+          notice: '性能配置已保存；算法计划已按当前机器重新计算。',
+        })
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  saveProvider: input => {
     if (!api || !registry || get().backend.mode !== 'real') {
       set({ notice: '只有已连接的真实本地后端会持久化 Provider。' })
       return
     }
     const id = input.id.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
-    const modelKey = `${id}-notes`
-    if (!id || !input.name.trim() || !input.baseUrl.trim() || !input.modelId.trim()) {
-      set({ notice: 'Provider ID、名称、地址和模型 ID 都不能为空。' })
+    if (!id || !input.name.trim()) {
+      set({ notice: 'Provider ID 和显示名称不能为空。' })
       return
     }
-    if (registry.providers[id] || registry.models[modelKey]) {
-      set({ notice: `Provider 或模型标识 ${id} 已存在。` })
+    if (input.protocol !== 'local' && !input.baseUrl.trim()) {
+      set({ notice: 'HTTP Provider 必须填写 Base URL。' })
       return
     }
-    const capabilities = ['text', 'structured_output', 'long_context']
-    if (input.vision) capabilities.push('vision')
+    const existing = registry.providers[id]
     const next: ApiModelRegistry = {
       ...registry,
+      schema_version: 2,
       providers: {
         ...registry.providers,
         [id]: {
           id,
           display_name: input.name.trim(),
           kind: input.kind,
-          base_url: input.baseUrl.trim().replace(/\/+$/, ''),
-          endpoint_style: 'chat_completions',
-          request_timeout_seconds: 180,
-          locality: input.kind === 'ollama' ? 'local' : 'cloud',
-          enabled: true,
+          protocol: input.protocol,
+          auth_scheme: input.authScheme,
+          base_url:
+            input.protocol === 'local'
+              ? null
+              : input.baseUrl.trim().replace(/\/+$/, ''),
+          credential_ref: existing?.credential_ref ?? null,
+          endpoint_style:
+            input.protocol === 'openai_responses' ? 'responses' : 'chat_completions',
+          protocol_options: { ...input.protocolOptions },
+          request_timeout_seconds: input.timeoutSeconds,
+          locality: input.locality,
+          enabled: input.enabled,
         },
       },
+    }
+    void api
+      .saveProviders(next)
+      .then(async saved => {
+        let persistedRegistry = saved
+        const secretStates = Object.fromEntries(
+          get().providers.map(provider => [
+            provider.id,
+            provider.credentialState === 'stored-locally' ? 'configured' : 'not_configured',
+          ]),
+        )
+        if (input.authScheme !== 'none' && input.credential?.trim()) {
+          await api!.saveProviderSecret(id, input.credential.trim())
+          secretStates[id] = 'configured'
+          persistedRegistry = await api!.providers()
+        }
+        registry = persistedRegistry
+        const presentation = registryPresentation(
+          persistedRegistry,
+          get().configurationCatalog,
+          secretStates,
+        )
+        set({
+          ...presentation,
+          selectedProviderId: id,
+          discoveredModels: [],
+          providerDiscoveryStatus: 'idle',
+          notice: `${input.name.trim()} 已保存；能力声明仍需在添加模型时明确确认。`,
+        })
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  discoverProviderModels: providerId => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '模型发现只会通过已连接的本机后端执行。' })
+      return
+    }
+    set({
+      discoveryProviderId: providerId,
+      providerDiscoveryStatus: 'loading',
+      discoveredModels: [],
+      notice: '正在读取 Provider 的模型目录…',
+    })
+    void api
+      .discoverProviderModels(providerId)
+      .then(result =>
+        set({
+          discoveryProviderId: providerId,
+          providerDiscoveryStatus: 'ready',
+          discoveredModels: result.models.map(model => ({
+            modelId: model.model_id,
+            displayName: model.display_name,
+            contextWindow: model.context_window ?? undefined,
+          })),
+          notice: `发现 ${result.models.length} 个模型；发现结果不包含能力声明。`,
+        }),
+      )
+      .catch(error =>
+        set({
+          providerDiscoveryStatus: 'error',
+          discoveredModels: [],
+          notice: errorMessage(error),
+        }),
+      )
+  },
+  createModel: input => {
+    if (!api || !registry || get().backend.mode !== 'real') {
+      set({ notice: '只有已连接的真实本地后端会持久化模型。' })
+      return
+    }
+    const modelId = input.modelId.trim()
+    const displayName = input.displayName.trim() || modelId
+    const id = `${input.providerId}-${modelId}`
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+    if (!modelId || input.capabilities.length === 0) {
+      set({ notice: '请填写模型 ID，并至少明确声明一项能力。' })
+      return
+    }
+    if (!registry.providers[input.providerId]) {
+      set({ notice: '请先保存 Provider，再添加模型。' })
+      return
+    }
+    if (registry.models[id]) {
+      set({ notice: `模型标识 ${id} 已存在。` })
+      return
+    }
+    const next: ApiModelRegistry = {
+      ...registry,
+      schema_version: 2,
       models: {
         ...registry.models,
-        [modelKey]: {
-          id: modelKey,
-          provider_id: id,
-          model_id: input.modelId.trim(),
-          display_name: input.modelId.trim(),
-          capabilities,
-          locality: input.kind === 'ollama' ? 'local' : 'cloud',
+        [id]: {
+          id,
+          provider_id: input.providerId,
+          model_id: modelId,
+          display_name: displayName,
+          capabilities: [...input.capabilities],
+          locality: input.locality,
+          context_window: input.contextWindow,
           settings: {},
           enabled: true,
         },
@@ -2727,11 +3324,21 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .saveProviders(next)
       .then(saved => {
         registry = saved
-        const presentation = registryPresentation(saved)
+        const secretStates = Object.fromEntries(
+          get().providers.map(provider => [
+            provider.id,
+            provider.credentialState === 'stored-locally' ? 'configured' : 'not_configured',
+          ]),
+        )
+        const presentation = registryPresentation(
+          saved,
+          get().configurationCatalog,
+          secretStates,
+        )
         set({
           ...presentation,
-          selectedProviderId: id,
-          notice: `${input.name.trim()} 已保存；现在可以设置密钥并绑定处理角色。`,
+          selectedProviderId: input.providerId,
+          notice: `${displayName} 已创建；只声明了你确认的 ${input.capabilities.length} 项能力。`,
         })
       })
       .catch(error => set({ notice: errorMessage(error) }))
@@ -2798,7 +3405,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     }
     void api
       .saveProviderSecret(providerId, secret)
-      .then(() =>
+      .then(async () => {
+        registry = await api!.providers()
         set(state => ({
           providers: state.providers.map(provider =>
             provider.id === providerId
@@ -2806,8 +3414,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
               : provider,
           ),
           notice: '密钥已写入 Windows 凭据库；界面不会读取或回显原值。',
-        })),
-      )
+        }))
+      })
       .catch(error => set({ notice: errorMessage(error) }))
   },
   deleteProviderSecret: providerId => {
@@ -2817,24 +3425,55 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     }
     void api
       .deleteProviderSecret(providerId)
-      .then(() =>
+      .then(async () => {
+        registry = await api!.providers()
         set(state => ({
           providers: state.providers.map(provider =>
             provider.id === providerId ? { ...provider, credentialState: 'missing' } : provider,
           ),
           notice: 'Provider 密钥已从 Windows 凭据库删除。',
-        })),
-      )
+        }))
+      })
       .catch(error => set({ notice: errorMessage(error) }))
   },
   bindRole: (roleId, modelId) => {
     const role = get().roles.find(item => item.id === roleId)
+    if (!role) return
+    if (!modelId) {
+      if (get().backend.mode !== 'real' || !api || !registry) {
+        set(state => ({
+          roles: state.roles.map(item =>
+            item.id === roleId ? { ...item, modelId: '' } : item,
+          ),
+          notice: `${role.label} 已取消绑定。`,
+        }))
+        return
+      }
+      const nextRoles = { ...registry.roles }
+      delete nextRoles[roleId]
+      void api
+        .saveProviders({ ...registry, roles: nextRoles })
+        .then(saved => {
+          registry = saved
+          set(state => ({
+            roles: state.roles.map(item =>
+              item.id === roleId ? { ...item, modelId: '' } : item,
+            ),
+            notice: `${role.label} 已取消绑定。`,
+          }))
+        })
+        .catch(error => set({ notice: errorMessage(error) }))
+      return
+    }
     const model = get().models.find(item => item.id === modelId)
-    if (!role || !model) return
+    const provider = model
+      ? get().providers.find(item => item.id === model.providerId)
+      : undefined
+    if (!model) return
     const compatible = role.requiredCapabilities.every(capability =>
       model.capabilities.includes(capability),
     )
-    if (!compatible) {
+    if (!compatible || !model.enabled || !provider?.enabled) {
       set({ notice: `${model.label} 缺少该角色需要的能力，绑定未保存。` })
       return
     }

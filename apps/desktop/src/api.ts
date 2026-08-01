@@ -378,16 +378,142 @@ export interface ApiNoteDocument {
 
 export interface ApiSystemReport {
   hardware: {
+    os_name?: string
+    os_version?: string
+    architecture?: string
     cpu_name: string
     logical_cores: number
-    memory_total_bytes?: number
+    cpu_load_percent?: number | null
+    memory_total_bytes?: number | null
+    memory_available_bytes?: number | null
+    memory_load_percent?: number | null
+    disk_total_bytes?: number | null
+    disk_available_bytes?: number | null
     gpus: Array<{
       name: string
-      memory_total_bytes?: number
+      vendor?: string
+      memory_total_bytes?: number | null
+      memory_free_bytes?: number | null
+      memory_used_bytes?: number | null
+      utilization_percent?: number | null
+      driver_version?: string | null
     }>
+    ffmpeg_hwaccels?: string[]
   }
   recommended_tier: string
-  plans: Record<string, Record<string, unknown>>
+  performance: ApiPerformanceSettings
+  recommendation: ApiResourceRecommendation
+  plans: Record<string, ApiExecutionPlan>
+}
+
+export type ApiExperienceMode = 'guided' | 'professional'
+export type ApiResourcePreference = 'responsive' | 'balanced' | 'throughput'
+
+export interface ApiResourceReserve {
+  cpu_reserve_ratio: number
+  memory_reserve_ratio: number
+  gpu_reserve_ratio: number
+  vram_reserve_ratio: number
+  disk_reserve_ratio: number
+  cpu_reserve_cores: number
+  memory_reserve_bytes: number
+  vram_reserve_bytes: number
+  disk_reserve_bytes: number
+  cpu_safety_factor: number
+  memory_safety_factor: number
+  gpu_safety_factor: number
+  vram_safety_factor: number
+  disk_safety_factor: number
+}
+
+export interface ApiPerformanceOverrides {
+  decode_backend?: 'software' | 'auto_hw' | null
+  concurrent_gpu_stages?: number | null
+  cpu_workers?: number | null
+  remote_model_concurrency?: number | null
+  visual_decode_threads?: number | null
+  max_fixed_samples?: number | null
+  analysis_width?: number | null
+  cheap_scan_fps?: number | null
+  expensive_scan_fps?: number | null
+  ocr_model_class?: 'mobile' | 'medium' | null
+  ocr_device?: 'auto' | 'cpu' | 'cuda' | null
+  ocr_batch_size?: number | null
+  ocr_cpu_threads?: number | null
+  asr_model_class?: string | null
+  asr_device?: 'auto' | 'cpu' | 'cuda' | null
+  asr_compute_type?: 'default' | 'int8' | 'int8_float16' | 'float16' | 'float32' | null
+  asr_batch_size?: number | null
+  asr_cpu_threads?: number | null
+  asr_beam_size?: number | null
+  verification_passes?: number | null
+  screenshot_budget_per_section?: number | null
+  learned_scene_detector?: boolean | null
+}
+
+export interface ApiPerformanceSettings {
+  schema_version: 1
+  experience_mode: ApiExperienceMode
+  preference: ApiResourcePreference
+  reserve?: ApiResourceReserve | null
+  overrides: ApiPerformanceOverrides
+}
+
+export interface ApiResourceBudget {
+  cpu_available_equivalent: number
+  cpu_budget_equivalent: number
+  cpu_workers: number
+  memory_available_bytes?: number | null
+  memory_budget_bytes?: number | null
+  disk_available_bytes?: number | null
+  disk_budget_bytes?: number | null
+  gpu_name?: string | null
+  gpu_compute_available_ratio?: number | null
+  gpu_compute_budget_ratio?: number | null
+  vram_available_bytes?: number | null
+  vram_budget_bytes?: number | null
+  gpu_stage_slots: number
+  remote_model_concurrency: number
+}
+
+export interface ApiResourceRecommendation {
+  experience_mode: ApiExperienceMode
+  preference: ApiResourcePreference
+  reserve: ApiResourceReserve
+  budget: ApiResourceBudget
+  notes: string[]
+}
+
+export interface ApiExecutionPlan {
+  hardware_tier: string
+  quality_mode: 'fast' | 'balanced' | 'accurate'
+  experience_mode: ApiExperienceMode
+  resource_preference: ApiResourcePreference
+  resource_budget?: ApiResourceBudget
+  decode_backend: string
+  concurrent_gpu_stages: number
+  cpu_workers: number
+  remote_model_concurrency: number
+  visual_decode_threads: number
+  max_fixed_samples: number
+  analysis_width: number
+  cheap_scan_fps: number
+  expensive_scan_fps: number
+  ocr_model_class: string
+  ocr_device: string
+  ocr_batch_size: number
+  ocr_cpu_threads: number
+  asr_model_class: string
+  asr_device: string
+  asr_compute_type: string
+  asr_batch_size: number
+  asr_cpu_threads: number
+  asr_beam_size: number
+  secondary_asr?: string
+  verification_passes: number
+  screenshot_budget_per_section: number
+  learned_scene_detector: boolean
+  notes: string[]
 }
 
 export interface ApiBrowserProfile {
@@ -401,13 +527,97 @@ export interface ApiBrowserProfile {
 export interface ApiProviderSpec {
   id: string
   display_name: string
-  kind: 'local' | 'openai_compatible' | 'ollama'
-  base_url?: string
-  credential_ref?: string
+  kind: ApiProviderKind
+  protocol: ApiProviderProtocol
+  auth_scheme: ApiAuthScheme
+  base_url?: string | null
+  credential_ref?: string | null
   endpoint_style: 'responses' | 'chat_completions'
+  protocol_options: Record<string, unknown>
   request_timeout_seconds: number
   locality: 'local' | 'cloud'
   enabled: boolean
+}
+
+export type ApiProviderKind =
+  | 'local'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'openai_compatible'
+  | 'ollama'
+  | 'custom'
+
+export type ApiProviderProtocol =
+  | 'local'
+  | 'openai_responses'
+  | 'openai_chat_completions'
+  | 'openai_audio_transcriptions'
+  | 'anthropic_messages'
+  | 'gemini_generate_content'
+  | 'gemini_interactions'
+  | 'ollama_native_chat'
+  | 'custom_http'
+
+export type ApiAuthScheme =
+  | 'none'
+  | 'bearer'
+  | 'x_api_key'
+  | 'x_goog_api_key'
+  | 'custom_header'
+
+export type ApiModelCapability =
+  | 'text'
+  | 'vision'
+  | 'structured_output'
+  | 'long_context'
+  | 'embeddings'
+  | 'asr'
+  | 'language_id'
+  | 'segment_timestamps'
+  | 'word_timestamps'
+  | 'word_confidence'
+  | 'ocr'
+  | 'ocr_boxes'
+  | 'ocr_confidence'
+  | 'video_frame_metrics'
+
+export interface ApiProtocolCatalogEntry {
+  protocol: ApiProviderProtocol
+  display_name: string
+  default_auth_scheme: ApiAuthScheme
+  default_base_url?: string | null
+  request_path?: string | null
+  discovery_path?: string | null
+  request_content_type: string
+  structured_generation_adapter: boolean
+  supports_json_schema_transport: boolean
+  supports_image_transport: boolean
+  supports_streaming_transport: boolean
+  stream_transport: string
+}
+
+export interface ApiRoleCatalogEntry {
+  role: string
+  required_capabilities: ApiModelCapability[]
+}
+
+export interface ApiConfigurationCatalog {
+  protocols: ApiProtocolCatalogEntry[]
+  roles: ApiRoleCatalogEntry[]
+  capabilities: ApiModelCapability[]
+}
+
+export interface ApiDiscoveredModel {
+  model_id: string
+  display_name: string
+  context_window?: number | null
+}
+
+export interface ApiProviderDiscoveryResult {
+  provider_id: string
+  protocol: ApiProviderProtocol
+  models: ApiDiscoveredModel[]
 }
 
 export interface ApiModelSpec {
@@ -415,9 +625,9 @@ export interface ApiModelSpec {
   provider_id: string
   model_id: string
   display_name: string
-  capabilities: string[]
+  capabilities: ApiModelCapability[]
   locality: 'local' | 'cloud'
-  context_window?: number
+  context_window?: number | null
   settings: Record<string, unknown>
   enabled: boolean
 }
@@ -604,6 +814,21 @@ export class Video2NotesApi {
     return this.request('/api/system')
   }
 
+  performance(): Promise<ApiPerformanceSettings> {
+    return this.request('/api/performance')
+  }
+
+  savePerformance(settings: ApiPerformanceSettings): Promise<ApiPerformanceSettings> {
+    return this.request('/api/performance', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    })
+  }
+
+  configurationCatalog(): Promise<ApiConfigurationCatalog> {
+    return this.request('/api/configuration-catalog')
+  }
+
   runtime(): Promise<{ injected: boolean; warnings: string[] }> {
     return this.request('/api/runtime')
   }
@@ -774,6 +999,10 @@ export class Video2NotesApi {
     return this.request(`/api/providers/${encodeURIComponent(providerId)}/test`, {
       method: 'POST',
     })
+  }
+
+  discoverProviderModels(providerId: string): Promise<ApiProviderDiscoveryResult> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}/discover`)
   }
 
   async artifactJson<T>(runId: string, relativePath: string): Promise<T> {

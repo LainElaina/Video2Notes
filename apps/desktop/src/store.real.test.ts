@@ -66,14 +66,17 @@ const baseEffectiveEvidence: ApiEvidenceSpan[] = [
 ]
 
 const registryPayload = {
-  schema_version: 1,
+  schema_version: 2,
   providers: {
     'cloud-one': {
       id: 'cloud-one',
       display_name: 'Cloud One',
       kind: 'openai_compatible' as const,
+      protocol: 'openai_chat_completions' as const,
+      auth_scheme: 'bearer' as const,
       base_url: 'https://models.example.test/v1',
       endpoint_style: 'chat_completions' as const,
+      protocol_options: {},
       request_timeout_seconds: 180,
       locality: 'cloud' as const,
       enabled: true,
@@ -85,7 +88,7 @@ const registryPayload = {
       provider_id: 'cloud-one',
       model_id: 'whisper-large-v3',
       display_name: 'Whisper large-v3',
-      capabilities: ['asr', 'timestamped_segments'],
+      capabilities: ['asr', 'segment_timestamps'],
       locality: 'cloud' as const,
       settings: {},
       enabled: true,
@@ -98,6 +101,58 @@ const registryPayload = {
       fallback_model_ids: [],
     },
   },
+}
+
+const performancePayload = {
+  schema_version: 1 as const,
+  experience_mode: 'guided' as const,
+  preference: 'balanced' as const,
+  reserve: {
+    cpu_reserve_ratio: 0.25,
+    memory_reserve_ratio: 0.25,
+    gpu_reserve_ratio: 0.2,
+    vram_reserve_ratio: 0.2,
+    disk_reserve_ratio: 0.1,
+    cpu_reserve_cores: 1,
+    memory_reserve_bytes: 3 * 1024 ** 3,
+    vram_reserve_bytes: 1024 ** 3,
+    disk_reserve_bytes: 10 * 1024 ** 3,
+    cpu_safety_factor: 0.9,
+    memory_safety_factor: 0.9,
+    gpu_safety_factor: 0.9,
+    vram_safety_factor: 0.85,
+    disk_safety_factor: 0.9,
+  },
+  overrides: {},
+}
+
+const configurationCatalogPayload = {
+  protocols: [
+    {
+      protocol: 'openai_chat_completions',
+      display_name: 'OpenAI Chat Completions',
+      default_auth_scheme: 'bearer',
+      default_base_url: 'https://api.openai.com/v1',
+      request_path: '/chat/completions',
+      discovery_path: '/models',
+      request_content_type: 'application/json',
+      structured_generation_adapter: true,
+      supports_json_schema_transport: true,
+      supports_image_transport: true,
+      supports_streaming_transport: true,
+      stream_transport: 'sse',
+    },
+  ],
+  roles: [
+    { role: 'asr.primary', required_capabilities: ['asr', 'segment_timestamps'] },
+    { role: 'notes.drafter', required_capabilities: ['text', 'long_context'] },
+  ],
+  capabilities: [
+    'text',
+    'long_context',
+    'asr',
+    'segment_timestamps',
+  ],
 }
 
 const runningJob: ApiJobSnapshot = {
@@ -272,9 +327,40 @@ describe('studio store against the real loopback API contract', () => {
               gpus: [{ name: 'RTX test', memory_total_bytes: 16 * 1024 ** 3 }],
             },
             recommended_tier: 'high',
+            performance: performancePayload,
+            recommendation: {
+              experience_mode: 'guided',
+              preference: 'balanced',
+              reserve: performancePayload.reserve,
+              budget: {
+                cpu_available_equivalent: 12,
+                cpu_budget_equivalent: 8,
+                cpu_workers: 8,
+                memory_available_bytes: 24 * 1024 ** 3,
+                memory_budget_bytes: 18 * 1024 ** 3,
+                disk_available_bytes: 100 * 1024 ** 3,
+                disk_budget_bytes: 80 * 1024 ** 3,
+                gpu_name: 'RTX test',
+                gpu_compute_available_ratio: 0.8,
+                gpu_compute_budget_ratio: 0.6,
+                vram_available_bytes: 12 * 1024 ** 3,
+                vram_budget_bytes: 10 * 1024 ** 3,
+                gpu_stage_slots: 1,
+                remote_model_concurrency: 2,
+              },
+              notes: ['test recommendation'],
+            },
             plans: {},
           }),
         )
+      }
+      if (url.pathname === '/api/performance') {
+        return Promise.resolve(
+          method === 'PUT' ? json(JSON.parse(String(init?.body))) : json(performancePayload),
+        )
+      }
+      if (url.pathname === '/api/configuration-catalog') {
+        return Promise.resolve(json(configurationCatalogPayload))
       }
       if (url.pathname === '/api/runtime') {
         return Promise.resolve(json({ injected: true, warnings: [] }))
@@ -307,6 +393,21 @@ describe('studio store against the real loopback API contract', () => {
       if (url.pathname === '/api/providers/cloud-one/test' && method === 'POST') {
         return Promise.resolve(
           json({ provider_id: 'cloud-one', status: 'connected', detail: 'Provider reachable' }),
+        )
+      }
+      if (url.pathname === '/api/providers/cloud-one/discover' && method === 'GET') {
+        return Promise.resolve(
+          json({
+            provider_id: 'cloud-one',
+            protocol: 'openai_chat_completions',
+            models: [
+              {
+                model_id: 'notes-writer',
+                display_name: 'Notes writer',
+                context_window: 128_000,
+              },
+            ],
+          }),
         )
       }
       if (url.pathname === '/api/runs') return Promise.resolve(json([]))
@@ -605,6 +706,65 @@ describe('studio store against the real loopback API contract', () => {
     expect(useStudioStore.getState().providers).toMatchObject([
       { id: 'cloud-one', credentialState: 'stored-locally' },
     ])
+    expect(useStudioStore.getState().models[0]?.capabilities).toEqual([
+      'asr',
+      'segment_timestamps',
+    ])
+    expect(useStudioStore.getState().roles).toEqual([
+      expect.objectContaining({
+        id: 'asr.primary',
+        modelId: 'asr-main',
+        requiredCapabilities: ['asr', 'segment_timestamps'],
+      }),
+      expect.objectContaining({
+        id: 'notes.drafter',
+        modelId: '',
+        requiredCapabilities: ['text', 'long_context'],
+      }),
+    ])
+    expect(useStudioStore.getState().performance).toMatchObject({
+      experienceMode: 'guided',
+      preference: 'balanced',
+    })
+
+    useStudioStore.getState().savePerformance({
+      ...useStudioStore.getState().performance,
+      experienceMode: 'professional',
+      preference: 'throughput',
+      overrides: {
+        cpuWorkers: 10,
+        remoteModelConcurrency: 3,
+        cheapScanFps: 2,
+        expensiveScanFps: 8,
+      },
+    })
+    await vi.waitFor(() =>
+      expect(
+        requests.some(
+          request => request.url === '/api/performance' && request.method === 'PUT',
+        ),
+      ).toBe(true),
+    )
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().performance).toMatchObject({
+        experienceMode: 'professional',
+        preference: 'throughput',
+        overrides: { cpuWorkers: 10, remoteModelConcurrency: 3 },
+      }),
+    )
+    const performanceSave = requests.find(
+      request => request.url === '/api/performance' && request.method === 'PUT',
+    )
+    expect(JSON.parse(performanceSave?.body ?? '{}')).toMatchObject({
+      experience_mode: 'professional',
+      preference: 'throughput',
+      overrides: {
+        cpu_workers: 10,
+        remote_model_concurrency: 3,
+        cheap_scan_fps: 2,
+        expensive_scan_fps: 8,
+      },
+    })
 
     const store = useStudioStore.getState()
     store.setDraftInput('https://www.youtube.com/watch?v=real-api-test')
@@ -1009,12 +1169,53 @@ describe('studio store against the real loopback API contract', () => {
       request => request.url === '/api/providers/cloud-one/secret' && request.method === 'PUT',
     )
     expect(JSON.parse(secretWrite?.body ?? '{}')).toEqual({ secret: 'new-local-credential' })
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().notice).toContain('Windows 凭据库'),
+    )
 
     useStudioStore.getState().testProvider('cloud-one')
     await vi.waitFor(() =>
       expect(useStudioStore.getState().providers[0]?.status).toBe('connected'),
     )
     expect(useStudioStore.getState().notice).toBe('Provider reachable')
+
+    useStudioStore.getState().discoverProviderModels('cloud-one')
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().providerDiscoveryStatus).toBe('ready'),
+    )
+    expect(useStudioStore.getState().discoveredModels).toEqual([
+      {
+        modelId: 'notes-writer',
+        displayName: 'Notes writer',
+        contextWindow: 128_000,
+      },
+    ])
+    expect(useStudioStore.getState().notice).toContain('不包含能力声明')
+
+    useStudioStore.getState().createModel({
+      providerId: 'cloud-one',
+      modelId: 'notes-writer',
+      displayName: 'Notes writer',
+      contextWindow: 128_000,
+      capabilities: ['text', 'long_context'],
+      locality: 'cloud',
+    })
+    await vi.waitFor(() =>
+      expect(
+        useStudioStore
+          .getState()
+          .models.some(model => model.modelId === 'notes-writer'),
+      ).toBe(true),
+    )
+    const modelSave = requests.find(
+      request =>
+        request.url === '/api/providers' &&
+        request.method === 'PUT' &&
+        request.body?.includes('notes-writer'),
+    )
+    expect(
+      JSON.parse(modelSave?.body ?? '{}').models['cloud-one-notes-writer'].capabilities,
+    ).toEqual(['text', 'long_context'])
 
     useStudioStore.getState().bindRole('asr.primary', 'asr-main')
     await vi.waitFor(() =>

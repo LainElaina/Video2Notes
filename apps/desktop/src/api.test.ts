@@ -97,14 +97,14 @@ describe('real local API client', () => {
     })
   })
 
-  it('maps authenticated probe, job, result, provider secret, test, and role persistence requests', async () => {
+  it('maps authenticated processing, provider v2, discovery, catalog, and performance requests', async () => {
     fetchMock.mockImplementation(() => Promise.resolve(json({ ok: true })))
     const client = new Video2NotesApi({
       baseUrl: 'http://127.0.0.1:43119/',
       token: 'session-secret',
     })
     const registry = {
-      schema_version: 1,
+      schema_version: 2,
       providers: {},
       models: {},
       roles: {
@@ -157,6 +157,21 @@ describe('real local API client', () => {
     await client.saveProviderSecret('cloud/one', 'credential-value')
     await client.testProvider('cloud/one')
     await client.saveProviders(registry)
+    await client.configurationCatalog()
+    await client.performance()
+    await client.savePerformance({
+      schema_version: 1,
+      experience_mode: 'professional',
+      preference: 'throughput',
+      reserve: null,
+      overrides: {
+        cpu_workers: 12,
+        remote_model_concurrency: 3,
+        cheap_scan_fps: 2,
+        expensive_scan_fps: 8,
+      },
+    })
+    await client.discoverProviderModels('cloud/one')
 
     const calls = fetchMock.mock.calls.map(asRequest)
     expect(calls[0]).toMatchObject({ url: 'http://127.0.0.1:43119/api/health' })
@@ -199,6 +214,27 @@ describe('real local API client', () => {
       primary_model_id: 'writer-v2',
       fallback_model_ids: ['writer-v1'],
     })
+    expect(calls[7].url).toBe(
+      'http://127.0.0.1:43119/api/configuration-catalog',
+    )
+    expect(calls[8].url).toBe('http://127.0.0.1:43119/api/performance')
+    expect(calls[9]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/performance',
+      init: { method: 'PUT' },
+    })
+    expect(JSON.parse(String(calls[9].init.body))).toMatchObject({
+      experience_mode: 'professional',
+      preference: 'throughput',
+      overrides: {
+        cpu_workers: 12,
+        remote_model_concurrency: 3,
+        cheap_scan_fps: 2,
+        expensive_scan_fps: 8,
+      },
+    })
+    expect(calls[10].url).toBe(
+      'http://127.0.0.1:43119/api/providers/cloud%2Fone/discover',
+    )
   })
 
   it('maps the run materials contract, including multipart files and query metadata', async () => {
