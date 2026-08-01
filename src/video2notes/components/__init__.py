@@ -1,0 +1,66 @@
+"""App-managed portable runtimes and local model components."""
+
+from .catalog import DEFAULT_COMPONENT_CATALOG, ComponentCatalog
+from .downloaders import (
+    ComponentDownloader,
+    ComponentDownloadError,
+    HuggingFaceSnapshotDownloader,
+    PaddleCompatibilityResolver,
+    PaddleCompatibleDownloader,
+)
+from .manager import (
+    ComponentManager,
+    ComponentManagerError,
+    ComponentNotReadyError,
+    ComponentPathError,
+    ModuleProbeResult,
+)
+from .models import (
+    ComponentAction,
+    ComponentActionKind,
+    ComponentCompletionMarker,
+    ComponentInventory,
+    ComponentInventoryItem,
+    ComponentKind,
+    ComponentManifest,
+    ComponentState,
+    DownloadResult,
+    DownloadSource,
+    LocalAdapterSettings,
+    LocalModelRole,
+    PrepareBatchResult,
+    PrepareResult,
+    PrepareStatus,
+    TierRecommendation,
+)
+
+__all__ = [
+    "ComponentAction",
+    "ComponentActionKind",
+    "ComponentCatalog",
+    "ComponentCompletionMarker",
+    "ComponentDownloadError",
+    "ComponentDownloader",
+    "ComponentInventory",
+    "ComponentInventoryItem",
+    "ComponentKind",
+    "ComponentManager",
+    "ComponentManagerError",
+    "ComponentManifest",
+    "ComponentNotReadyError",
+    "ComponentPathError",
+    "ComponentState",
+    "DEFAULT_COMPONENT_CATALOG",
+    "DownloadResult",
+    "DownloadSource",
+    "HuggingFaceSnapshotDownloader",
+    "LocalAdapterSettings",
+    "LocalModelRole",
+    "ModuleProbeResult",
+    "PaddleCompatibilityResolver",
+    "PaddleCompatibleDownloader",
+    "PrepareBatchResult",
+    "PrepareResult",
+    "PrepareStatus",
+    "TierRecommendation",
+]
