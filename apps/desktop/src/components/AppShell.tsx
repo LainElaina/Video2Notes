@@ -110,19 +110,19 @@ function TopNavigation() {
         <div className="workspace-mode-switch" role="group" aria-label="界面工作模式">
           <button
             type="button"
-            aria-label="引导模式"
+            aria-label="简约视图"
             aria-pressed={workspaceMode === 'guided'}
             onClick={() => setWorkspaceMode('guided')}
           >
-            引导模式
+            简约视图
           </button>
           <button
             type="button"
-            aria-label="专业模式"
+            aria-label="数据工作室"
             aria-pressed={workspaceMode === 'professional'}
             onClick={() => setWorkspaceMode('professional')}
           >
-            专业模式
+            数据工作室
           </button>
         </div>
         <label className="theme-preset-control">

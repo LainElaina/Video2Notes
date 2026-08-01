@@ -273,6 +273,49 @@ describe('real local API client', () => {
     )
   })
 
+  it('posts the hardware-aware processing estimate contract', async () => {
+    fetchMock.mockResolvedValueOnce(
+      json({
+        hardware_tier: 'gpu_12gb',
+        quality_mode: 'accurate',
+        media_duration_seconds: 600,
+        lower_seconds: 135,
+        upper_seconds: 417,
+        lower_realtime_factor: 0.2,
+        upper_realtime_factor: 0.67,
+        basis: 'engineering_budget_v1',
+        precision_intent: '高精度',
+        notes: ['包含完整处理阶段'],
+      }),
+    )
+    const client = new Video2NotesApi({
+      baseUrl: 'http://127.0.0.1:43119',
+      token: 'session-secret',
+    })
+
+    await expect(
+      client.estimateProcessing({
+        duration_seconds: 600,
+        quality_mode: 'accurate',
+        source_height: 1440,
+        source_fps: 60,
+      }),
+    ).resolves.toMatchObject({ hardware_tier: 'gpu_12gb', lower_seconds: 135 })
+
+    const call = asRequest(fetchMock.mock.calls[0])
+    expect(call).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/estimate',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(call.init.body))).toEqual({
+      duration_seconds: 600,
+      quality_mode: 'accurate',
+      source_height: 1440,
+      source_fps: 60,
+    })
+    expect(new Headers(call.init.headers).get('X-Video2Notes-Token')).toBe('session-secret')
+  })
+
   it('maps the run materials contract, including multipart files and query metadata', async () => {
     const material = {
       id: 'material-abc123',

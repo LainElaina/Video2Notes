@@ -7,6 +7,7 @@ import {
   Gauge,
   Globe2,
   MonitorUp,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Timer,
@@ -62,6 +63,9 @@ export function CreatePage() {
   const createTask = useStudioStore(state => state.createTask)
   const backend = useStudioStore(state => state.backend)
   const machine = useStudioStore(state => state.machine)
+  const processingEstimates = useStudioStore(state => state.processingEstimates)
+  const processingEstimateStatus = useStudioStore(state => state.processingEstimateStatus)
+  const processingEstimateError = useStudioStore(state => state.processingEstimateError)
   const browserProfiles = useStudioStore(state => state.browserProfiles)
   const setDraftAuthKind = useStudioStore(state => state.setDraftAuthKind)
   const setDraftBrowser = useStudioStore(state => state.setDraftBrowser)
@@ -70,6 +74,23 @@ export function CreatePage() {
   const setLanguageHints = useStudioStore(state => state.setLanguageHints)
   const [dragActive, setDragActive] = useState(false)
   const samplingValidation = validateSamplingDraft(draft)
+  const manifestNeedsRefresh = Boolean(
+    draft.manifest && draft.status !== 'ready' && draft.status !== 'submitting',
+  )
+
+  const estimateLabel = (mode: ProcessingMode): string => {
+    const estimate = processingEstimates[mode]
+    if (!estimate) return modeCopy[mode].estimate
+    const lowerRtf = estimate.lowerRealtimeFactor.toFixed(
+      estimate.lowerRealtimeFactor >= 1 ? 1 : 2,
+    )
+    const upperRtf = estimate.upperRealtimeFactor.toFixed(
+      estimate.upperRealtimeFactor >= 1 ? 1 : 2,
+    )
+    return `本机预计 ${formatTime(Math.ceil(estimate.lowerSeconds))}–${formatTime(
+      Math.ceil(estimate.upperSeconds),
+    )} · ${lowerRtf}–${upperRtf}×`
+  }
 
   const handleFile = (file?: File) => {
     if (!file) return
@@ -155,13 +176,22 @@ export function CreatePage() {
       )}
 
       {draft.manifest && (
-        <section className="source-manifest" aria-label="来源探测结果">
+        <section
+          className={`source-manifest ${manifestNeedsRefresh ? 'is-stale' : ''}`}
+          aria-label={manifestNeedsRefresh ? '来源探测结果，需要重新探测' : '来源探测结果'}
+        >
           <div className="manifest-thumb" aria-hidden="true">
             <FileVideo2 size={28} />
             <span>{platformLabel[draft.manifest.platform]}</span>
           </div>
           <div className="manifest-main">
-            <span className="section-kicker">SOURCE VERIFIED</span>
+            <span className="section-kicker">
+              {manifestNeedsRefresh
+                ? draft.status === 'probing'
+                  ? 'SOURCE RECHECKING'
+                  : 'SOURCE NEEDS REFRESH'
+                : 'SOURCE VERIFIED'}
+            </span>
             <h3>{draft.manifest.title}</h3>
             <p>
               {draft.manifest.author} · {formatTime(draft.manifest.durationSeconds)} ·{' '}
@@ -188,9 +218,28 @@ export function CreatePage() {
               <dd>{draft.manifest.authLabel}</dd>
             </div>
           </dl>
-          <div className="quality-promise">
-            <ShieldCheck size={16} aria-hidden="true" />
-            已锁定当前可访问的最佳画质；若下载结果降低清晰度，任务会停止并说明原因。
+          <div className={`quality-promise ${manifestNeedsRefresh ? 'is-stale' : ''}`}>
+            {manifestNeedsRefresh ? (
+              <RefreshCw
+                className={draft.status === 'probing' ? 'spin' : ''}
+                size={16}
+                aria-hidden="true"
+              />
+            ) : (
+              <ShieldCheck size={16} aria-hidden="true" />
+            )}
+            <span>
+              {manifestNeedsRefresh
+                ? draft.status === 'probing'
+                  ? '正在按当前来源、身份和处理模式重新探测；旧结果暂仅供参考。'
+                  : '来源或探测策略已变化，当前信息仅供参考；重新探测后才能开始处理。'
+                : '已锁定当前可访问的最佳画质；若下载结果降低清晰度，任务会停止并说明原因。'}
+            </span>
+            {manifestNeedsRefresh && draft.status !== 'probing' && (
+              <button className="manifest-reprobe" type="button" onClick={probeSource}>
+                重新探测
+              </button>
+            )}
           </div>
         </section>
       )}
@@ -228,7 +277,7 @@ export function CreatePage() {
                     <strong>{item.label}</strong>
                     <span>
                       <Timer size={13} aria-hidden="true" />
-                      {item.estimate}
+                      {estimateLabel(mode)}
                     </span>
                   </span>
                   <span className="mode-description">{item.description}</span>
@@ -245,6 +294,21 @@ export function CreatePage() {
             )
           })}
         </div>
+        {draft.manifest && processingEstimateStatus !== 'idle' && (
+          <p
+            className={`mode-estimate-note estimate-${processingEstimateStatus}`}
+            aria-live="polite"
+            title={processingEstimateError}
+          >
+            {processingEstimateStatus === 'loading'
+              ? '正在根据这台电脑与当前视频计算三档耗时区间…'
+              : processingEstimateStatus === 'ready'
+                ? '三档均为当前硬件与已探测画质的本机工程预算，不是速度保证。'
+                : processingEstimateStatus === 'partial'
+                  ? '部分本机估算暂不可用；未返回的模式继续显示通用区间。'
+                  : '本机估算暂不可用，当前显示通用区间；这不会阻止处理。'}
+          </p>
+        )}
       </section>
 
       <details className="advanced-options">
@@ -344,7 +408,11 @@ export function CreatePage() {
           onClick={createTask}
           disabled={draft.status !== 'ready' || samplingValidation.errors.length > 0}
         >
-          {draft.status === 'submitting' ? '正在提交…' : '开始处理'}
+          {draft.status === 'submitting'
+            ? '正在提交…'
+            : manifestNeedsRefresh
+              ? '需重新探测'
+              : '开始处理'}
           <ArrowRight size={17} aria-hidden="true" />
         </button>
       </footer>

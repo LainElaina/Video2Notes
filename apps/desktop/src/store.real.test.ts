@@ -369,6 +369,7 @@ describe('studio store against the real loopback API contract', () => {
   let failedOperationKind: ApiRunOperationRequest['kind'] | undefined
   let operationSequence = 0
   let componentsReady = false
+  let failedEstimateMode: 'fast' | 'balanced' | 'accurate' | undefined
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -387,6 +388,7 @@ describe('studio store against the real loopback API contract', () => {
     failedOperationKind = undefined
     operationSequence = 0
     componentsReady = false
+    failedEstimateMode = undefined
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -552,6 +554,37 @@ describe('studio store against the real loopback API contract', () => {
             automatic_captions: {},
             selected_format_ids: ['137+140'],
             auth_kind: 'browser_profile',
+          }),
+        )
+      }
+      if (url.pathname === '/api/estimate' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as {
+          duration_seconds: number
+          quality_mode: 'fast' | 'balanced' | 'accurate'
+          source_height?: number
+          source_fps?: number
+        }
+        const factors = {
+          fast: [0.05, 0.15],
+          balanced: [0.1, 0.33],
+          accurate: [0.2, 0.67],
+        } as const
+        if (body.quality_mode === failedEstimateMode) {
+          return Promise.resolve(json({ detail: 'estimate temporarily unavailable' }, 503))
+        }
+        const [lower, upper] = factors[body.quality_mode]
+        return Promise.resolve(
+          json({
+            hardware_tier: 'gpu_12gb',
+            quality_mode: body.quality_mode,
+            media_duration_seconds: body.duration_seconds,
+            lower_seconds: 15 + body.duration_seconds * lower,
+            upper_seconds: 15 + body.duration_seconds * upper,
+            lower_realtime_factor: lower,
+            upper_realtime_factor: upper,
+            basis: 'engineering_budget_v1',
+            precision_intent: `${body.quality_mode} test intent`,
+            notes: ['test estimate'],
           }),
         )
       }
@@ -900,6 +933,9 @@ describe('studio store against the real loopback API contract', () => {
     store.setReportPreset('professional')
     store.probeSource()
     await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().processingEstimateStatus).toBe('ready'),
+    )
 
     const probe = requests.find(request => request.url === '/api/sources/probe')
     expect(probe).toMatchObject({ method: 'POST', token: 'desktop-session-token' })
@@ -907,6 +943,27 @@ describe('studio store against the real loopback API contract', () => {
       source: { kind: 'url', value: 'https://www.youtube.com/watch?v=real-api-test' },
       auth: { kind: 'browser_profile', browser: 'edge', profile: 'Default' },
       policy: expect.objectContaining({ mode: 'accurate', max_height: 1080 }),
+    })
+    const estimateRequests = requests.filter(request => request.url === '/api/estimate')
+    expect(estimateRequests).toHaveLength(3)
+    expect(
+      estimateRequests.map(request => JSON.parse(request.body ?? '{}')),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          quality_mode: 'fast',
+          duration_seconds: 91.5,
+          source_height: 1080,
+          source_fps: 30,
+        }),
+        expect.objectContaining({ quality_mode: 'balanced' }),
+        expect.objectContaining({ quality_mode: 'accurate' }),
+      ]),
+    )
+    expect(useStudioStore.getState().processingEstimates.accurate).toMatchObject({
+      hardwareTier: 'gpu_12gb',
+      lowerRealtimeFactor: 0.2,
+      upperRealtimeFactor: 0.67,
     })
 
     useStudioStore.getState().createTask()
@@ -1347,6 +1404,25 @@ describe('studio store against the real loopback API contract', () => {
       primary_model_id: 'asr-main',
       fallback_model_ids: [],
     })
+  })
+
+  it('keeps a verified source usable when one machine estimate falls back', async () => {
+    failedEstimateMode = 'accurate'
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+
+    const store = useStudioStore.getState()
+    store.setDraftInput('https://www.youtube.com/watch?v=real-api-test')
+    store.probeSource()
+
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().processingEstimateStatus).toBe('partial'),
+    )
+    expect(useStudioStore.getState().draft.status).toBe('ready')
+    expect(useStudioStore.getState().processingEstimates.fast).toBeDefined()
+    expect(useStudioStore.getState().processingEstimates.balanced).toBeDefined()
+    expect(useStudioStore.getState().processingEstimates.accurate).toBeUndefined()
+    expect(useStudioStore.getState().processingEstimateError).toContain('accurate')
   })
 
   it('loads component inventory and prepares the recommended local models in one request', async () => {

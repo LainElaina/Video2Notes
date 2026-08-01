@@ -39,6 +39,48 @@ describe('studio store', () => {
     expect(useStudioStore.getState().tasks[0].status).toBe('running')
   })
 
+  it('keeps the previous manifest as stale until changed probe inputs are verified again', () => {
+    const store = useStudioStore.getState()
+    store.probeSource()
+    const verifiedManifest = useStudioStore.getState().draft.manifest
+    expect(useStudioStore.getState().draft.status).toBe('ready')
+
+    store.setDraftMode('fast')
+    expect(useStudioStore.getState().draft).toMatchObject({
+      status: 'stale',
+      manifest: verifiedManifest,
+    })
+
+    store.probeSource()
+    expect(useStudioStore.getState().draft.status).toBe('ready')
+    store.setDraftAuthKind('browser_profile')
+    expect(useStudioStore.getState().draft.status).toBe('stale')
+
+    store.probeSource()
+    store.setDraftProfile('Default')
+    expect(useStudioStore.getState().draft.status).toBe('stale')
+
+    store.probeSource()
+    store.setDraftInput('https://www.youtube.com/watch?v=changed-source')
+    expect(useStudioStore.getState().draft).toMatchObject({
+      status: 'stale',
+      manifest: expect.objectContaining({ platform: 'bilibili' }),
+    })
+  })
+
+  it('does not create a task from a stale manifest', () => {
+    const store = useStudioStore.getState()
+    store.probeSource()
+    store.setDraftMode('fast')
+    const taskCount = useStudioStore.getState().tasks.length
+
+    store.createTask()
+
+    expect(useStudioStore.getState().tasks).toHaveLength(taskCount)
+    expect(useStudioStore.getState().draft.status).toBe('stale')
+    expect(useStudioStore.getState().draft.error).toContain('重新探测')
+  })
+
   it('loads the redistributable demo media without an account', () => {
     useStudioStore.getState().chooseBundledDemo()
 

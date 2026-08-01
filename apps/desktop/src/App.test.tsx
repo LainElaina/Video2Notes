@@ -27,12 +27,12 @@ describe('desktop workflow', () => {
     const shell = screen.getByRole('main').closest('.app-shell')
     expect(shell).toHaveAttribute('data-theme', 'precision-light')
     expect(shell).toHaveAttribute('data-workspace-mode', 'guided')
-    expect(screen.getByRole('button', { name: '引导模式' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '简约视图' })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '专业模式' }))
+    fireEvent.click(screen.getByRole('button', { name: '数据工作室' }))
     fireEvent.change(screen.getByLabelText('主题预置'), {
       target: { value: 'studio-graphite' },
     })
@@ -56,6 +56,49 @@ describe('desktop workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: /开始处理/ }))
     expect(screen.getByText(/EVIDENCE BUILD-UP/)).toBeInTheDocument()
     expect(useStudioStore.getState().tasks[0].mode).toBe('accurate')
+  })
+
+  it('marks a verified source stale when its processing policy changes', () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: '探测来源' }))
+    expect(screen.getByText('SOURCE VERIFIED')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: /Fast/ }))
+
+    expect(screen.getByText('SOURCE NEEDS REFRESH')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '需重新探测' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '重新探测' })).toBeInTheDocument()
+    expect(useStudioStore.getState().draft.status).toBe('stale')
+  })
+
+  it('shows a returned machine estimate and keeps generic copy for missing modes', () => {
+    const store = useStudioStore.getState()
+    store.probeSource()
+    useStudioStore.setState({
+      processingEstimates: {
+        fast: {
+          hardwareTier: 'gpu_12gb',
+          qualityMode: 'fast',
+          mediaDurationSeconds: 1518,
+          lowerSeconds: 31,
+          upperSeconds: 62,
+          lowerRealtimeFactor: 0.02,
+          upperRealtimeFactor: 0.04,
+          basis: 'engineering_budget_v1',
+          precisionIntent: '快速证据初稿',
+          notes: [],
+        },
+      },
+      processingEstimateStatus: 'partial',
+      processingEstimateError: 'balanced: temporarily unavailable',
+    })
+
+    render(<App />)
+
+    expect(screen.getByText('本机预计 00:31–01:02 · 0.02–0.04×')).toBeInTheDocument()
+    expect(screen.getByText('预计耗时约视频时长的 0.55–1.0×')).toBeInTheDocument()
+    expect(screen.getByText(/未返回的模式继续显示通用区间/)).toBeInTheDocument()
   })
 
   it('adds and edits a fixed sampling override in advanced options', () => {

@@ -435,6 +435,21 @@ export interface PerformanceSystemReport {
   plans: Partial<Record<ProcessingMode, ExecutionPlan>>
 }
 
+export interface ProcessingEstimate {
+  hardwareTier: string
+  qualityMode: ProcessingMode
+  mediaDurationSeconds: number
+  lowerSeconds: number
+  upperSeconds: number
+  lowerRealtimeFactor: number
+  upperRealtimeFactor: number
+  basis: string
+  precisionIntent: string
+  notes: string[]
+}
+
+export type ProcessingEstimateStatus = 'idle' | 'loading' | 'ready' | 'partial' | 'error'
+
 export type HardwareTier =
   | 'cpu_igpu'
   | 'gpu_8gb'
@@ -540,7 +555,7 @@ export interface SamplingOverrideDraft {
 export interface DraftState {
   input: string
   mode: ProcessingMode
-  status: 'idle' | 'probing' | 'ready' | 'submitting' | 'error'
+  status: 'idle' | 'stale' | 'probing' | 'ready' | 'submitting' | 'error'
   error?: string
   manifest?: SourceManifest
   sourceKind: 'url' | 'local'

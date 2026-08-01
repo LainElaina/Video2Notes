@@ -119,6 +119,26 @@ export interface ApiSourceManifest {
   quality_warning?: string
 }
 
+export interface ApiProcessingEstimateRequest {
+  duration_seconds: number
+  quality_mode: 'fast' | 'balanced' | 'accurate'
+  source_height?: number
+  source_fps?: number
+}
+
+export interface ApiProcessingEstimate {
+  hardware_tier: string
+  quality_mode: 'fast' | 'balanced' | 'accurate'
+  media_duration_seconds: number
+  lower_seconds: number
+  upper_seconds: number
+  lower_realtime_factor: number
+  upper_realtime_factor: number
+  basis: string
+  precision_intent: string
+  notes: string[]
+}
+
 export interface ApiArtifactRef {
   kind: string
   relative_path: string
@@ -936,6 +956,13 @@ export class Video2NotesApi {
     return this.request('/api/sources/probe', {
       method: 'POST',
       body: JSON.stringify({ source, auth, policy }),
+    })
+  }
+
+  estimateProcessing(request: ApiProcessingEstimateRequest): Promise<ApiProcessingEstimate> {
+    return this.request('/api/estimate', {
+      method: 'POST',
+      body: JSON.stringify(request),
     })
   }
 

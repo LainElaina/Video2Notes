@@ -20,6 +20,7 @@ import type {
   ApiJobSnapshot,
   ApiModelRegistry,
   ApiPerformanceSettings,
+  ApiProcessingEstimate,
   ApiNoteDocument,
   ApiProcessingRun,
   ApiReportRevision,
@@ -62,6 +63,8 @@ import type {
   ModelCapability,
   NoteDocument,
   ProcessingMode,
+  ProcessingEstimate,
+  ProcessingEstimateStatus,
   ProcessingTask,
   PerformanceSettings,
   PerformanceSystemReport,
@@ -115,6 +118,9 @@ interface StudioData {
   componentPreparationActivated: boolean
   componentPreparationError?: string
   selectedComponentIds: string[]
+  processingEstimates: Partial<Record<ProcessingMode, ProcessingEstimate>>
+  processingEstimateStatus: ProcessingEstimateStatus
+  processingEstimateError?: string
   discoveredModels: DiscoveredModelDefinition[]
   discoveryProviderId?: string
   providerDiscoveryStatus: 'idle' | 'loading' | 'ready' | 'error'
@@ -267,6 +273,7 @@ const objectUrls = new Map<string, string>()
 let demoMaterialSequence = 0
 let demoOperationSequence = 0
 let samplingOverrideSequence = 0
+let sourceProbeSequence = 0
 
 const MICROSECONDS_PER_SECOND = 1_000_000
 const MIN_OPERATION_INTERVAL_US = 100_000
@@ -572,6 +579,8 @@ const initialData = (demo = false): StudioData => ({
         .filter(item => item.kind === 'local_model' && !item.ready)
         .map(item => item.id)
     : [],
+  processingEstimates: {},
+  processingEstimateStatus: 'idle',
   discoveredModels: [],
   providerDiscoveryStatus: 'idle',
 })
@@ -690,6 +699,46 @@ const mapSource = (source: ApiSourceManifest, draft: DraftState): SourceManifest
     sourceLabel: source.canonical_url || source.source.value,
   }
 }
+
+const processingModes: ProcessingMode[] = ['fast', 'balanced', 'accurate']
+
+const mapProcessingEstimate = (value: ApiProcessingEstimate): ProcessingEstimate => ({
+  hardwareTier: value.hardware_tier,
+  qualityMode: value.quality_mode,
+  mediaDurationSeconds: value.media_duration_seconds,
+  lowerSeconds: value.lower_seconds,
+  upperSeconds: value.upper_seconds,
+  lowerRealtimeFactor: value.lower_realtime_factor,
+  upperRealtimeFactor: value.upper_realtime_factor,
+  basis: value.basis,
+  precisionIntent: value.precision_intent,
+  notes: [...value.notes],
+})
+
+const estimateMediaProfile = (
+  source: ApiSourceManifest,
+): { source_height?: number; source_fps?: number } => {
+  const video = [...selectedFormats(source)]
+    .filter(item => item.height || item.width)
+    .sort((left, right) => {
+      const heightDelta = (right.height ?? 0) - (left.height ?? 0)
+      return heightDelta || (right.fps ?? 0) - (left.fps ?? 0)
+    })[0]
+  return {
+    ...(video?.height ? { source_height: video.height } : {}),
+    ...(video?.fps ? { source_fps: video.fps } : {}),
+  }
+}
+
+const invalidateProbedDraft = (
+  draft: DraftState,
+  patch: Partial<DraftState>,
+): DraftState => ({
+  ...draft,
+  ...patch,
+  status: draft.manifest ? 'stale' : 'idle',
+  error: undefined,
+})
 
 const sourceInput = (draft: DraftState): ApiSourceInput => ({
   kind: draft.sourceKind,
@@ -2109,30 +2158,73 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     }
   },
   setTaskSearch: taskSearch => set({ taskSearch }),
-  setDraftInput: input =>
+  setDraftInput: input => {
+    if (input === get().draft.input) return
+    sourceProbeSequence += 1
     set(state => ({
-      draft: {
-        ...state.draft,
+      draft: invalidateProbedDraft(state.draft, {
         input,
         sourceKind: isUrl(input)
           ? 'url'
           : isWindowsAbsolutePath(input)
             ? 'local'
             : state.draft.sourceKind,
-        status: 'idle',
-        error: undefined,
-        manifest: undefined,
-      },
-    })),
-  setDraftMode: mode => set(state => ({ draft: { ...state.draft, mode } })),
-  setDraftAuthKind: authKind =>
-    set(state => ({ draft: { ...state.draft, authKind, status: 'idle' } })),
-  setDraftBrowser: browser =>
-    set(state => ({ draft: { ...state.draft, browser, profile: '', status: 'idle' } })),
-  setDraftProfile: profile =>
-    set(state => ({ draft: { ...state.draft, profile, status: 'idle' } })),
-  setDraftCookieFile: cookieFile =>
-    set(state => ({ draft: { ...state.draft, cookieFile, status: 'idle' } })),
+      }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+  },
+  setDraftMode: mode => {
+    if (mode === get().draft.mode) return
+    sourceProbeSequence += 1
+    set(state => ({
+      draft: invalidateProbedDraft(state.draft, { mode }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+  },
+  setDraftAuthKind: authKind => {
+    if (authKind === get().draft.authKind) return
+    sourceProbeSequence += 1
+    set(state => ({
+      draft: invalidateProbedDraft(state.draft, { authKind }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+  },
+  setDraftBrowser: browser => {
+    if (browser === get().draft.browser) return
+    sourceProbeSequence += 1
+    set(state => ({
+      draft: invalidateProbedDraft(state.draft, { browser, profile: '' }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+  },
+  setDraftProfile: profile => {
+    if (profile === get().draft.profile) return
+    sourceProbeSequence += 1
+    set(state => ({
+      draft: invalidateProbedDraft(state.draft, { profile }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+  },
+  setDraftCookieFile: cookieFile => {
+    if (cookieFile === get().draft.cookieFile) return
+    sourceProbeSequence += 1
+    set(state => ({
+      draft: invalidateProbedDraft(state.draft, { cookieFile }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+  },
   setLanguageHints: languageHints =>
     set(state => ({ draft: { ...state.draft, languageHints } })),
   setIncludeScreenshots: includeScreenshots =>
@@ -2186,6 +2278,12 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       }))
       return
     }
+    const probeId = ++sourceProbeSequence
+    set({
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    })
     if (get().backend.mode === 'demo') {
       const manifest = detectSourceFixture(input)
       if (!manifest) {
@@ -2200,6 +2298,9 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       }
       set(state => ({
         draft: { ...state.draft, status: 'ready', error: undefined, manifest },
+        processingEstimates: {},
+        processingEstimateStatus: 'idle',
+        processingEstimateError: undefined,
         notice: `演示探测：${manifest.quality}。真实处理需连接本地后端。`,
       }))
       return
@@ -2222,21 +2323,73 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       }))
       return
     }
-    set(state => ({ draft: { ...state.draft, status: 'probing', error: undefined } }))
+    set(state => ({
+      draft: { ...state.draft, status: 'probing', error: undefined },
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
     void api
       .probeSource(sourceInput(draft), authSpec(draft), acquisitionPolicy(draft.mode))
       .then(raw => {
+        if (probeId !== sourceProbeSequence) return
         const manifest = mapSource(raw, draft)
         set(state => ({
           draft: { ...state.draft, status: 'ready', manifest, error: undefined },
+          processingEstimateStatus: 'loading',
+          processingEstimateError: undefined,
           notice: raw.quality_warning || `已探测 ${manifest.quality}；下载会校验实际格式。`,
         }))
+        const mediaProfile = estimateMediaProfile(raw)
+        void Promise.allSettled(
+          processingModes.map(mode =>
+            api!.estimateProcessing({
+              duration_seconds: manifest.durationSeconds,
+              quality_mode: mode,
+              ...mediaProfile,
+            }),
+          ),
+        ).then(results => {
+          if (
+            probeId !== sourceProbeSequence ||
+            get().draft.status !== 'ready' ||
+            get().draft.manifest?.id !== manifest.id
+          ) {
+            return
+          }
+          const estimates: Partial<Record<ProcessingMode, ProcessingEstimate>> = {}
+          const failures: string[] = []
+          results.forEach((result, index) => {
+            const mode = processingModes[index]
+            if (result.status === 'fulfilled') {
+              estimates[mode] = mapProcessingEstimate(result.value)
+            } else {
+              failures.push(`${mode}: ${errorMessage(result.reason)}`)
+            }
+          })
+          const successCount = Object.keys(estimates).length
+          set({
+            processingEstimates: estimates,
+            processingEstimateStatus:
+              successCount === processingModes.length
+                ? 'ready'
+                : successCount > 0
+                  ? 'partial'
+                  : 'error',
+            processingEstimateError:
+              failures.length > 0 ? [...new Set(failures)].join('；') : undefined,
+          })
+        })
       })
-      .catch(error =>
+      .catch(error => {
+        if (probeId !== sourceProbeSequence) return
         set(state => ({
           draft: { ...state.draft, status: 'error', error: errorMessage(error) },
-        })),
-      )
+          processingEstimates: {},
+          processingEstimateStatus: 'idle',
+          processingEstimateError: undefined,
+        }))
+      })
   },
 
   chooseLocalFile: () => {
@@ -2270,6 +2423,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   },
 
   selectLocalFile: (fileName, sizeBytes) => {
+    sourceProbeSequence += 1
     if (get().backend.mode === 'demo') {
       const sizeMb = Math.max(1, Math.round(sizeBytes / 1024 / 1024))
       const manifest: SourceManifest = {
@@ -2294,6 +2448,9 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           error: undefined,
           manifest,
         },
+        processingEstimates: {},
+        processingEstimateStatus: 'idle',
+        processingEstimateError: undefined,
         notice: `演示选择：${fileName}`,
       }))
       return
@@ -2309,14 +2466,13 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       return
     }
     set(state => ({
-      draft: {
-        ...state.draft,
+      draft: invalidateProbedDraft(state.draft, {
         input: fileName,
         sourceKind: 'local',
-        status: 'idle',
-        error: undefined,
-        manifest: undefined,
-      },
+      }),
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
     }))
     get().probeSource()
   },
@@ -2325,7 +2481,14 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     const draft = get().draft
     if (draft.status !== 'ready' || !draft.manifest) {
       set(state => ({
-        draft: { ...state.draft, status: 'error', error: '请先探测来源，再开始处理。' },
+        draft: {
+          ...state.draft,
+          status: draft.manifest ? 'stale' : 'error',
+          error:
+            draft.manifest
+              ? '来源或探测策略已变化，请重新探测后再开始处理。'
+              : '请先探测来源，再开始处理。',
+        },
       }))
       return
     }
@@ -3799,6 +3962,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     registry = undefined
     demoOperationSequence = 0
     samplingOverrideSequence = 0
+    sourceProbeSequence += 1
     sourceByRun.clear()
     submissionByRun.clear()
     for (const url of objectUrls.values()) URL.revokeObjectURL(url)

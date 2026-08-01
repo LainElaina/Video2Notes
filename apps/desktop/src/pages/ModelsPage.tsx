@@ -488,7 +488,7 @@ export function ModelsPage() {
             }
           >
             <WandSparkles size={15} aria-hidden="true" />
-            小白模式
+            自动配置
           </button>
           <button
             type="button"
@@ -501,7 +501,7 @@ export function ModelsPage() {
             }
           >
             <Settings2 size={15} aria-hidden="true" />
-            专业模式
+            自定义性能
           </button>
         </div>
       </header>

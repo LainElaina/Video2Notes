@@ -24,13 +24,13 @@ describe('models and performance workspace', () => {
   it('keeps guided controls concise and exposes validated professional overrides on demand', () => {
     render(<ModelsPage />)
 
-    expect(screen.getByRole('button', { name: /小白模式/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /自动配置/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
     expect(screen.queryByLabelText('CPU worker')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /专业模式/ }))
+    fireEvent.click(screen.getByRole('button', { name: /自定义性能/ }))
     fireEvent.change(screen.getByLabelText('CPU worker'), { target: { value: '10' } })
     fireEvent.click(screen.getByRole('button', { name: '保存性能设置' }))
 
@@ -74,7 +74,7 @@ describe('models and performance workspace', () => {
       screen.queryByLabelText('选择组件 faster-whisper large-v3'),
     ).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /专业模式/ }))
+    fireEvent.click(screen.getByRole('button', { name: /自定义性能/ }))
     const asrSelection = screen.getByLabelText(
       '选择组件 faster-whisper large-v3',
     )
