@@ -886,6 +886,7 @@ describe('studio store against the real loopback API contract', () => {
       overrides: {
         cpuWorkers: 10,
         remoteModelConcurrency: 3,
+        ocrInferenceMaxWidth: 1536,
         cheapScanFps: 2,
         expensiveScanFps: 8,
       },
@@ -901,7 +902,11 @@ describe('studio store against the real loopback API contract', () => {
       expect(useStudioStore.getState().performance).toMatchObject({
         experienceMode: 'professional',
         preference: 'throughput',
-        overrides: { cpuWorkers: 10, remoteModelConcurrency: 3 },
+        overrides: {
+          cpuWorkers: 10,
+          remoteModelConcurrency: 3,
+          ocrInferenceMaxWidth: 1536,
+        },
       }),
     )
     const performanceSave = requests.find(
@@ -913,6 +918,7 @@ describe('studio store against the real loopback API contract', () => {
       overrides: {
         cpu_workers: 10,
         remote_model_concurrency: 3,
+        ocr_inference_max_width: 1536,
         cheap_scan_fps: 2,
         expensive_scan_fps: 8,
       },

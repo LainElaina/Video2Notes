@@ -532,6 +532,7 @@ export interface ApiPerformanceOverrides {
   visual_decode_threads?: number | null
   max_fixed_samples?: number | null
   analysis_width?: number | null
+  ocr_inference_max_width?: number | null
   cheap_scan_fps?: number | null
   expensive_scan_fps?: number | null
   ocr_model_class?: 'mobile' | 'medium' | null
@@ -595,6 +596,7 @@ export interface ApiExecutionPlan {
   visual_decode_threads: number
   max_fixed_samples: number
   analysis_width: number
+  ocr_inference_max_width: number
   cheap_scan_fps: number
   expensive_scan_fps: number
   ocr_model_class: string

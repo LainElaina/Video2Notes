@@ -368,6 +368,7 @@ export interface PerformanceOverrides {
   visualDecodeThreads?: number
   maxFixedSamples?: number
   analysisWidth?: number
+  ocrInferenceMaxWidth?: number
   cheapScanFps?: number
   expensiveScanFps?: number
   ocrModelClass?: 'mobile' | 'medium'
@@ -430,6 +431,7 @@ export interface ExecutionPlan {
   visualDecodeThreads: number
   maxFixedSamples: number
   analysisWidth: number
+  ocrInferenceMaxWidth: number
   cheapScanFps: number
   expensiveScanFps: number
   ocrModelClass: string

@@ -98,6 +98,14 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("fast", response.json()["plans"])
         self.assertIn("accurate", response.json()["plans"])
+        self.assertEqual(
+            response.json()["plans"]["fast"]["ocr_inference_max_width"],
+            720,
+        )
+        self.assertGreater(
+            response.json()["plans"]["accurate"]["ocr_inference_max_width"],
+            response.json()["plans"]["accurate"]["analysis_width"],
+        )
         self.assertEqual(response.json()["performance"]["experience_mode"], "guided")
         self.assertIn("budget", response.json()["recommendation"])
 
@@ -129,11 +137,16 @@ class ApiAppTests(unittest.TestCase):
                 "overrides": {
                     "cpu_workers": 2,
                     "remote_model_concurrency": 1,
+                    "ocr_inference_max_width": 1280,
                 },
             },
         )
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(saved.json()["overrides"]["cpu_workers"], 2)
+        self.assertEqual(
+            saved.json()["overrides"]["ocr_inference_max_width"],
+            1280,
+        )
         persisted = self.client.get("/api/performance", headers=self.headers)
         self.assertEqual(persisted.json(), saved.json())
         system = self.client.get("/api/system", headers=self.headers)
@@ -146,6 +159,10 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(
             self.context.pipeline.runtime.performance_overrides.cpu_workers,
             2,
+        )
+        self.assertEqual(
+            self.context.pipeline.runtime.performance_overrides.ocr_inference_max_width,
+            1280,
         )
 
     def test_configuration_catalog_exposes_protocols_roles_and_no_model_ids(

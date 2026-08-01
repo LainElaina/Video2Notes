@@ -48,6 +48,7 @@ class ExecutionPlan(ProfileModel):
     visual_decode_threads: int = Field(ge=1)
     max_fixed_samples: int = Field(ge=1)
     analysis_width: int = Field(ge=320)
+    ocr_inference_max_width: int = Field(ge=320)
     cheap_scan_fps: float = Field(gt=0)
     expensive_scan_fps: float = Field(gt=0)
     ocr_model_class: str
@@ -77,6 +78,7 @@ class PerformanceOverrides(ProfileModel):
     visual_decode_threads: int | None = Field(default=None, ge=1, le=64)
     max_fixed_samples: int | None = Field(default=None, ge=1, le=20_000)
     analysis_width: int | None = Field(default=None, ge=320, le=1920)
+    ocr_inference_max_width: int | None = Field(default=None, ge=320, le=4096)
     cheap_scan_fps: float | None = Field(default=None, ge=0.25, le=30)
     expensive_scan_fps: float | None = Field(default=None, ge=0.25, le=60)
     ocr_model_class: Literal["mobile", "medium"] | None = None
@@ -129,13 +131,16 @@ class _HardwareBudget:
     decode_backend: str
     concurrent_gpu_stages: int
     analysis_width_cap: int
+    ocr_inference_width_cap: int
     ocr_model_cap: str
+    asr_model_cap: str
     asr_compute_type: str
 
 
 @dataclass(frozen=True)
 class _QualityBudget:
     analysis_width: int
+    ocr_inference_max_width: int
     cheap_scan_fps: float
     expensive_scan_fps: float
     ocr_model_class: str
@@ -153,28 +158,36 @@ _HARDWARE_BUDGETS: dict[HardwareTier, _HardwareBudget] = {
         decode_backend="software",
         concurrent_gpu_stages=0,
         analysis_width_cap=640,
+        ocr_inference_width_cap=1280,
         ocr_model_cap="mobile",
+        asr_model_cap="small",
         asr_compute_type="int8",
     ),
     HardwareTier.GPU_8GB: _HardwareBudget(
         decode_backend="software",
         concurrent_gpu_stages=1,
         analysis_width_cap=768,
+        ocr_inference_width_cap=1600,
         ocr_model_cap="mobile",
+        asr_model_cap="large-v3",
         asr_compute_type="int8_float16",
     ),
     HardwareTier.GPU_12GB: _HardwareBudget(
         decode_backend="software",
         concurrent_gpu_stages=1,
         analysis_width_cap=960,
-        ocr_model_cap="medium",
+        ocr_inference_width_cap=1920,
+        ocr_model_cap="server",
+        asr_model_cap="large-v3",
         asr_compute_type="float16",
     ),
     HardwareTier.GPU_24GB_PLUS: _HardwareBudget(
         decode_backend="software",
         concurrent_gpu_stages=3,
         analysis_width_cap=1280,
-        ocr_model_cap="medium",
+        ocr_inference_width_cap=2560,
+        ocr_model_cap="server",
+        asr_model_cap="large-v3",
         asr_compute_type="float16",
     ),
 }
@@ -183,6 +196,7 @@ _HARDWARE_BUDGETS: dict[HardwareTier, _HardwareBudget] = {
 _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
     QualityMode.FAST: _QualityBudget(
         analysis_width=480,
+        ocr_inference_max_width=720,
         cheap_scan_fps=2.0,
         expensive_scan_fps=6.0,
         ocr_model_class="mobile",
@@ -196,6 +210,7 @@ _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
     ),
     QualityMode.BALANCED: _QualityBudget(
         analysis_width=768,
+        ocr_inference_max_width=1280,
         cheap_scan_fps=3.0,
         expensive_scan_fps=12.0,
         ocr_model_class="mobile",
@@ -209,9 +224,10 @@ _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
     ),
     QualityMode.ACCURATE: _QualityBudget(
         analysis_width=1080,
+        ocr_inference_max_width=2560,
         cheap_scan_fps=6.0,
         expensive_scan_fps=24.0,
-        ocr_model_class="medium",
+        ocr_model_class="server",
         asr_model_class="large-v3",
         secondary_asr=SecondaryAsrPolicy.UNCERTAIN_AND_CONFLICTS,
         verification_passes=2,
@@ -263,6 +279,39 @@ def _safe_analysis_width_cap(
     return hardware_cap
 
 
+def _safe_ocr_inference_width_cap(
+    hardware_cap: int,
+    budget: ResourceBudget,
+) -> int:
+    """Keep OCR readable while scaling peak image tensors to live RAM headroom."""
+
+    if budget.memory_budget_bytes is None:
+        return hardware_cap
+    if budget.memory_budget_bytes < 2 * GIB:
+        return min(hardware_cap, 720)
+    if budget.memory_budget_bytes < 4 * GIB:
+        return min(hardware_cap, 960)
+    if budget.memory_budget_bytes < 6 * GIB:
+        return min(hardware_cap, 1280)
+    if budget.memory_budget_bytes < 8 * GIB:
+        return min(hardware_cap, 1600)
+    return hardware_cap
+
+
+def _capped_model_class(
+    requested: str,
+    maximum: str,
+    *,
+    order: tuple[str, ...],
+) -> str:
+    try:
+        requested_rank = order.index(requested)
+        maximum_rank = order.index(maximum)
+    except ValueError:
+        return requested
+    return order[min(requested_rank, maximum_rank)]
+
+
 def build_execution_plan(
     snapshot: HardwareSnapshot,
     quality_mode: QualityMode,
@@ -305,6 +354,22 @@ def build_execution_plan(
             f"{width_cap}px for current memory safety; uncertain regions escalate."
         )
 
+    requested_ocr_width = (
+        overrides.ocr_inference_max_width
+        if overrides is not None and overrides.ocr_inference_max_width is not None
+        else quality.ocr_inference_max_width
+    )
+    ocr_width_cap = _safe_ocr_inference_width_cap(
+        hardware.ocr_inference_width_cap,
+        budget,
+    )
+    if requested_ocr_width > ocr_width_cap:
+        notes.append(
+            f"Requested OCR inference width {requested_ocr_width}px was capped at "
+            f"{ocr_width_cap}px for current memory safety; scene detection resolution "
+            "remains independent."
+        )
+
     requested_ocr = (
         overrides.ocr_model_class
         if overrides is not None and overrides.ocr_model_class is not None
@@ -313,10 +378,31 @@ def build_execution_plan(
     ocr_cap = hardware.ocr_model_cap
     if budget.memory_budget_bytes is not None and budget.memory_budget_bytes < 4 * GIB:
         ocr_cap = "mobile"
-    if requested_ocr == "medium" and ocr_cap == "mobile":
+    effective_ocr_model = _capped_model_class(
+        requested_ocr,
+        ocr_cap,
+        order=("mobile", "server"),
+    )
+    if effective_ocr_model != requested_ocr:
         notes.append(
-            "Medium OCR exceeds the concurrent memory budget; use mobile OCR "
-            "for the first pass and medium/cloud OCR only for uncertain crops."
+            f"Requested OCR model class {requested_ocr} was capped at "
+            f"{effective_ocr_model} for current hardware and memory safety."
+        )
+
+    requested_asr_model = (
+        overrides.asr_model_class
+        if overrides is not None and overrides.asr_model_class is not None
+        else quality.asr_model_class
+    )
+    effective_asr_model = _capped_model_class(
+        requested_asr_model,
+        hardware.asr_model_cap,
+        order=("small", "large-v3-turbo", "large-v3"),
+    )
+    if effective_asr_model != requested_asr_model:
+        notes.append(
+            f"Requested ASR model class {requested_asr_model} was capped at "
+            f"{effective_asr_model} for current hardware safety."
         )
 
     decode_backend = (
@@ -510,19 +596,14 @@ def build_execution_plan(
         visual_decode_threads=decode_threads,
         max_fixed_samples=fixed_samples,
         analysis_width=min(requested_width, width_cap),
+        ocr_inference_max_width=min(requested_ocr_width, ocr_width_cap),
         cheap_scan_fps=cheap_scan_fps,
         expensive_scan_fps=expensive_scan_fps,
-        ocr_model_class=(
-            "mobile"
-            if tier in {HardwareTier.CPU_IGPU, HardwareTier.GPU_8GB}
-            else "server"
-        ),
+        ocr_model_class=effective_ocr_model,
         ocr_device=ocr_device,
         ocr_batch_size=ocr_batch,
         ocr_cpu_threads=ocr_threads,
-        asr_model_class=(
-            "small" if tier is HardwareTier.CPU_IGPU else "large-v3"
-        ),
+        asr_model_class=effective_asr_model,
         asr_device=asr_device,
         asr_compute_type=asr_compute_type,
         asr_batch_size=asr_batch,

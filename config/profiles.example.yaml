@@ -162,14 +162,14 @@ quality_intent:
   # Quality intent is selected per task (--mode), then composed with detected
   # hardware.  It is not selected merely from GPU name.
   fast:
-    visual: { analysis_width: 480, coarse_fps: 2, fine_fps: 6 }
+    visual: { analysis_width: 480, ocr_inference_max_width: 720, coarse_fps: 2, fine_fps: 6 }
     asr: { model_class: small, secondary: off }
     notes: { verifier: off, screenshots: adaptive_representative }
   balanced:
-    visual: { analysis_width: 768, coarse_fps: 3, fine_fps: 12 }
+    visual: { analysis_width: 768, ocr_inference_max_width: 1280, coarse_fps: 3, fine_fps: 12 }
     asr: { model_class: large-v3-turbo, secondary: caption_or_language_conflicts }
     notes: { verifier: configured_role, screenshots: adaptive_representative }
   accurate:
-    visual: { analysis_width: 1080, coarse_fps: 6, fine_fps: 24 }
+    visual: { analysis_width: 1080, ocr_inference_max_width: 2560, coarse_fps: 6, fine_fps: 24 }
     asr: { model_class: large-v3, secondary: uncertain_missing_and_conflicts }
     notes: { verifier: configured_role, screenshots: adaptive_representative }

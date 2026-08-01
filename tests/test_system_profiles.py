@@ -135,9 +135,26 @@ class ExecutionProfileTests(unittest.TestCase):
         result = build_execution_plan(snapshot(vram_gib=24), QualityMode.FAST)
         self.assertEqual(result.hardware_tier, HardwareTier.GPU_24GB_PLUS)
         self.assertEqual(result.quality_mode, QualityMode.FAST)
-        self.assertEqual(result.asr_model_class, "large-v3")
+        self.assertEqual(result.asr_model_class, "small")
         self.assertEqual(result.secondary_asr, SecondaryAsrPolicy.OFF)
         self.assertEqual(result.concurrent_gpu_stages, 1)
+
+    def test_gpu_quality_modes_preserve_distinct_model_preferences(self) -> None:
+        machine = snapshot(vram_gib=24)
+        plans = {
+            mode: build_execution_plan(machine, mode)
+            for mode in QualityMode
+        }
+
+        self.assertEqual(plans[QualityMode.FAST].asr_model_class, "small")
+        self.assertEqual(
+            plans[QualityMode.BALANCED].asr_model_class,
+            "large-v3-turbo",
+        )
+        self.assertEqual(plans[QualityMode.ACCURATE].asr_model_class, "large-v3")
+        self.assertEqual(plans[QualityMode.FAST].ocr_model_class, "mobile")
+        self.assertEqual(plans[QualityMode.BALANCED].ocr_model_class, "mobile")
+        self.assertEqual(plans[QualityMode.ACCURATE].ocr_model_class, "server")
 
     def test_accurate_mode_on_cpu_preserves_intent_with_safe_escalation(self) -> None:
         result = build_execution_plan(
@@ -147,13 +164,58 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertEqual(result.hardware_tier, HardwareTier.CPU_IGPU)
         self.assertEqual(result.quality_mode, QualityMode.ACCURATE)
         self.assertEqual(result.analysis_width, 640)
+        self.assertEqual(result.ocr_inference_max_width, 1280)
         self.assertEqual(result.ocr_model_class, "mobile")
+        self.assertEqual(result.asr_model_class, "small")
         self.assertEqual(
             result.secondary_asr,
             SecondaryAsrPolicy.UNCERTAIN_AND_CONFLICTS,
         )
         self.assertEqual(result.verification_passes, 2)
         self.assertGreaterEqual(len(result.notes), 2)
+
+    def test_quality_modes_have_distinct_readable_ocr_widths_on_capable_hardware(
+        self,
+    ) -> None:
+        machine = snapshot(vram_gib=24)
+
+        widths = {
+            mode: build_execution_plan(machine, mode).ocr_inference_max_width
+            for mode in QualityMode
+        }
+
+        self.assertEqual(widths[QualityMode.FAST], 720)
+        self.assertEqual(widths[QualityMode.BALANCED], 1280)
+        self.assertEqual(widths[QualityMode.ACCURATE], 2560)
+
+    def test_accurate_ocr_width_respects_hardware_caps(self) -> None:
+        expected = {
+            None: (1280, "mobile"),
+            8: (1600, "mobile"),
+            12: (1920, "server"),
+            24: (2560, "server"),
+        }
+
+        for vram_gib, (width, model_class) in expected.items():
+            with self.subTest(vram_gib=vram_gib):
+                plan = build_execution_plan(
+                    snapshot(vram_gib=vram_gib),
+                    QualityMode.ACCURATE,
+                )
+                self.assertEqual(plan.ocr_inference_max_width, width)
+                self.assertEqual(plan.ocr_model_class, model_class)
+
+    def test_low_live_memory_clamps_ocr_width_without_reusing_scene_width(self) -> None:
+        plan = build_execution_plan(
+            snapshot(vram_gib=24, memory_available_gib=5),
+            QualityMode.ACCURATE,
+        )
+
+        self.assertEqual(plan.analysis_width, 480)
+        self.assertEqual(plan.ocr_inference_max_width, 720)
+        self.assertTrue(
+            any("Requested OCR inference width 2560px" in note for note in plan.notes)
+        )
 
     def test_hardware_decode_is_not_assumed_from_gpu_name(self) -> None:
         result = build_execution_plan(
@@ -257,6 +319,7 @@ class ExecutionProfileTests(unittest.TestCase):
             remote_model_concurrency=1,
             visual_decode_threads=3,
             analysis_width=640,
+            ocr_inference_max_width=1536,
             cheap_scan_fps=1.5,
             expensive_scan_fps=5,
             asr_beam_size=8,
@@ -277,6 +340,7 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertEqual(plan.remote_model_concurrency, 1)
         self.assertEqual(plan.visual_decode_threads, 3)
         self.assertEqual(plan.analysis_width, 640)
+        self.assertEqual(plan.ocr_inference_max_width, 1536)
         self.assertEqual(plan.cheap_scan_fps, 1.5)
         self.assertEqual(plan.expensive_scan_fps, 5)
         self.assertEqual(plan.ocr_batch_size, 1)
@@ -301,6 +365,7 @@ class ExecutionProfileTests(unittest.TestCase):
                 concurrent_gpu_stages=8,
                 cpu_workers=256,
                 analysis_width=1920,
+                ocr_inference_max_width=4096,
                 ocr_device="cuda",
             ),
         )
@@ -308,6 +373,7 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertLess(plan.cpu_workers, 256)
         self.assertEqual(plan.concurrent_gpu_stages, 0)
         self.assertLess(plan.analysis_width, 1920)
+        self.assertLess(plan.ocr_inference_max_width, 4096)
         self.assertEqual(plan.ocr_device, "cpu")
         self.assertTrue(any("clamped" in note for note in plan.notes))
 
@@ -316,6 +382,8 @@ class ExecutionProfileTests(unittest.TestCase):
             ResourceReserve(cpu_reserve_ratio=0.95)
         with self.assertRaises(ValidationError):
             PerformanceOverrides(cheap_scan_fps=10, expensive_scan_fps=5)
+        with self.assertRaises(ValidationError):
+            PerformanceOverrides(ocr_inference_max_width=4097)
         with self.assertRaisesRegex(ValidationError, "execution adapter"):
             PerformanceOverrides(asr_batch_size=2)
         with self.assertRaisesRegex(ValidationError, "execution adapter"):

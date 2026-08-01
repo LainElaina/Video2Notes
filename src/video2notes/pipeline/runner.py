@@ -58,6 +58,7 @@ from video2notes.ocr import (
     FilesystemArtifactImageLoader,
     OcrBackend,
     OcrEvidenceBundle,
+    OcrPipelineConfig,
     PaddleOcrBackend,
     extract_ocr_evidence,
 )
@@ -200,14 +201,14 @@ class Video2NotesPipeline:
     STAGE_VERSIONS: Mapping[str, str] = {
         "source.acquire": "2",
         "media.probe": "2",
-        "system.plan": "1",
+        "system.plan": "3",
         "vision.scan": "5",
         "audio.extract": "2",
         "captions.parse": "2",
         "audio.asr": "5",
-        "ocr.extract": "3",
-        "evidence.fuse": "2",
-        "notes.compose": "5",
+        "ocr.extract": "4",
+        "evidence.fuse": "3",
+        "notes.compose": "6",
         "render.outputs": "6",
     }
 
@@ -296,6 +297,11 @@ class Video2NotesPipeline:
                 ),
                 execution_plan,
             )
+            execution_plan = _align_execution_plan_with_backends(
+                execution_plan,
+                primary_asr_backend=primary_asr_backend,
+                ocr_backend=ocr_backend,
+            )
             current_stage = "system.plan"
             self._record_execution_plan(
                 workspace,
@@ -354,6 +360,7 @@ class Video2NotesPipeline:
                 visual_ref,
                 request,
                 ocr_backend,
+                execution_plan,
                 cancellation,
                 progress,
             )
@@ -1020,16 +1027,21 @@ class Video2NotesPipeline:
         visual_ref: ArtifactRef,
         request: PipelineRequest,
         ocr_backend: OcrBackend | None,
+        execution_plan: ExecutionPlan,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[OcrEvidenceBundle | None, list[EvidenceSpan], ArtifactRef]:
         output = workspace.artifact_path("ocr", "ocr-evidence.json")
+        ocr_config = OcrPipelineConfig(
+            inference_max_width=execution_plan.ocr_inference_max_width,
+        )
         with workspace.stage(
             "ocr.extract",
             stage_version=self.STAGE_VERSIONS["ocr.extract"],
             config={
                 "backend": _backend_identity(ocr_backend),
                 "language_hints": request.language_hints,
+                "pipeline": ocr_config.model_dump(mode="json"),
             },
             inputs=[visual_ref],
         ) as stage:
@@ -1055,6 +1067,7 @@ class Video2NotesPipeline:
                         visual_states,
                         backend=ocr_backend,
                         image_loader=FilesystemArtifactImageLoader(workspace.root),
+                        config=ocr_config,
                         language_hints=request.language_hints,
                     )
                     evidence = bundle.evidence
@@ -1562,6 +1575,124 @@ def _ocr_backend_for_plan(
                 "cpu_threads": plan.ocr_cpu_threads,
             }
         )
+    )
+
+
+def _align_execution_plan_with_backends(
+    plan: ExecutionPlan,
+    *,
+    primary_asr_backend: ASRBackend | None,
+    ocr_backend: OcrBackend | None,
+) -> ExecutionPlan:
+    """Replace planned model classes with the models that will actually run.
+
+    Hardware profiles describe the preferred model class. A configured local
+    backend can legitimately point at a smaller (or simply different) model,
+    so the persisted *effective* plan must not keep claiming the preference.
+    """
+
+    actual_asr = _actual_asr_model_class(primary_asr_backend)
+    actual_ocr = _actual_ocr_model_class(ocr_backend)
+    notes = list(plan.notes)
+    asr_note = _model_class_alignment_note(
+        component="ASR",
+        planned=plan.asr_model_class,
+        actual=actual_asr,
+        ranks={
+            "tiny": 0,
+            "base": 1,
+            "small": 2,
+            "medium": 3,
+            "large-v1": 4,
+            "large-v2": 5,
+            "large-v3": 6,
+            "large-v3-turbo": 6,
+        },
+    )
+    if asr_note is not None:
+        notes.append(asr_note)
+    ocr_note = _model_class_alignment_note(
+        component="OCR",
+        planned=plan.ocr_model_class,
+        actual=actual_ocr,
+        ranks={"mobile": 0, "medium": 1, "server": 2},
+    )
+    if ocr_note is not None:
+        notes.append(ocr_note)
+    return plan.model_copy(
+        update={
+            "asr_model_class": actual_asr,
+            "ocr_model_class": actual_ocr,
+            "notes": tuple(dict.fromkeys(notes)),
+        }
+    )
+
+
+def _actual_asr_model_class(backend: ASRBackend | None) -> str:
+    if backend is None:
+        return "unavailable"
+    if isinstance(backend, FasterWhisperBackend):
+        basename = _portable_basename(backend.config.model_path)
+        lowered = basename.casefold()
+        for prefix in ("faster-whisper-", "whisper-"):
+            if lowered.startswith(prefix):
+                return basename[len(prefix) :]
+        return basename
+    model_id = getattr(backend, "model_id", None)
+    if isinstance(model_id, str) and model_id.strip():
+        return model_id.strip()
+    return type(backend).__qualname__
+
+
+def _actual_ocr_model_class(backend: OcrBackend | None) -> str:
+    if backend is None:
+        return "unavailable"
+    if isinstance(backend, PaddleOcrBackend):
+        model_names = (
+            _portable_basename(backend.config.detection_model_dir),
+            _portable_basename(backend.config.recognition_model_dir),
+        )
+        joined = " ".join(model_names).casefold()
+        has_mobile = "mobile" in joined
+        has_server = "server" in joined
+        if has_mobile and has_server:
+            return "mixed"
+        if has_server:
+            return "server"
+        if has_mobile:
+            return "mobile"
+        return "+".join(dict.fromkeys(model_names))
+    model_id = getattr(backend, "model_id", None)
+    if isinstance(model_id, str) and model_id.strip():
+        return model_id.strip()
+    return type(backend).__qualname__
+
+
+def _portable_basename(value: str) -> str:
+    normalized = value.strip().rstrip("/\\").replace("\\", "/")
+    return normalized.rsplit("/", maxsplit=1)[-1] or value
+
+
+def _model_class_alignment_note(
+    *,
+    component: str,
+    planned: str,
+    actual: str,
+    ranks: Mapping[str, int],
+) -> str | None:
+    if actual.casefold() == planned.casefold():
+        return None
+    normalized_actual = actual.casefold().removesuffix(".en")
+    normalized_planned = planned.casefold().removesuffix(".en")
+    actual_rank = ranks.get(normalized_actual)
+    planned_rank = ranks.get(normalized_planned)
+    is_downgrade = actual == "unavailable" or (
+        actual_rank is not None and planned_rank is not None and actual_rank < planned_rank
+    )
+    verb = "downgraded" if is_downgrade else "adjusted"
+    return (
+        f"{component} model class was {verb} from {planned!r} to {actual!r} "
+        "to reflect the selected backend."
     )
 
 

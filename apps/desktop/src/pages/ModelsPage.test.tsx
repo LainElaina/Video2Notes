@@ -29,14 +29,18 @@ describe('models and performance workspace', () => {
       'true',
     )
     expect(screen.queryByLabelText('CPU worker')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('OCR 推理宽度')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /自定义性能/ }))
     fireEvent.change(screen.getByLabelText('CPU worker'), { target: { value: '10' } })
+    fireEvent.change(screen.getByLabelText('OCR 推理宽度'), {
+      target: { value: '1536' },
+    })
     fireEvent.click(screen.getByRole('button', { name: '保存性能设置' }))
 
     expect(useStudioStore.getState().performance).toMatchObject({
       experienceMode: 'professional',
-      overrides: { cpuWorkers: 10 },
+      overrides: { cpuWorkers: 10, ocrInferenceMaxWidth: 1536 },
     })
   })
 

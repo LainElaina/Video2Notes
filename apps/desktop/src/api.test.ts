@@ -167,6 +167,7 @@ describe('real local API client', () => {
       overrides: {
         cpu_workers: 12,
         remote_model_concurrency: 3,
+        ocr_inference_max_width: 1536,
         cheap_scan_fps: 2,
         expensive_scan_fps: 8,
       },
@@ -228,6 +229,7 @@ describe('real local API client', () => {
       overrides: {
         cpu_workers: 12,
         remote_model_concurrency: 3,
+        ocr_inference_max_width: 1536,
         cheap_scan_fps: 2,
         expensive_scan_fps: 8,
       },
