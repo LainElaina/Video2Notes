@@ -435,6 +435,78 @@ export interface PerformanceSystemReport {
   plans: Partial<Record<ProcessingMode, ExecutionPlan>>
 }
 
+export type HardwareTier =
+  | 'cpu_igpu'
+  | 'gpu_8gb'
+  | 'gpu_12gb'
+  | 'gpu_24gb_plus'
+
+export type ComponentKind = 'runtime' | 'tool' | 'local_model'
+export type ComponentState = 'ready' | 'missing' | 'incomplete' | 'degraded'
+export type ComponentActionKind = 'prepare' | 'resume' | 'repair_runtime'
+export type ComponentPrepareStatus = 'prepared' | 'reused' | 'failed'
+
+export interface ComponentRecommendation {
+  hardwareTier: HardwareTier
+  asrComponentId: string
+  ocrComponentId: string
+  asrDevice: string
+  asrComputeType: string
+  ocrDevice: string
+  reason: string
+}
+
+export interface ComponentActionDefinition {
+  id: string
+  kind: ComponentActionKind
+  componentId: string
+  label: string
+  automatic: boolean
+}
+
+export interface ComponentInventoryItemDefinition {
+  id: string
+  displayName: string
+  kind: ComponentKind
+  state: ComponentState
+  ready: boolean
+  degraded: boolean
+  required: boolean
+  version?: string
+  path?: string
+  detail?: string
+  actions: ComponentActionDefinition[]
+}
+
+export interface ComponentInventoryDefinition {
+  ready: boolean
+  degraded: boolean
+  capabilities: Record<string, boolean>
+  items: ComponentInventoryItemDefinition[]
+  actions: ComponentActionDefinition[]
+}
+
+export interface ComponentReportDefinition {
+  hardwareTier: HardwareTier
+  recommendation: ComponentRecommendation
+  inventory: ComponentInventoryDefinition
+}
+
+export interface ComponentPrepareResultDefinition {
+  componentId: string
+  status: ComponentPrepareStatus
+  path?: string
+  resumed: boolean
+  detail?: string
+}
+
+export interface ComponentPreparationDefinition {
+  hardwareTier: HardwareTier
+  results: ComponentPrepareResultDefinition[]
+  activated: boolean
+  report: ComponentReportDefinition
+}
+
 export interface MachineProfile {
   cpu: string
   gpu: string

@@ -237,6 +237,42 @@ describe('real local API client', () => {
     )
   })
 
+  it('maps component inventory and one-click preparation without inventing bundled weights', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(json({ ok: true })))
+    const client = new Video2NotesApi({
+      baseUrl: 'http://127.0.0.1:43119',
+      token: 'session-secret',
+    })
+
+    await client.components()
+    await client.prepareComponents({
+      component_ids: [
+        'asr-faster-whisper-large-v3',
+        'ocr-paddle-ppocrv5-server',
+      ],
+      hardware_tier: 'gpu_24gb_plus',
+      activate: true,
+    })
+
+    const calls = fetchMock.mock.calls.map(asRequest)
+    expect(calls[0].url).toBe('http://127.0.0.1:43119/api/components')
+    expect(calls[1]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/components/prepare',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({
+      component_ids: [
+        'asr-faster-whisper-large-v3',
+        'ocr-paddle-ppocrv5-server',
+      ],
+      hardware_tier: 'gpu_24gb_plus',
+      activate: true,
+    })
+    expect(new Headers(calls[1].init.headers).get('X-Video2Notes-Token')).toBe(
+      'session-secret',
+    )
+  })
+
   it('maps the run materials contract, including multipart files and query metadata', async () => {
     const material = {
       id: 'material-abc123',

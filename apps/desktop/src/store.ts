@@ -11,6 +11,8 @@ import type {
   ApiAcquisitionPolicy,
   ApiArtifactRef,
   ApiAuthSpec,
+  ApiComponentReport,
+  ApiComponentPreparationResponse,
   ApiEvidenceSpan,
   ApiConfigurationCatalog,
   ApiExecutionPlan,
@@ -32,6 +34,7 @@ import type {
   PipelineSubmission,
 } from './api'
 import {
+  componentReportFixture,
   demoRuntimeWarnings,
   evidenceFixture,
   machineFixture,
@@ -47,6 +50,9 @@ import {
 import type {
   BackendProfile,
   BrowserProfile,
+  ComponentPrepareResultDefinition,
+  ComponentPreparationDefinition,
+  ComponentReportDefinition,
   ConfigurationCatalogDefinition,
   DiscoveredModelDefinition,
   DraftState,
@@ -103,6 +109,12 @@ interface StudioData {
   configurationCatalog: ConfigurationCatalogDefinition
   performance: PerformanceSettings
   systemReport?: PerformanceSystemReport
+  componentReport?: ComponentReportDefinition
+  componentPreparationStatus: 'idle' | 'preparing' | 'success' | 'error'
+  componentPreparationResults: ComponentPrepareResultDefinition[]
+  componentPreparationActivated: boolean
+  componentPreparationError?: string
+  selectedComponentIds: string[]
   discoveredModels: DiscoveredModelDefinition[]
   discoveryProviderId?: string
   providerDiscoveryStatus: 'idle' | 'loading' | 'ready' | 'error'
@@ -209,6 +221,9 @@ interface StudioActions {
   setCurrentTime: (seconds: number) => void
   selectEvidence: (evidenceId: string, timeSeconds?: number) => void
   selectProvider: (providerId: string) => void
+  refreshComponents: () => void
+  setComponentSelected: (componentId: string, selected: boolean) => void
+  prepareLocalComponents: (componentIds?: string[]) => void
   savePerformance: (settings: PerformanceSettings) => void
   saveProvider: (input: {
     id: string
@@ -548,6 +563,15 @@ const initialData = (demo = false): StudioData => ({
     : { protocols: [], roles: [], capabilities: [] },
   performance: defaultPerformance(),
   systemReport: demo ? demoSystemReport() : undefined,
+  componentReport: demo ? structuredClone(componentReportFixture) : undefined,
+  componentPreparationStatus: 'idle',
+  componentPreparationResults: [],
+  componentPreparationActivated: false,
+  selectedComponentIds: demo
+    ? componentReportFixture.inventory.items
+        .filter(item => item.kind === 'local_model' && !item.ready)
+        .map(item => item.id)
+    : [],
   discoveredModels: [],
   providerDiscoveryStatus: 'idle',
 })
@@ -1278,7 +1302,6 @@ const serializePerformance = (value: PerformanceSettings): ApiPerformanceSetting
     value.experienceMode === 'guided'
       ? {}
       : {
-          decode_backend: value.overrides.decodeBackend,
           concurrent_gpu_stages: value.overrides.concurrentGpuStages,
           cpu_workers: value.overrides.cpuWorkers,
           remote_model_concurrency: value.overrides.remoteModelConcurrency,
@@ -1287,19 +1310,14 @@ const serializePerformance = (value: PerformanceSettings): ApiPerformanceSetting
           analysis_width: value.overrides.analysisWidth,
           cheap_scan_fps: value.overrides.cheapScanFps,
           expensive_scan_fps: value.overrides.expensiveScanFps,
-          ocr_model_class: value.overrides.ocrModelClass,
           ocr_device: value.overrides.ocrDevice,
-          ocr_batch_size: value.overrides.ocrBatchSize,
           ocr_cpu_threads: value.overrides.ocrCpuThreads,
-          asr_model_class: value.overrides.asrModelClass,
           asr_device: value.overrides.asrDevice,
           asr_compute_type: value.overrides.asrComputeType,
-          asr_batch_size: value.overrides.asrBatchSize,
           asr_cpu_threads: value.overrides.asrCpuThreads,
           asr_beam_size: value.overrides.asrBeamSize,
           verification_passes: value.overrides.verificationPasses,
           screenshot_budget_per_section: value.overrides.screenshotBudgetPerSection,
-          learned_scene_detector: value.overrides.learnedSceneDetector,
         },
 })
 
@@ -1376,6 +1394,72 @@ const mapSystemReport = (
     ),
   }
 }
+
+const mapComponentReport = (
+  value: ApiComponentReport,
+): ComponentReportDefinition => ({
+  hardwareTier: value.hardware_tier,
+  recommendation: {
+    hardwareTier: value.recommendation.hardware_tier,
+    asrComponentId: value.recommendation.asr_component_id,
+    ocrComponentId: value.recommendation.ocr_component_id,
+    asrDevice: value.recommendation.asr_device,
+    asrComputeType: value.recommendation.asr_compute_type,
+    ocrDevice: value.recommendation.ocr_device,
+    reason: value.recommendation.reason,
+  },
+  inventory: {
+    ready: value.inventory.ready,
+    degraded: value.inventory.degraded,
+    capabilities: { ...value.inventory.capabilities },
+    items: value.inventory.items.map(item => ({
+      id: item.id,
+      displayName: item.display_name,
+      kind: item.kind,
+      state: item.state,
+      ready: item.ready,
+      degraded: item.degraded,
+      required: item.required,
+      version: item.version ?? undefined,
+      path: item.path ?? undefined,
+      detail: item.detail ?? undefined,
+      actions: item.actions.map(action => ({
+        id: action.id,
+        kind: action.kind,
+        componentId: action.component_id,
+        label: action.label,
+        automatic: action.automatic,
+      })),
+    })),
+    actions: value.inventory.actions.map(action => ({
+      id: action.id,
+      kind: action.kind,
+      componentId: action.component_id,
+      label: action.label,
+      automatic: action.automatic,
+    })),
+  },
+})
+
+const mapComponentPreparation = (
+  value: ApiComponentPreparationResponse,
+): ComponentPreparationDefinition => ({
+  hardwareTier: value.hardware_tier,
+  results: value.results.map(result => ({
+    componentId: result.component_id,
+    status: result.status,
+    path: result.path ?? undefined,
+    resumed: result.resumed,
+    detail: result.detail ?? undefined,
+  })),
+  activated: value.activated,
+  report: mapComponentReport(value.report),
+})
+
+const selectableComponentIds = (report: ComponentReportDefinition): string[] =>
+  report.inventory.items
+    .filter(item => item.kind === 'local_model' && !item.ready)
+    .map(item => item.id)
 
 const registryPresentation = (
   value: ApiModelRegistry,
@@ -1821,7 +1905,16 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         }
         const nextApi = new Video2NotesApi(resolved.connection)
         const health = await nextApi.waitForHealth()
-        const [system, performancePayload, catalogPayload, runtime, profiles, loadedRegistry, runs] = await Promise.all([
+        const [
+          system,
+          performancePayload,
+          catalogPayload,
+          runtime,
+          profiles,
+          loadedRegistry,
+          runs,
+          componentPayload,
+        ] = await Promise.all([
           nextApi.system(),
           nextApi.performance(),
           nextApi.configurationCatalog(),
@@ -1829,6 +1922,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           nextApi.browserProfiles(),
           nextApi.providers(),
           nextApi.listRuns(),
+          nextApi.components(),
         ])
         api = nextApi
         registry = loadedRegistry
@@ -1852,6 +1946,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           secretStates,
         )
         const systemReport = mapSystemReport(system, performancePayload)
+        const componentReport = mapComponentReport(componentPayload)
         const tasks = await Promise.all(
           runs.map(run => hydrateTask(taskFromRun(run))),
         )
@@ -1861,6 +1956,12 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           configurationCatalog,
           performance: systemReport.performance,
           systemReport,
+          componentReport,
+          componentPreparationStatus: 'idle',
+          componentPreparationResults: [],
+          componentPreparationActivated: false,
+          componentPreparationError: undefined,
+          selectedComponentIds: selectableComponentIds(componentReport),
           backend: {
             mode: 'real',
             version: health.version,
@@ -3146,6 +3247,169 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       currentTimeSeconds: timeSeconds ?? state.currentTimeSeconds,
     })),
   selectProvider: selectedProviderId => set({ selectedProviderId }),
+  refreshComponents: () => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '演示模式只展示组件状态样例；没有扫描或修改本机文件。' })
+      return
+    }
+    void api
+      .components()
+      .then(payload => {
+        const componentReport = mapComponentReport(payload)
+        set({
+          componentReport,
+          selectedComponentIds: selectableComponentIds(componentReport),
+          componentPreparationStatus: 'idle',
+          componentPreparationResults: [],
+          componentPreparationActivated: false,
+          componentPreparationError: undefined,
+          notice: componentReport.inventory.ready
+            ? '本地运行环境和推荐模型均已就绪。'
+            : '组件状态已重新扫描。',
+        })
+      })
+      .catch(error =>
+        set({
+          componentPreparationStatus: 'error',
+          componentPreparationError: errorMessage(error),
+          notice: errorMessage(error),
+        }),
+      )
+  },
+  setComponentSelected: (componentId, selected) => {
+    const item = get().componentReport?.inventory.items.find(
+      candidate => candidate.id === componentId,
+    )
+    if (!item || item.kind !== 'local_model') return
+    set(state => ({
+      selectedComponentIds: selected
+        ? [...new Set([...state.selectedComponentIds, componentId])].slice(0, 8)
+        : state.selectedComponentIds.filter(id => id !== componentId),
+    }))
+  },
+  prepareLocalComponents: componentIds => {
+    const report = get().componentReport
+    if (!api || get().backend.mode !== 'real') {
+      const message = '演示模式不会下载模型；请通过桌面应用连接本机后端后再准备。'
+      set({
+        componentPreparationStatus: 'error',
+        componentPreparationError: message,
+        notice: message,
+      })
+      return
+    }
+    const requestedIds = componentIds
+      ? [...new Set(componentIds.map(value => value.trim()).filter(Boolean))]
+      : []
+    if (componentIds && requestedIds.length === 0) {
+      const message = '请至少选择一个可准备的本地模型组件。'
+      set({
+        componentPreparationStatus: 'error',
+        componentPreparationError: message,
+        notice: message,
+      })
+      return
+    }
+    const allowedIds = new Set(
+      report?.inventory.items
+        .filter(item => item.kind === 'local_model')
+        .map(item => item.id) ?? [],
+    )
+    if (
+      componentIds &&
+      (requestedIds.length > 8 || requestedIds.some(componentId => !allowedIds.has(componentId)))
+    ) {
+      const message = '组件选择无效；只能准备当前清单中的 ASR/OCR 本地模型。'
+      set({
+        componentPreparationStatus: 'error',
+        componentPreparationError: message,
+        notice: message,
+      })
+      return
+    }
+
+    set({
+      componentPreparationStatus: 'preparing',
+      componentPreparationResults: [],
+      componentPreparationActivated: false,
+      componentPreparationError: undefined,
+      notice: componentIds
+        ? `正在下载并校验 ${requestedIds.length} 个所选组件…`
+        : '正在下载并校验推荐的 ASR / OCR 模型…',
+    })
+    void api
+      .prepareComponents({
+        component_ids: requestedIds,
+        hardware_tier: report?.hardwareTier ?? null,
+        activate: true,
+      })
+      .then(async payload => {
+        const preparation = mapComponentPreparation(payload)
+        const failed = preparation.results.filter(result => result.status === 'failed')
+        let presentation:
+          | ReturnType<typeof registryPresentation>
+          | undefined
+        let refreshWarning = ''
+        if (preparation.activated) {
+          try {
+            const refreshedRegistry = await api!.providers()
+            registry = refreshedRegistry
+            const secretStates = Object.fromEntries(
+              get().providers.map(provider => [
+                provider.id,
+                provider.credentialState === 'stored-locally'
+                  ? 'configured'
+                  : 'not_configured',
+              ]),
+            )
+            presentation = registryPresentation(
+              refreshedRegistry,
+              get().configurationCatalog,
+              secretStates,
+            )
+          } catch (error) {
+            refreshWarning = ` 模型已激活，但模型路由刷新失败：${errorMessage(error)}`
+          }
+        }
+        const failedMessage = failed
+          .map(result => result.detail || `${result.componentId} 准备失败`)
+          .join('；')
+        const currentProviderId = get().selectedProviderId
+        const nextPresentation = presentation
+          ? {
+              ...presentation,
+              selectedProviderId: presentation.providers.some(
+                provider => provider.id === currentProviderId,
+              )
+                ? currentProviderId
+                : presentation.selectedProviderId,
+            }
+          : {}
+        set({
+          ...nextPresentation,
+          componentReport: preparation.report,
+          componentPreparationStatus: failed.length > 0 ? 'error' : 'success',
+          componentPreparationResults: preparation.results,
+          componentPreparationActivated: preparation.activated,
+          componentPreparationError: failed.length > 0 ? failedMessage : undefined,
+          selectedComponentIds: selectableComponentIds(preparation.report),
+          notice:
+            failed.length > 0
+              ? `部分组件准备失败：${failedMessage}`
+              : preparation.activated
+                ? `推荐模型已校验并激活。${refreshWarning}`.trim()
+                : `所选组件已准备；ASR 与 OCR 都就绪后会自动激活。${refreshWarning}`.trim(),
+        })
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({
+          componentPreparationStatus: 'error',
+          componentPreparationError: message,
+          notice: message,
+        })
+      })
+  },
   savePerformance: settings => {
     const normalized: PerformanceSettings = {
       ...settings,

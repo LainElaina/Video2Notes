@@ -155,6 +155,90 @@ const configurationCatalogPayload = {
   ],
 }
 
+const componentReportPayload = (ready = false) => ({
+  hardware_tier: 'gpu_12gb',
+  recommendation: {
+    hardware_tier: 'gpu_12gb',
+    asr_component_id: 'asr-faster-whisper-large-v3',
+    ocr_component_id: 'ocr-paddle-ppocrv5-server',
+    asr_device: 'cuda',
+    asr_compute_type: 'float16',
+    ocr_device: 'gpu:0',
+    reason: '12 GiB GPUs can run large-v3 and the higher-capacity OCR pair serially.',
+  },
+  inventory: {
+    ready,
+    degraded: !ready,
+    capabilities: { core: true, download: true, asr: ready, ocr: ready },
+    items: [
+      {
+        id: 'runtime-root',
+        display_name: 'Portable runtime resources',
+        kind: 'runtime',
+        state: 'ready',
+        ready: true,
+        degraded: false,
+        required: true,
+        version: 'test',
+        path: 'D:/runtime',
+        detail: null,
+        actions: [],
+      },
+      {
+        id: 'ffmpeg',
+        display_name: 'ffmpeg',
+        kind: 'tool',
+        state: 'ready',
+        ready: true,
+        degraded: false,
+        required: true,
+        version: '7.1',
+        path: 'D:/runtime/ffmpeg.exe',
+        detail: null,
+        actions: [],
+      },
+      ...[
+        ['asr-faster-whisper-large-v3', 'faster-whisper large-v3'],
+        ['ocr-paddle-ppocrv5-server', 'PaddleOCR PP-OCRv5 server'],
+      ].map(([id, displayName]) => ({
+        id,
+        display_name: displayName,
+        kind: 'local_model',
+        state: ready ? 'ready' : 'missing',
+        ready,
+        degraded: !ready,
+        required: true,
+        version: '1.0.0',
+        path: `D:/data/components/${id}`,
+        detail: ready ? null : 'Model payload has not been downloaded.',
+        actions: ready
+          ? []
+          : [
+              {
+                id: `prepare-${id}`,
+                kind: 'prepare',
+                component_id: id,
+                label: `Prepare ${displayName}`,
+                automatic: true,
+              },
+            ],
+      })),
+    ],
+    actions: ready
+      ? []
+      : [
+          'asr-faster-whisper-large-v3',
+          'ocr-paddle-ppocrv5-server',
+        ].map(id => ({
+          id: `prepare-${id}`,
+          kind: 'prepare',
+          component_id: id,
+          label: `Prepare ${id}`,
+          automatic: true,
+        })),
+  },
+})
+
 const runningJob: ApiJobSnapshot = {
   run_id: 'run-real-01',
   state: 'running' as const,
@@ -284,6 +368,7 @@ describe('studio store against the real loopback API contract', () => {
   let conflictingOperationKind: ApiRunOperationRequest['kind'] | undefined
   let failedOperationKind: ApiRunOperationRequest['kind'] | undefined
   let operationSequence = 0
+  let componentsReady = false
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -301,6 +386,7 @@ describe('studio store against the real loopback API contract', () => {
     conflictingOperationKind = undefined
     failedOperationKind = undefined
     operationSequence = 0
+    componentsReady = false
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -364,6 +450,37 @@ describe('studio store against the real loopback API contract', () => {
       }
       if (url.pathname === '/api/runtime') {
         return Promise.resolve(json({ injected: true, warnings: [] }))
+      }
+      if (url.pathname === '/api/components' && method === 'GET') {
+        return Promise.resolve(json(componentReportPayload(componentsReady)))
+      }
+      if (url.pathname === '/api/components/prepare' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as {
+          component_ids?: string[]
+          hardware_tier?: string | null
+          activate?: boolean
+        }
+        const componentIds = body.component_ids?.length
+          ? body.component_ids
+          : [
+              'asr-faster-whisper-large-v3',
+              'ocr-paddle-ppocrv5-server',
+            ]
+        componentsReady = componentIds.length === 2
+        return Promise.resolve(
+          json({
+            hardware_tier: body.hardware_tier ?? 'gpu_12gb',
+            results: componentIds.map(componentId => ({
+              component_id: componentId,
+              status: 'prepared',
+              path: `D:/data/components/${componentId}`,
+              resumed: false,
+              detail: null,
+            })),
+            activated: componentsReady && body.activate !== false,
+            report: componentReportPayload(componentsReady),
+          }),
+        )
       }
       if (url.pathname === '/api/browser-profiles') {
         return Promise.resolve(
@@ -1230,5 +1347,62 @@ describe('studio store against the real loopback API contract', () => {
       primary_model_id: 'asr-main',
       fallback_model_ids: [],
     })
+  })
+
+  it('loads component inventory and prepares the recommended local models in one request', async () => {
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+
+    expect(useStudioStore.getState().componentReport).toMatchObject({
+      hardwareTier: 'gpu_12gb',
+      recommendation: {
+        asrComponentId: 'asr-faster-whisper-large-v3',
+        ocrComponentId: 'ocr-paddle-ppocrv5-server',
+      },
+      inventory: {
+        ready: false,
+        capabilities: { core: true, asr: false, ocr: false },
+      },
+    })
+    expect(useStudioStore.getState().selectedComponentIds).toEqual([
+      'asr-faster-whisper-large-v3',
+      'ocr-paddle-ppocrv5-server',
+    ])
+
+    useStudioStore.getState().prepareLocalComponents()
+    expect(useStudioStore.getState().componentPreparationStatus).toBe('preparing')
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().componentPreparationStatus).toBe('success'),
+    )
+
+    const prepareRequest = requests.find(
+      request =>
+        request.url === '/api/components/prepare' && request.method === 'POST',
+    )
+    expect(JSON.parse(prepareRequest?.body ?? '{}')).toEqual({
+      component_ids: [],
+      hardware_tier: 'gpu_12gb',
+      activate: true,
+    })
+    expect(useStudioStore.getState()).toMatchObject({
+      componentPreparationActivated: true,
+      selectedComponentIds: [],
+      componentReport: { inventory: { ready: true } },
+    })
+    expect(useStudioStore.getState().componentPreparationResults).toEqual([
+      expect.objectContaining({
+        componentId: 'asr-faster-whisper-large-v3',
+        status: 'prepared',
+      }),
+      expect.objectContaining({
+        componentId: 'ocr-paddle-ppocrv5-server',
+        status: 'prepared',
+      }),
+    ])
+    expect(
+      requests.filter(
+        request => request.url === '/api/providers' && request.method === 'GET',
+      ),
+    ).toHaveLength(2)
   })
 })

@@ -7,7 +7,9 @@ import {
   Cloud,
   Cpu,
   Database,
+  Download,
   Gauge,
+  HardDrive,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -16,6 +18,7 @@ import {
   Radar,
   RefreshCw,
   Save,
+  ScanText,
   Search,
   ServerCog,
   Settings2,
@@ -27,6 +30,8 @@ import {
   Zap,
 } from 'lucide-react'
 import type {
+  ComponentInventoryItemDefinition,
+  HardwareTier,
   ModelCapability,
   PerformanceOverrides,
   PerformanceSettings,
@@ -119,6 +124,52 @@ const protocolKind = (protocol: ProviderProtocol): ProviderKind => {
 const formatBytes = (bytes?: number): string =>
   bytes === undefined ? '—' : `${(bytes / 1024 ** 3).toFixed(1)} GB`
 
+const hardwareTierCopy: Record<HardwareTier, { label: string; reason: string }> = {
+  cpu_igpu: {
+    label: 'CPU / 核显',
+    reason: '采用轻量 ASR 与移动版 OCR，并以串行推理保留前台响应。',
+  },
+  gpu_8gb: {
+    label: '8 GB 显存',
+    reason: '优先大模型语音识别与轻量 OCR，在有限显存内控制峰值占用。',
+  },
+  gpu_12gb: {
+    label: '12 GB 显存',
+    reason: '可串行运行 large-v3 ASR 与高容量 OCR，兼顾细节和显存安全。',
+  },
+  gpu_24gb_plus: {
+    label: '24 GB+ 显存',
+    reason: '使用本地目录中精度最高的 ASR 与 OCR 组合。',
+  },
+}
+
+const componentStateCopy: Record<
+  ComponentInventoryItemDefinition['state'],
+  string
+> = {
+  ready: '已就绪',
+  missing: '待下载',
+  incomplete: '可续传',
+  degraded: '需修复',
+}
+
+const runtimeName = (item: ComponentInventoryItemDefinition): string => {
+  const translated: Record<string, string> = {
+    'runtime-root': '便携运行资源',
+    'python-runtime': '内嵌 Python',
+    ffmpeg: 'FFmpeg',
+    ffprobe: 'FFprobe',
+    'yt-dlp': 'yt-dlp',
+    psutil: '资源监控',
+    'faster-whisper': 'Whisper 运行时',
+    ctranslate2: 'CTranslate2',
+    'huggingface-hub': '模型下载器',
+    paddleocr: 'PaddleOCR',
+    paddlepaddle: 'PaddlePaddle',
+  }
+  return translated[item.id] ?? item.displayName
+}
+
 const clampNumber = (value: string, min: number, max: number): number =>
   Math.min(max, Math.max(min, Number(value) || min))
 
@@ -169,15 +220,13 @@ const numericControls: Array<{
 }> = [
   { key: 'cpuWorkers', label: 'CPU worker', hint: '并行 CPU 工作线程', min: 1, max: 256, group: '调度' },
   { key: 'remoteModelConcurrency', label: '远程模型并发', hint: '同时进行的 API 请求', min: 1, max: 16, group: '调度' },
-  { key: 'concurrentGpuStages', label: 'GPU 阶段并发', hint: '允许同时占用 GPU 的阶段', min: 0, max: 8, group: '调度' },
+  { key: 'concurrentGpuStages', label: 'GPU 引擎槽位', hint: '0 强制 CPU；1 允许串行 GPU 推理', min: 0, max: 1, group: '调度' },
   { key: 'visualDecodeThreads', label: '视频解码线程', hint: '视觉解码线程数量', min: 1, max: 64, group: '视觉扫描' },
   { key: 'analysisWidth', label: '分析宽度', hint: '视觉分析缩放宽度（px）', min: 320, max: 1920, step: 32, group: '视觉扫描' },
   { key: 'cheapScanFps', label: '粗扫 FPS', hint: '低成本变化检测频率', min: 0.25, max: 30, step: 0.25, group: '视觉扫描' },
   { key: 'expensiveScanFps', label: '精扫 FPS', hint: '候选区间精细扫描频率', min: 0.25, max: 60, step: 0.25, group: '视觉扫描' },
   { key: 'maxFixedSamples', label: '固定采样上限', hint: '单段最多允许的固定帧数', min: 1, max: 20000, group: '视觉扫描' },
-  { key: 'ocrBatchSize', label: 'OCR batch', hint: 'OCR 单次推理图像数', min: 1, max: 64, group: 'OCR' },
   { key: 'ocrCpuThreads', label: 'OCR CPU 线程', hint: 'OCR 在 CPU 上的线程数', min: 1, max: 64, group: 'OCR' },
-  { key: 'asrBatchSize', label: 'ASR batch', hint: 'ASR 单次推理批量', min: 1, max: 64, group: 'ASR' },
   { key: 'asrCpuThreads', label: 'ASR CPU 线程', hint: 'ASR 在 CPU 上的线程数', min: 1, max: 64, group: 'ASR' },
   { key: 'asrBeamSize', label: 'ASR beam', hint: '语音解码搜索宽度', min: 1, max: 10, group: 'ASR' },
   { key: 'verificationPasses', label: '验证轮次', hint: '最终事实校验次数', min: 0, max: 4, group: '验证' },
@@ -191,12 +240,29 @@ export function ModelsPage() {
   const catalog = useStudioStore(state => state.configurationCatalog)
   const performance = useStudioStore(state => state.performance)
   const systemReport = useStudioStore(state => state.systemReport)
+  const componentReport = useStudioStore(state => state.componentReport)
+  const componentPreparationStatus = useStudioStore(
+    state => state.componentPreparationStatus,
+  )
+  const componentPreparationResults = useStudioStore(
+    state => state.componentPreparationResults,
+  )
+  const componentPreparationActivated = useStudioStore(
+    state => state.componentPreparationActivated,
+  )
+  const componentPreparationError = useStudioStore(
+    state => state.componentPreparationError,
+  )
+  const selectedComponentIds = useStudioStore(state => state.selectedComponentIds)
   const discoveredModels = useStudioStore(state => state.discoveredModels)
   const discoveryProviderId = useStudioStore(state => state.discoveryProviderId)
   const discoveryStatus = useStudioStore(state => state.providerDiscoveryStatus)
   const selectedProviderId = useStudioStore(state => state.selectedProviderId)
   const backend = useStudioStore(state => state.backend)
   const savePerformance = useStudioStore(state => state.savePerformance)
+  const refreshComponents = useStudioStore(state => state.refreshComponents)
+  const setComponentSelected = useStudioStore(state => state.setComponentSelected)
+  const prepareLocalComponents = useStudioStore(state => state.prepareLocalComponents)
   const saveProvider = useStudioStore(state => state.saveProvider)
   const testProvider = useStudioStore(state => state.testProvider)
   const discoverProviderModels = useStudioStore(state => state.discoverProviderModels)
@@ -225,6 +291,16 @@ export function ModelsPage() {
     : undefined
   const recommendation = systemReport?.recommendation
   const recommendedPlan = systemReport?.plans.balanced
+  const runtimeComponents = componentReport?.inventory.items.filter(
+    item => item.kind !== 'local_model',
+  ) ?? []
+  const localModelComponents = componentReport?.inventory.items.filter(
+    item => item.kind === 'local_model',
+  ) ?? []
+  const componentTier = componentReport
+    ? hardwareTierCopy[componentReport.hardwareTier]
+    : undefined
+  const componentPreparing = componentPreparationStatus === 'preparing'
 
   useEffect(() => setPerformanceDraft(performance), [performance])
 
@@ -286,8 +362,6 @@ export function ModelsPage() {
       ...current,
       experienceMode: 'professional',
       overrides: {
-        decodeBackend:
-          recommendedPlan.decodeBackend === 'software' ? 'software' : 'auto_hw',
         concurrentGpuStages: recommendedPlan.concurrentGpuStages,
         cpuWorkers: recommendedPlan.cpuWorkers,
         remoteModelConcurrency: recommendedPlan.remoteModelConcurrency,
@@ -296,14 +370,10 @@ export function ModelsPage() {
         analysisWidth: recommendedPlan.analysisWidth,
         cheapScanFps: recommendedPlan.cheapScanFps,
         expensiveScanFps: recommendedPlan.expensiveScanFps,
-        ocrModelClass:
-          recommendedPlan.ocrModelClass === 'mobile' ? 'mobile' : 'medium',
         ocrDevice: ['auto', 'cpu', 'cuda'].includes(recommendedPlan.ocrDevice)
           ? (recommendedPlan.ocrDevice as 'auto' | 'cpu' | 'cuda')
           : 'auto',
-        ocrBatchSize: recommendedPlan.ocrBatchSize,
         ocrCpuThreads: recommendedPlan.ocrCpuThreads,
-        asrModelClass: recommendedPlan.asrModelClass,
         asrDevice: ['auto', 'cpu', 'cuda'].includes(recommendedPlan.asrDevice)
           ? (recommendedPlan.asrDevice as 'auto' | 'cpu' | 'cuda')
           : 'auto',
@@ -318,12 +388,10 @@ export function ModelsPage() {
               PerformanceOverrides['asrComputeType']
             >)
           : 'default',
-        asrBatchSize: recommendedPlan.asrBatchSize,
         asrCpuThreads: recommendedPlan.asrCpuThreads,
         asrBeamSize: recommendedPlan.asrBeamSize,
         verificationPasses: recommendedPlan.verificationPasses,
         screenshotBudgetPerSection: recommendedPlan.screenshotBudgetPerSection,
-        learnedSceneDetector: recommendedPlan.learnedSceneDetector,
       },
     }))
   }
@@ -438,6 +506,215 @@ export function ModelsPage() {
         </div>
       </header>
 
+      <section className="component-setup-panel models-surface" aria-labelledby="component-setup-title">
+        <div className="models-section-heading">
+          <div className="section-heading-icon">
+            <HardDrive size={19} aria-hidden="true" />
+          </div>
+          <div>
+            <span className="section-kicker">本地运行环境</span>
+            <h2 id="component-setup-title">工具与识别模型准备</h2>
+            <p>先检查便携运行时，再按当前硬件下载并激活推荐的 ASR / OCR 权重。</p>
+          </div>
+          <div className="component-heading-actions">
+            {backend.mode === 'demo' && <span className="component-demo-badge">演示状态样例</span>}
+            {componentReport && (
+              <span
+                className={`component-overall-state ${componentReport.inventory.ready ? 'is-ready' : ''}`}
+              >
+                {componentReport.inventory.ready ? <Check size={13} aria-hidden="true" /> : <CircleDot size={13} aria-hidden="true" />}
+                {componentReport.inventory.ready ? '全部就绪' : '需要准备'}
+              </span>
+            )}
+            <button
+              className="component-refresh-button"
+              type="button"
+              aria-label="重新扫描本地组件"
+              title="重新扫描本地组件"
+              onClick={refreshComponents}
+              disabled={backend.mode !== 'real' || componentPreparing}
+            >
+              <RefreshCw className={componentPreparing ? 'spin' : ''} size={15} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        {componentReport ? (
+          <div className="component-setup-body">
+            <div
+              className="component-tier-card"
+              title={componentReport.recommendation.reason}
+            >
+              <span className="component-tier-mark"><Cpu size={17} aria-hidden="true" /></span>
+              <div>
+                <span>已识别硬件档位</span>
+                <strong>{componentTier?.label ?? componentReport.hardwareTier}</strong>
+                <p>{componentTier?.reason ?? componentReport.recommendation.reason}</p>
+              </div>
+              <dl>
+                <div>
+                  <dt>ASR</dt>
+                  <dd>{componentReport.recommendation.asrDevice} · {componentReport.recommendation.asrComputeType}</dd>
+                </div>
+                <div>
+                  <dt>OCR</dt>
+                  <dd>{componentReport.recommendation.ocrDevice}</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="component-columns">
+              <section className="runtime-inventory" aria-labelledby="runtime-inventory-title">
+                <header>
+                  <div>
+                    <span className="section-kicker">便携组件</span>
+                    <h3 id="runtime-inventory-title">工具与运行时</h3>
+                  </div>
+                  <span>{runtimeComponents.filter(item => item.ready).length} / {runtimeComponents.length} 可用</span>
+                </header>
+                <p className="component-subcopy">绿色只表示当前环境已找到并可用；缺失项需要更新或修复便携包。</p>
+                <ul className="runtime-component-grid">
+                  {runtimeComponents.map(item => (
+                    <li
+                      className={item.ready ? 'is-ready' : 'needs-attention'}
+                      key={item.id}
+                      title={item.detail ?? item.path}
+                    >
+                      <span className="runtime-state-dot" aria-hidden="true" />
+                      <span>
+                        <strong>{runtimeName(item)}</strong>
+                        <small>{item.ready ? '当前可用' : '缺失 · 需修复'}{item.version ? ` · ${item.version}` : ''}</small>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="managed-models" aria-labelledby="managed-models-title">
+                <header>
+                  <div>
+                    <span className="section-kicker">推荐权重</span>
+                    <h3 id="managed-models-title">ASR / OCR 本地模型</h3>
+                  </div>
+                  <span>{localModelComponents.filter(item => item.ready).length} / {localModelComponents.length} 就绪</span>
+                </header>
+
+                <div className="component-download-note">
+                  <Download size={16} aria-hidden="true" />
+                  <p><strong>模型权重不会随 EXE 预装。</strong>首次使用时按需下载到本机应用数据目录，已完成的文件会复用，未完成的文件可续传。</p>
+                </div>
+
+                <fieldset className="managed-model-list">
+                  <legend className="sr-only">
+                    {performanceDraft.experienceMode === 'professional' ? '选择要准备的本地模型组件' : '推荐的本地模型组件'}
+                  </legend>
+                  {localModelComponents.map(item => {
+                    const isAsr = item.id === componentReport.recommendation.asrComponentId
+                    const selected = selectedComponentIds.includes(item.id)
+                    return (
+                      <label
+                        className={`managed-model-card state-${item.state} ${selected ? 'is-selected' : ''}`}
+                        key={item.id}
+                      >
+                        {performanceDraft.experienceMode === 'professional' && (
+                          <input
+                            type="checkbox"
+                            aria-label={`选择组件 ${item.displayName}`}
+                            checked={selected}
+                            disabled={componentPreparing}
+                            onChange={event => setComponentSelected(item.id, event.target.checked)}
+                          />
+                        )}
+                        <span className="managed-model-icon">
+                          {isAsr ? <Bot size={17} aria-hidden="true" /> : <ScanText size={17} aria-hidden="true" />}
+                        </span>
+                        <span className="managed-model-copy">
+                          <span>{isAsr ? '语音识别 · ASR' : '画面文字 · OCR'}</span>
+                          <strong>{item.displayName}</strong>
+                          <small>{item.version ? `版本 ${item.version}` : '受管本地权重'} · {isAsr ? componentReport.recommendation.asrDevice : componentReport.recommendation.ocrDevice}</small>
+                        </span>
+                        <span className={`component-state-badge state-${item.state}`}>
+                          {item.ready && <Check size={12} aria-hidden="true" />}
+                          {componentStateCopy[item.state]}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </fieldset>
+
+                <div className="component-prepare-actions">
+                  <div className="component-action-copy">
+                    {backend.mode === 'real' ? (
+                      performanceDraft.experienceMode === 'professional'
+                        ? <span>只下载所选权重；全部推荐项就绪后自动写入模型路由。</span>
+                        : <span>自动选择当前硬件档位的推荐组合并在完成后激活。</span>
+                    ) : (
+                      <span>连接真实本机后端后可下载；演示模式不会创建模型文件。</span>
+                    )}
+                  </div>
+                  <button
+                    className="button button-primary component-prepare-button"
+                    type="button"
+                    aria-busy={componentPreparing}
+                    disabled={
+                      backend.mode !== 'real' ||
+                      componentPreparing ||
+                      (performanceDraft.experienceMode === 'professional' && selectedComponentIds.length === 0)
+                    }
+                    onClick={() =>
+                      prepareLocalComponents(
+                        performanceDraft.experienceMode === 'professional'
+                          ? selectedComponentIds
+                          : undefined,
+                      )
+                    }
+                  >
+                    {componentPreparing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
+                    {componentPreparing
+                      ? '正在下载并校验…'
+                      : performanceDraft.experienceMode === 'professional'
+                        ? '准备所选组件'
+                        : componentReport.inventory.ready
+                          ? '校验并激活推荐模型'
+                          : '一键准备推荐模型'}
+                  </button>
+                </div>
+
+                <div className="component-preparation-feedback" aria-live="polite">
+                  {componentPreparationStatus === 'success' && (
+                    <div className="component-feedback is-success">
+                      <Check size={15} aria-hidden="true" />
+                      <div>
+                        <strong>{componentPreparationActivated ? '推荐模型已激活' : '所选组件已准备'}</strong>
+                        <span>
+                          {componentPreparationResults.map(result =>
+                            `${result.componentId}：${result.status === 'reused' ? '已复用' : result.resumed ? '已续传完成' : '已准备'}`,
+                          ).join(' · ')}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  {componentPreparationStatus === 'error' && componentPreparationError && (
+                    <div className="component-feedback is-error" role="alert">
+                      <TriangleAlert size={15} aria-hidden="true" />
+                      <div><strong>组件准备未完成</strong><span>{componentPreparationError}</span></div>
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+          </div>
+        ) : (
+          <div className="component-empty-state">
+            <LoaderCircle className={backend.mode === 'connecting' ? 'spin' : ''} size={18} aria-hidden="true" />
+            <div>
+              <strong>{backend.mode === 'connecting' ? '正在扫描本机组件' : '尚未取得组件清单'}</strong>
+              <span>{backend.mode === 'offline' ? '请重启桌面应用以重新连接本机后端。' : '连接后会显示工具、运行时和推荐模型状态。'}</span>
+            </div>
+          </div>
+        )}
+      </section>
+
       <section className="performance-panel models-surface">
         <div className="models-section-heading">
           <div className="section-heading-icon">
@@ -548,24 +825,6 @@ export function ModelsPage() {
             </div>
 
             <div className="professional-selects">
-              <label>解码方式
-                <select
-                  value={performanceDraft.overrides.decodeBackend ?? recommendedPlan?.decodeBackend ?? 'auto_hw'}
-                  onChange={event => updateOverride('decodeBackend', event.target.value as 'software' | 'auto_hw')}
-                >
-                  <option value="auto_hw">自动硬件解码</option>
-                  <option value="software">软件解码</option>
-                </select>
-              </label>
-              <label>OCR 模型
-                <select
-                  value={performanceDraft.overrides.ocrModelClass ?? recommendedPlan?.ocrModelClass ?? 'mobile'}
-                  onChange={event => updateOverride('ocrModelClass', event.target.value as 'mobile' | 'medium')}
-                >
-                  <option value="mobile">Mobile · 更快</option>
-                  <option value="medium">Medium · 更精细</option>
-                </select>
-              </label>
               <label>OCR 设备
                 <select
                   value={performanceDraft.overrides.ocrDevice ?? recommendedPlan?.ocrDevice ?? 'auto'}
@@ -573,13 +832,6 @@ export function ModelsPage() {
                 >
                   <option value="auto">自动</option><option value="cpu">CPU</option><option value="cuda">CUDA</option>
                 </select>
-              </label>
-              <label>ASR 模型等级
-                <input
-                  value={performanceDraft.overrides.asrModelClass ?? recommendedPlan?.asrModelClass ?? ''}
-                  onChange={event => updateOverride('asrModelClass', event.target.value || undefined)}
-                  placeholder="例如 large-v3"
-                />
               </label>
               <label>ASR 设备
                 <select
@@ -623,16 +875,6 @@ export function ModelsPage() {
                         />
                       </label>
                     ))}
-                    {group === '验证' && (
-                      <label className="parameter-toggle">
-                        <span><strong>学习型场景检测</strong><small>在规则粗扫后启用学习型检测器</small></span>
-                        <input
-                          type="checkbox"
-                          checked={performanceDraft.overrides.learnedSceneDetector ?? recommendedPlan?.learnedSceneDetector ?? false}
-                          onChange={event => updateOverride('learnedSceneDetector', event.target.checked)}
-                        />
-                      </label>
-                    )}
                   </div>
                 </section>
               ))}

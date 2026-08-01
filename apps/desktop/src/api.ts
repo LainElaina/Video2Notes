@@ -406,6 +406,84 @@ export interface ApiSystemReport {
   plans: Record<string, ApiExecutionPlan>
 }
 
+export type ApiHardwareTier =
+  | 'cpu_igpu'
+  | 'gpu_8gb'
+  | 'gpu_12gb'
+  | 'gpu_24gb_plus'
+
+export type ApiComponentKind = 'runtime' | 'tool' | 'local_model'
+export type ApiComponentState = 'ready' | 'missing' | 'incomplete' | 'degraded'
+export type ApiComponentActionKind = 'prepare' | 'resume' | 'repair_runtime'
+export type ApiComponentPrepareStatus = 'prepared' | 'reused' | 'failed'
+
+export interface ApiTierRecommendation {
+  hardware_tier: ApiHardwareTier
+  asr_component_id: string
+  ocr_component_id: string
+  asr_device: string
+  asr_compute_type: string
+  ocr_device: string
+  reason: string
+}
+
+export interface ApiComponentAction {
+  id: string
+  kind: ApiComponentActionKind
+  component_id: string
+  label: string
+  automatic: boolean
+}
+
+export interface ApiComponentInventoryItem {
+  id: string
+  display_name: string
+  kind: ApiComponentKind
+  state: ApiComponentState
+  ready: boolean
+  degraded: boolean
+  required: boolean
+  version?: string | null
+  path?: string | null
+  detail?: string | null
+  actions: ApiComponentAction[]
+}
+
+export interface ApiComponentInventory {
+  ready: boolean
+  degraded: boolean
+  capabilities: Record<string, boolean>
+  items: ApiComponentInventoryItem[]
+  actions: ApiComponentAction[]
+}
+
+export interface ApiComponentReport {
+  hardware_tier: ApiHardwareTier
+  recommendation: ApiTierRecommendation
+  inventory: ApiComponentInventory
+}
+
+export interface ApiPrepareComponentsRequest {
+  component_ids?: string[]
+  hardware_tier?: ApiHardwareTier | null
+  activate?: boolean
+}
+
+export interface ApiComponentPrepareResult {
+  component_id: string
+  status: ApiComponentPrepareStatus
+  path?: string | null
+  resumed: boolean
+  detail?: string | null
+}
+
+export interface ApiComponentPreparationResponse {
+  hardware_tier: ApiHardwareTier
+  results: ApiComponentPrepareResult[]
+  activated: boolean
+  report: ApiComponentReport
+}
+
 export type ApiExperienceMode = 'guided' | 'professional'
 export type ApiResourcePreference = 'responsive' | 'balanced' | 'throughput'
 
@@ -816,6 +894,19 @@ export class Video2NotesApi {
 
   performance(): Promise<ApiPerformanceSettings> {
     return this.request('/api/performance')
+  }
+
+  components(): Promise<ApiComponentReport> {
+    return this.request('/api/components')
+  }
+
+  prepareComponents(
+    request: ApiPrepareComponentsRequest = {},
+  ): Promise<ApiComponentPreparationResponse> {
+    return this.request('/api/components/prepare', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
   }
 
   savePerformance(settings: ApiPerformanceSettings): Promise<ApiPerformanceSettings> {
