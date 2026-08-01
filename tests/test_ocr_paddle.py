@@ -85,7 +85,7 @@ class PaddleOcrBackendTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(
                     OcrDependencyError,
-                    "will not download weights automatically",
+                    "full Video2Notes portable build",
                 ),
             ):
                 backend.recognize(Image.new("RGB", (20, 20)))

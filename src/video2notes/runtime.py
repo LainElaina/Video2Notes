@@ -40,7 +40,13 @@ from video2notes.providers import (
     provider_auth_headers,
 )
 from video2notes.sources import SourceRegistry
-from video2notes.system import HardwareSnapshot
+from video2notes.system import (
+    ExperienceMode,
+    HardwareSnapshot,
+    PerformanceOverrides,
+    ResourcePreference,
+    ResourceReserve,
+)
 
 
 class SecretReader(Protocol):
@@ -87,6 +93,11 @@ def build_pipeline_runtime(
     secret_store: SecretReader | None = None,
     source_registry: SourceRegistry | None = None,
     hardware: HardwareSnapshot | None = None,
+    hardware_disk_path: str | None = None,
+    experience_mode: ExperienceMode = ExperienceMode.GUIDED,
+    resource_preference: ResourcePreference = ResourcePreference.BALANCED,
+    resource_reserve: ResourceReserve | None = None,
+    performance_overrides: PerformanceOverrides | None = None,
     ffmpeg_path: str = "ffmpeg",
     ffprobe_path: str = "ffprobe",
     pdf_browser_executable: str | None = None,
@@ -141,6 +152,11 @@ def build_pipeline_runtime(
             secondary_asr_backend=secondary_asr,
             ocr_backend=ocr,
             hardware=hardware,
+            hardware_disk_path=hardware_disk_path,
+            experience_mode=experience_mode,
+            resource_preference=resource_preference,
+            resource_reserve=resource_reserve,
+            performance_overrides=performance_overrides,
             ffmpeg_path=ffmpeg_path,
             ffprobe_path=ffprobe_path,
             pdf_browser_executable=pdf_browser_executable,

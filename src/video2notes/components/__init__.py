@@ -7,6 +7,7 @@ from .downloaders import (
     HuggingFaceSnapshotDownloader,
     PaddleCompatibilityResolver,
     PaddleCompatibleDownloader,
+    PaddleHuggingFaceDownloader,
 )
 from .manager import (
     ComponentManager,
@@ -59,6 +60,7 @@ __all__ = [
     "ModuleProbeResult",
     "PaddleCompatibilityResolver",
     "PaddleCompatibleDownloader",
+    "PaddleHuggingFaceDownloader",
     "PrepareBatchResult",
     "PrepareResult",
     "PrepareStatus",

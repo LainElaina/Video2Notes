@@ -119,9 +119,12 @@ class EvidenceNoteComposer:
         report_spec: ReportSpec | None = None,
         supporting_materials: Sequence[RunMaterial | SupportingMaterial] = (),
         artifact_root: str | Path | None = None,
+        verification_passes: int = 1,
     ) -> NoteCompositionResult:
         if fusion.run_id != metadata.run_id:
             raise ValueError("note metadata and fusion result must belong to one run")
+        if verification_passes < 0:
+            raise ValueError("verification_passes cannot be negative")
         resolved_report = (report_spec or ReportSpec()).resolve()
         metadata = metadata.model_copy(
             update={
@@ -168,7 +171,10 @@ class EvidenceNoteComposer:
                 supporting_materials=materials,
             )
             if self.verifier_backend is not None and facts:
-                note = self._verify(note, fusion, invocations)
+                for _ in range(verification_passes):
+                    if not note.facts:
+                        break
+                    note = self._verify(note, fusion, invocations)
         except (GenerationError, ValueError) as error:
             if not self.fallback_on_error:
                 raise

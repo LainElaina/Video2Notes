@@ -20,6 +20,7 @@ from video2notes.audio import (
     ASREvidenceResult,
     AudioExtractionError,
     AudioExtractionResult,
+    FasterWhisperBackend,
     SecondaryASRDecision,
     SecondaryASRReason,
     SubtitleParseError,
@@ -57,6 +58,7 @@ from video2notes.ocr import (
     FilesystemArtifactImageLoader,
     OcrBackend,
     OcrEvidenceBundle,
+    PaddleOcrBackend,
     extract_ocr_evidence,
 )
 from video2notes.sources import (
@@ -71,13 +73,18 @@ from video2notes.sources import (
     SourceRegistry,
 )
 from video2notes.system import (
+    ExecutionPlan,
+    ExperienceMode,
     HardwareSnapshot,
+    PerformanceOverrides,
     QualityMode,
+    ResourcePreference,
+    ResourceReserve,
+    SecondaryAsrPolicy,
     build_execution_plan,
     detect_hardware,
 )
 from video2notes.vision import (
-    MAX_FIXED_SAMPLES,
     AdaptiveScanConfig,
     AdaptiveVideoScanner,
     ChangeEvent,
@@ -163,6 +170,11 @@ class PipelineRuntime:
     secondary_asr_backend: ASRBackend | None = None
     ocr_backend: OcrBackend | None = None
     hardware: HardwareSnapshot | None = None
+    hardware_disk_path: str | Path | None = None
+    experience_mode: ExperienceMode = ExperienceMode.GUIDED
+    resource_preference: ResourcePreference = ResourcePreference.BALANCED
+    resource_reserve: ResourceReserve | None = None
+    performance_overrides: PerformanceOverrides | None = None
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     pdf_browser_executable: str | Path | None = None
@@ -179,13 +191,13 @@ class Video2NotesPipeline:
     STAGE_VERSIONS: Mapping[str, str] = {
         "source.acquire": "2",
         "media.probe": "2",
-        "vision.scan": "4",
+        "vision.scan": "5",
         "audio.extract": "2",
         "captions.parse": "2",
-        "audio.asr": "4",
-        "ocr.extract": "2",
+        "audio.asr": "5",
+        "ocr.extract": "3",
         "evidence.fuse": "2",
-        "notes.compose": "4",
+        "notes.compose": "5",
         "render.outputs": "6",
     }
 
@@ -243,8 +255,25 @@ class Video2NotesPipeline:
                 progress,
             )
             execution_plan = build_execution_plan(
-                self.runtime.hardware or detect_hardware(),
+                self.runtime.hardware
+                or detect_hardware(disk_path=self.runtime.hardware_disk_path),
                 request.quality_mode,
+                experience_mode=self.runtime.experience_mode,
+                preference=self.runtime.resource_preference,
+                reserve=self.runtime.resource_reserve,
+                overrides=self.runtime.performance_overrides,
+            )
+            primary_asr_backend = _asr_backend_for_plan(
+                self.runtime.asr_backend,
+                execution_plan,
+            )
+            secondary_asr_backend = _asr_backend_for_plan(
+                self.runtime.secondary_asr_backend,
+                execution_plan,
+            )
+            ocr_backend = _ocr_backend_for_plan(
+                self.runtime.ocr_backend,
+                execution_plan,
             )
             current_stage = "vision.scan"
             visual_states, visual_ref = self._scan_visual_states(
@@ -279,6 +308,9 @@ class Video2NotesPipeline:
                 captions,
                 captions_ref,
                 request,
+                primary_asr_backend,
+                secondary_asr_backend,
+                execution_plan.secondary_asr,
                 cancellation,
                 progress,
             )
@@ -288,6 +320,7 @@ class Video2NotesPipeline:
                 visual_states,
                 visual_ref,
                 request,
+                ocr_backend,
                 cancellation,
                 progress,
             )
@@ -312,6 +345,7 @@ class Video2NotesPipeline:
                 fusion,
                 fusion_ref,
                 ocr_bundle,
+                execution_plan,
                 cancellation,
                 progress,
             )
@@ -475,7 +509,7 @@ class Video2NotesPipeline:
         events_path = workspace.artifact_path("vision", "scan-events.json")
         segments = sampling_plan.compile(
             media.duration_us,
-            max_fixed_samples=MAX_FIXED_SAMPLES,
+            max_fixed_samples=int(execution_plan["max_fixed_samples"]),
         )
         analysis_width = int(execution_plan["analysis_width"])
         analysis_height = max(64, round(analysis_width * 9 / 16))
@@ -495,7 +529,7 @@ class Video2NotesPipeline:
                 "scanner": asdict(config),
                 "sampling_plan": sampling_plan.model_dump(mode="json"),
                 "sampling_segments": compiled_payload,
-                "max_fixed_samples": MAX_FIXED_SAMPLES,
+                "max_fixed_samples": int(execution_plan["max_fixed_samples"]),
                 "ffprobe": self.runtime.ffprobe_path,
             },
             inputs=[media_ref],
@@ -551,13 +585,15 @@ class Video2NotesPipeline:
                             media,
                             segment,
                             preview_dir=segment_dir,
+                            max_fixed_samples=int(execution_plan["max_fixed_samples"]),
                             cancel=cancel,
                         )
                         fixed_sample_count += len(segment_events)
-                        if fixed_sample_count > MAX_FIXED_SAMPLES:
+                        max_fixed_samples = int(execution_plan["max_fixed_samples"])
+                        if fixed_sample_count > max_fixed_samples:
                             raise ValueError(
                                 "fixed_interval sampling exceeded runtime maximum "
-                                f"of {MAX_FIXED_SAMPLES} frames"
+                                f"of {max_fixed_samples} frames"
                             )
                     else:
                         segment_events = []
@@ -741,6 +777,9 @@ class Video2NotesPipeline:
         captions: list[EvidenceSpan],
         captions_ref: ArtifactRef,
         request: PipelineRequest,
+        primary_asr_backend: ASRBackend | None,
+        secondary_asr_backend: ASRBackend | None,
+        secondary_policy: SecondaryAsrPolicy,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[list[EvidenceSpan], ArtifactRef]:
@@ -750,9 +789,9 @@ class Video2NotesPipeline:
             "audio.asr",
             stage_version=self.STAGE_VERSIONS["audio.asr"],
             config={
-                "primary_backend": _backend_identity(self.runtime.asr_backend),
-                "secondary_backend": _backend_identity(self.runtime.secondary_asr_backend),
-                "secondary_policy": request.quality_mode.value,
+                "primary_backend": _backend_identity(primary_asr_backend),
+                "secondary_backend": _backend_identity(secondary_asr_backend),
+                "secondary_policy": secondary_policy.value,
                 "language_hints": request.language_hints,
             },
             inputs=[extraction_ref, captions_ref],
@@ -769,7 +808,7 @@ class Video2NotesPipeline:
                     language = (
                         request.language_hints[0] if len(request.language_hints) == 1 else None
                     )
-                    if self.runtime.asr_backend is None:
+                    if primary_asr_backend is None:
                         warning = (
                             "No primary ASR backend is configured; transcript "
                             "contains captions and any configured selective secondary only."
@@ -784,7 +823,7 @@ class Video2NotesPipeline:
                         )
                         result: ASREvidenceResult = transcribe_to_evidence(
                             extraction,
-                            self.runtime.asr_backend,
+                            primary_asr_backend,
                             run_id=workspace.manifest.run_id,
                             language=language,
                             language_hints=request.language_hints,
@@ -799,9 +838,9 @@ class Video2NotesPipeline:
                     eligible = [
                         item
                         for item in decisions
-                        if _secondary_is_enabled(item.reasons, request.quality_mode)
+                        if _secondary_is_enabled(item.reasons, secondary_policy)
                     ]
-                    if eligible and self.runtime.secondary_asr_backend is None:
+                    if eligible and secondary_asr_backend is None:
                         warning = (
                             f"{len(eligible)} ambiguous speech window(s) were found, "
                             "but no secondary ASR backend is configured."
@@ -825,7 +864,7 @@ class Video2NotesPipeline:
                             "status": "not_configured",
                             "secondary_evidence_ids": [],
                         }
-                        if self.runtime.secondary_asr_backend is None or clip_end <= clip_start:
+                        if secondary_asr_backend is None or clip_end <= clip_start:
                             decision_records.append(record)
                             continue
                         clip_path = workspace.artifact_path(
@@ -844,7 +883,7 @@ class Video2NotesPipeline:
                             stage.add_output(clip_path, kind=ArtifactKind.AUDIO)
                             secondary = transcribe_to_evidence(
                                 clip,
-                                self.runtime.secondary_asr_backend,
+                                secondary_asr_backend,
                                 run_id=workspace.manifest.run_id,
                                 language=language,
                                 language_hints=request.language_hints,
@@ -892,6 +931,7 @@ class Video2NotesPipeline:
         visual_states: list[VisualState],
         visual_ref: ArtifactRef,
         request: PipelineRequest,
+        ocr_backend: OcrBackend | None,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[OcrEvidenceBundle | None, list[EvidenceSpan], ArtifactRef]:
@@ -900,7 +940,7 @@ class Video2NotesPipeline:
             "ocr.extract",
             stage_version=self.STAGE_VERSIONS["ocr.extract"],
             config={
-                "backend": _backend_identity(self.runtime.ocr_backend),
+                "backend": _backend_identity(ocr_backend),
                 "language_hints": request.language_hints,
             },
             inputs=[visual_ref],
@@ -917,7 +957,7 @@ class Video2NotesPipeline:
                 cancel.raise_if_cancelled()
                 bundle = None
                 evidence = []
-                if self.runtime.ocr_backend is None:
+                if ocr_backend is None:
                     warning = "No OCR backend is configured; screen text was not recognized."
                     stage.add_warning(warning)
                     workspace.add_warning(warning)
@@ -925,7 +965,7 @@ class Video2NotesPipeline:
                     emit("ocr.extract", progress=0.0, message="识别持久画面中的可读文字")
                     bundle = extract_ocr_evidence(
                         visual_states,
-                        backend=self.runtime.ocr_backend,
+                        backend=ocr_backend,
                         image_loader=FilesystemArtifactImageLoader(workspace.root),
                         language_hints=request.language_hints,
                     )
@@ -1013,6 +1053,7 @@ class Video2NotesPipeline:
         fusion: FusionResult,
         fusion_ref: ArtifactRef,
         ocr_bundle: OcrEvidenceBundle | None,
+        execution_plan: ExecutionPlan,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[NoteCompositionResult, ArtifactRef]:
@@ -1027,6 +1068,7 @@ class Video2NotesPipeline:
                 "composer": _composer_identity(self.runtime.note_composer),
                 "report_spec": resolved_report.model_dump(mode="json"),
                 "title_override": request.title_override,
+                "verification_passes": execution_plan.verification_passes,
             },
             inputs=[fusion_ref],
         ) as stage:
@@ -1081,6 +1123,7 @@ class Video2NotesPipeline:
                     fusion,
                     screenshots_by_window=screenshots,
                     report_spec=report_spec,
+                    verification_passes=execution_plan.verification_passes,
                 )
                 _write_model(document_path, composition.note)
                 _write_json(
@@ -1216,6 +1259,7 @@ def _fixed_interval_events(
     segment: SamplingSegment,
     *,
     preview_dir: Path,
+    max_fixed_samples: int,
     cancel: CancellationToken,
 ) -> list[ChangeEvent]:
     """Decode and persist real source frames for one fixed-interval segment."""
@@ -1242,10 +1286,10 @@ def _fixed_interval_events(
         )
     ):
         cancel.raise_if_cancelled()
-        if index >= MAX_FIXED_SAMPLES:
+        if index >= max_fixed_samples:
             raise ValueError(
                 "fixed_interval sampling exceeded runtime maximum "
-                f"of {MAX_FIXED_SAMPLES} frames"
+                f"of {max_fixed_samples} frames"
             )
         requested_time_us = (
             decoded.requested_time_us
@@ -1384,13 +1428,48 @@ def _source_resolution(source: SourceManifest) -> str | None:
     return None
 
 
+def _asr_backend_for_plan(
+    backend: ASRBackend | None,
+    plan: ExecutionPlan,
+) -> ASRBackend | None:
+    if not isinstance(backend, FasterWhisperBackend):
+        return backend
+    return FasterWhisperBackend(
+        backend.config.model_copy(
+            update={
+                "device": plan.asr_device,
+                "compute_type": plan.asr_compute_type,
+                "cpu_threads": plan.asr_cpu_threads,
+                "beam_size": plan.asr_beam_size,
+            }
+        )
+    )
+
+
+def _ocr_backend_for_plan(
+    backend: OcrBackend | None,
+    plan: ExecutionPlan,
+) -> OcrBackend | None:
+    if not isinstance(backend, PaddleOcrBackend):
+        return backend
+    device = "gpu:0" if plan.ocr_device == "cuda" else plan.ocr_device
+    return PaddleOcrBackend(
+        backend.config.model_copy(
+            update={
+                "device": device,
+                "cpu_threads": plan.ocr_cpu_threads,
+            }
+        )
+    )
+
+
 def _secondary_is_enabled(
     reasons: list[SecondaryASRReason],
-    quality_mode: QualityMode,
+    policy: SecondaryAsrPolicy,
 ) -> bool:
-    if quality_mode is QualityMode.FAST:
+    if policy is SecondaryAsrPolicy.OFF:
         return False
-    if quality_mode is QualityMode.BALANCED:
+    if policy is SecondaryAsrPolicy.CONFLICTS_ONLY:
         return any(
             item
             in {

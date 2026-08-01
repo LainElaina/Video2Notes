@@ -21,6 +21,7 @@ from video2notes.components import (
     LocalModelRole,
     ModuleProbeResult,
     PaddleCompatibleDownloader,
+    PaddleHuggingFaceDownloader,
     PrepareStatus,
 )
 from video2notes.system.hardware import HardwareTier
@@ -273,19 +274,16 @@ class ComponentManagerTests(unittest.TestCase):
             )
         )
 
-    def test_paddle_preparation_requires_an_explicit_compatible_downloader(self) -> None:
+    def test_paddle_preparation_is_automatic_in_the_default_manager(self) -> None:
         manager = self.manager(asr_downloader=FakeDownloader())
         recommendation = manager.recommendation(HardwareTier.CPU_IGPU)
-        result = manager.prepare(recommendation.ocr_component_id)
         item = next(
             entry
             for entry in manager.inventory(HardwareTier.CPU_IGPU).items
             if entry.id == recommendation.ocr_component_id
         )
 
-        self.assertEqual(result.status, PrepareStatus.FAILED)
-        self.assertFalse(item.actions[0].automatic)
-        self.assertIn("downloader", result.detail or "")
+        self.assertTrue(item.actions[0].automatic)
 
     def test_catalog_contains_only_versioned_local_asr_and_ocr_models(self) -> None:
         catalog = DEFAULT_COMPONENT_CATALOG
@@ -334,11 +332,45 @@ class OptionalDownloaderTests(unittest.TestCase):
                     resume=True,
                 )
 
-        self.assertEqual(result.source_revision, "main")
+        self.assertEqual(
+            result.source_revision,
+            "536b0662742c02347bc0e980a01041f333bce120",
+        )
         self.assertEqual(len(calls), 1)
         self.assertEqual(Path(str(calls[0]["local_dir"])), destination)
         self.assertTrue(Path(str(calls[0]["cache_dir"])).is_relative_to(destination))
-        self.assertEqual(calls[0]["local_dir_use_symlinks"], False)
+        self.assertNotIn("local_dir_use_symlinks", calls[0])
+
+    def test_default_paddle_downloader_fetches_two_pinned_managed_snapshots(
+        self,
+    ) -> None:
+        manifest = DEFAULT_COMPONENT_CATALOG.manifests["ocr-paddle-ppocrv5-mobile"]
+        calls: list[dict[str, object]] = []
+
+        def snapshot_download(**kwargs: object) -> str:
+            calls.append(kwargs)
+            destination = Path(str(kwargs["local_dir"]))
+            destination.mkdir(parents=True, exist_ok=True)
+            return str(destination)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "managed-staging"
+            result = PaddleHuggingFaceDownloader(snapshot_download).download(
+                manifest,
+                destination,
+                resume=False,
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            [item["repo_id"] for item in calls],
+            [
+                "PaddlePaddle/PP-OCRv5_mobile_det",
+                "PaddlePaddle/PP-OCRv5_mobile_rec",
+            ],
+        )
+        self.assertTrue(all(len(str(item["revision"])) == 40 for item in calls))
+        self.assertIn("PP-OCRv5_mobile_det@", result.source_revision or "")
 
     def test_missing_huggingface_optional_dependency_is_actionable(self) -> None:
         manifest = DEFAULT_COMPONENT_CATALOG.manifests["asr-faster-whisper-small"]

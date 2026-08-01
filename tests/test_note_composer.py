@@ -142,7 +142,7 @@ class NoteComposerTests(unittest.TestCase):
             fact_backend=fact,
             draft_backend=draft,
             verifier_backend=verifier,
-        ).compose(metadata, fusion)
+        ).compose(metadata, fusion, verification_passes=2)
         self.assertFalse(result.used_deterministic_fallback)
         self.assertTrue(result.note.facts[0].needs_review)
         self.assertEqual(
@@ -150,6 +150,7 @@ class NoteComposerTests(unittest.TestCase):
             [
                 ("cheap", "extractor", "notes.fact_extractor"),
                 ("writer", "long-context", "notes.drafter"),
+                ("judge", "precise", "notes.verifier"),
                 ("judge", "precise", "notes.verifier"),
             ],
         )

@@ -10,6 +10,13 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from video2notes.api import ApiContext, create_app
+from video2notes.components import (
+    ComponentManager,
+    ComponentManifest,
+    DownloadResult,
+    DownloadSource,
+    ModuleProbeResult,
+)
 from video2notes.providers import (
     AuthScheme,
     KeyringSecretStore,
@@ -34,6 +41,27 @@ class InMemoryKeyring:
 
     def delete_password(self, service_name: str, username: str) -> None:
         del self.values[(service_name, username)]
+
+
+class ApiComponentDownloader:
+    def download(
+        self,
+        manifest: ComponentManifest,
+        destination: Path,
+        *,
+        resume: bool,
+    ) -> DownloadResult:
+        del resume
+        destination.mkdir(parents=True, exist_ok=True)
+        for relative in manifest.required_files:
+            payload = destination / relative
+            payload.parent.mkdir(parents=True, exist_ok=True)
+            payload.write_bytes(b"managed-model")
+        for relative in manifest.required_nonempty_directories:
+            payload = destination / relative
+            payload.mkdir(parents=True, exist_ok=True)
+            (payload / "inference.bin").write_bytes(b"managed-model")
+        return DownloadResult(source_revision="api-test")
 
 
 class ApiAppTests(unittest.TestCase):
@@ -109,6 +137,14 @@ class ApiAppTests(unittest.TestCase):
         system = self.client.get("/api/system", headers=self.headers)
         self.assertEqual(system.json()["performance"], saved.json())
         self.assertEqual(system.json()["recommendation"]["preference"], "responsive")
+        self.assertEqual(
+            self.context.pipeline.runtime.experience_mode.value,
+            "professional",
+        )
+        self.assertEqual(
+            self.context.pipeline.runtime.performance_overrides.cpu_workers,
+            2,
+        )
 
     def test_configuration_catalog_exposes_protocols_roles_and_no_model_ids(
         self,
@@ -162,6 +198,67 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(runtime.status_code, 200)
         self.assertFalse(runtime.json()["injected"])
         self.assertIsInstance(runtime.json()["warnings"], list)
+
+    def test_component_inventory_and_one_click_prepare_activate_local_models(
+        self,
+    ) -> None:
+        data_root = Path(self.temporary.name) / "component-api"
+        runtime_root = data_root / "portable-runtime"
+        runtime_root.mkdir(parents=True)
+        binaries: dict[str, str] = {}
+        for name in ("ffmpeg", "ffprobe"):
+            executable = runtime_root / f"{name}.exe"
+            executable.write_bytes(b"tool")
+            binaries[name] = str(executable)
+        downloader = ApiComponentDownloader()
+        manager = ComponentManager(
+            data_root,
+            runtime_root=runtime_root,
+            binary_locator=lambda name: binaries.get(name),
+            module_probe=lambda module, distribution: ModuleProbeResult(
+                available=True,
+                version=f"test-{distribution}",
+                path=f"runtime/{module}",
+            ),
+            downloaders={
+                DownloadSource.HUGGINGFACE_SNAPSHOT: downloader,
+                DownloadSource.PADDLE_COMPATIBLE: downloader,
+            },
+        )
+        context = ApiContext(
+            data_root,
+            token="component-token",
+            model_registry=ModelRegistry.with_local_defaults(),
+            secret_store=KeyringSecretStore(InMemoryKeyring()),
+            component_manager=manager,
+        )
+        client = TestClient(create_app(context))
+        self.addCleanup(client.close)
+        headers = {"X-Video2Notes-Token": "component-token"}
+
+        before = client.get("/api/components", headers=headers)
+        self.assertEqual(before.status_code, 200)
+        self.assertFalse(before.json()["inventory"]["ready"])
+        prepared = client.post(
+            "/api/components/prepare",
+            headers=headers,
+            json={"hardware_tier": "cpu_igpu", "activate": True},
+        )
+
+        self.assertEqual(prepared.status_code, 200)
+        self.assertTrue(prepared.json()["activated"])
+        self.assertTrue(prepared.json()["report"]["inventory"]["ready"])
+        self.assertEqual(len(prepared.json()["results"]), 2)
+        self.assertIn(
+            "model_path",
+            context.model_registry.models["faster-whisper"].settings,
+        )
+        self.assertIn(
+            "detection_model_dir",
+            context.model_registry.models["paddleocr"].settings,
+        )
+        self.assertIsNotNone(context.pipeline.runtime.asr_backend)
+        self.assertIsNotNone(context.pipeline.runtime.ocr_backend)
 
     def test_provider_secret_is_write_only(self) -> None:
         previous_pipeline = self.context.pipeline

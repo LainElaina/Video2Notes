@@ -25,6 +25,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from video2notes.artifacts import RunWorkspace
+from video2notes.components import (
+    ComponentInventory,
+    ComponentManager,
+    ComponentManagerError,
+    ComponentNotReadyError,
+    PrepareResult,
+    TierRecommendation,
+)
 from video2notes.domain import ArtifactManifest, SourceDescriptor
 from video2notes.jobs import (
     JobAlreadyRunningError,
@@ -82,6 +90,7 @@ from video2notes.sources import (
 from video2notes.system import (
     ExperienceMode,
     HardwareSnapshot,
+    HardwareTier,
     PerformanceOverrides,
     ProcessingEstimate,
     QualityMode,
@@ -198,6 +207,25 @@ class ProviderDiscoveryResult(ApiModel):
     models: list[DiscoveredModel]
 
 
+class ComponentReport(ApiModel):
+    hardware_tier: HardwareTier
+    recommendation: TierRecommendation
+    inventory: ComponentInventory
+
+
+class PrepareComponentsRequest(ApiModel):
+    component_ids: list[str] = Field(default_factory=list, max_length=8)
+    hardware_tier: HardwareTier | None = None
+    activate: bool = True
+
+
+class ComponentPreparationResponse(ApiModel):
+    hardware_tier: HardwareTier
+    results: list[PrepareResult]
+    activated: bool
+    report: ComponentReport
+
+
 class ProcessingEstimateRequest(ApiModel):
     duration_seconds: float = Field(ge=0)
     quality_mode: QualityMode = QualityMode.BALANCED
@@ -237,6 +265,7 @@ class ApiContext:
         job_manager: JobManager | None = None,
         pipeline: Video2NotesPipeline | None = None,
         pipeline_runtime: PipelineRuntime | None = None,
+        component_manager: ComponentManager | None = None,
     ):
         if pipeline is not None and pipeline_runtime is not None:
             raise ValueError("provide pipeline or pipeline_runtime, not both")
@@ -268,6 +297,7 @@ class ApiContext:
             self.performance_settings = PerformanceSettings()
             self.save_performance_settings(self.performance_settings)
         self.secret_store = secret_store or KeyringSecretStore()
+        self.component_manager = component_manager or ComponentManager(self.data_root)
         self.job_manager = job_manager or JobManager(max_workers=2)
         self._owns_job_manager = job_manager is None
         self._pipeline_is_injected = pipeline is not None or pipeline_runtime is not None
@@ -354,6 +384,11 @@ class ApiContext:
             self.model_registry,
             secret_store=self.secret_store,
             source_registry=self.source_registry,
+            hardware_disk_path=str(self.data_root),
+            experience_mode=self.performance_settings.experience_mode,
+            resource_preference=self.performance_settings.preference,
+            resource_reserve=self.performance_settings.reserve,
+            performance_overrides=self.performance_settings.overrides,
         )
         self.pipeline = Video2NotesPipeline(
             self.runs_root,
@@ -475,7 +510,9 @@ def create_app(
     def put_performance_settings(
         settings: PerformanceSettings,
     ) -> PerformanceSettings:
-        return context.save_performance_settings(settings)
+        saved = context.save_performance_settings(settings)
+        context.refresh_pipeline()
+        return saved
 
     @app.post(
         "/api/estimate",
@@ -500,6 +537,56 @@ def create_app(
         return RuntimeStatus(
             injected=context.pipeline_is_injected,
             warnings=[_sanitize_message(warning) for warning in context.runtime_warnings],
+        )
+
+    @app.get(
+        "/api/components",
+        response_model=ComponentReport,
+        dependencies=protected,
+    )
+    def component_report() -> ComponentReport:
+        return _component_report(context)
+
+    @app.post(
+        "/api/components/prepare",
+        response_model=ComponentPreparationResponse,
+        dependencies=protected,
+    )
+    def prepare_components(
+        request: PrepareComponentsRequest,
+    ) -> ComponentPreparationResponse:
+        tier = request.hardware_tier or recommend_hardware_tier(
+            detect_hardware(disk_path=context.data_root)
+        )
+        recommendation = context.component_manager.recommendation(tier)
+        component_ids = request.component_ids or [
+            recommendation.asr_component_id,
+            recommendation.ocr_component_id,
+        ]
+        if len(component_ids) != len(set(component_ids)):
+            raise HTTPException(status_code=422, detail="component IDs must be unique")
+        try:
+            results = [
+                context.component_manager.prepare(component_id)
+                for component_id in component_ids
+            ]
+            activated = False
+            inventory = context.component_manager.inventory(tier)
+            if (
+                request.activate
+                and inventory.capabilities.get("asr")
+                and inventory.capabilities.get("ocr")
+            ):
+                _activate_managed_local_models(context, tier)
+                activated = True
+            report = _component_report(context, tier=tier)
+        except ComponentManagerError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return ComponentPreparationResponse(
+            hardware_tier=tier,
+            results=results,
+            activated=activated,
+            report=report,
         )
 
     @app.get("/api/browser-profiles", dependencies=protected)
@@ -1118,6 +1205,74 @@ def _require_provider(context: ApiContext, provider_id: str) -> ProviderSpec:
     if provider is None:
         raise HTTPException(status_code=404, detail="provider not found")
     return provider
+
+
+def _component_report(
+    context: ApiContext,
+    *,
+    tier: HardwareTier | None = None,
+) -> ComponentReport:
+    resolved_tier = tier or recommend_hardware_tier(
+        detect_hardware(disk_path=context.data_root)
+    )
+    return ComponentReport(
+        hardware_tier=resolved_tier,
+        recommendation=context.component_manager.recommendation(resolved_tier),
+        inventory=context.component_manager.inventory(resolved_tier),
+    )
+
+
+def _activate_managed_local_models(
+    context: ApiContext,
+    tier: HardwareTier,
+) -> None:
+    try:
+        settings = context.component_manager.local_adapter_settings(tier)
+    except ComponentNotReadyError:
+        raise ComponentManagerError(
+            "recommended local ASR/OCR model payloads are not complete"
+        ) from None
+
+    registry = context.model_registry.model_copy(deep=True)
+    defaults = ModelRegistry.with_local_defaults()
+    local_provider = registry.providers.get("local")
+    if local_provider is None:
+        registry.providers["local"] = defaults.providers["local"].model_copy(deep=True)
+    elif local_provider.protocol is not ProviderProtocol.LOCAL:
+        raise ComponentManagerError(
+            "provider ID 'local' is occupied by a non-local protocol"
+        )
+
+    for model_id, selected_settings in (
+        ("faster-whisper", settings.asr),
+        ("paddleocr", settings.ocr),
+    ):
+        default_model = defaults.models[model_id]
+        model = registry.models.get(model_id)
+        if model is None:
+            model = default_model.model_copy(deep=True)
+            registry.models[model_id] = model
+        elif model.provider_id != "local":
+            raise ComponentManagerError(
+                f"model ID '{model_id}' is occupied by a non-local provider"
+            )
+        model.capabilities.update(default_model.capabilities)
+        model.settings = dict(selected_settings)
+        model.enabled = True
+
+    for role, model_id in (
+        ("asr.primary", "faster-whisper"),
+        ("ocr.primary", "paddleocr"),
+        ("vision.text_detector", "paddleocr"),
+    ):
+        binding = registry.roles.get(role)
+        if binding is None or binding.primary_model_id == model_id:
+            registry.bind(role, model_id)
+
+    validated = ModelRegistry.model_validate(registry.model_dump(mode="json"))
+    validated.save(context.registry_path)
+    context.model_registry = validated
+    context.refresh_pipeline()
 
 
 def _provider_api_key(

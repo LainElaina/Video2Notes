@@ -19,7 +19,11 @@ from pathlib import Path
 from video2notes.system.hardware import HardwareTier
 
 from .catalog import DEFAULT_COMPONENT_CATALOG, ComponentCatalog
-from .downloaders import ComponentDownloader, HuggingFaceSnapshotDownloader
+from .downloaders import (
+    ComponentDownloader,
+    HuggingFaceSnapshotDownloader,
+    PaddleHuggingFaceDownloader,
+)
 from .models import (
     ComponentAction,
     ComponentActionKind,
@@ -114,6 +118,7 @@ class ComponentManager:
         self.catalog = catalog
         self._downloaders: dict[DownloadSource, ComponentDownloader] = {
             DownloadSource.HUGGINGFACE_SNAPSHOT: HuggingFaceSnapshotDownloader(),
+            DownloadSource.PADDLE_COMPATIBLE: PaddleHuggingFaceDownloader(),
         }
         if downloaders is not None:
             self._downloaders.update(downloaders)
@@ -142,6 +147,7 @@ class ComponentManager:
                 "ffmpeg",
                 "ffprobe",
                 "yt-dlp",
+                "psutil",
             )
         )
         asr_ready = all(
@@ -149,6 +155,7 @@ class ComponentManager:
             for item_id in (
                 "faster-whisper",
                 "ctranslate2",
+                "huggingface-hub",
                 recommendation.asr_component_id,
             )
         )
@@ -356,8 +363,15 @@ class ComponentManager:
             )
         for component_id, display_name, module_name, distribution_name in (
             ("yt-dlp", "yt-dlp", "yt_dlp", "yt-dlp"),
+            ("psutil", "psutil resource monitor", "psutil", "psutil"),
             ("faster-whisper", "faster-whisper runtime", "faster_whisper", "faster-whisper"),
             ("ctranslate2", "CTranslate2 runtime", "ctranslate2", "ctranslate2"),
+            (
+                "huggingface-hub",
+                "Hugging Face managed download runtime",
+                "huggingface_hub",
+                "huggingface-hub",
+            ),
             ("paddleocr", "PaddleOCR runtime", "paddleocr", "paddleocr"),
             ("paddlepaddle", "PaddlePaddle runtime", "paddle", "paddlepaddle"),
         ):

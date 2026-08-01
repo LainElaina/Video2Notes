@@ -43,6 +43,7 @@ class PaddleOcrConfig(OcrModel):
     language: str = Field(default="ch", min_length=1)
     device: str = Field(default="cpu", min_length=1)
     enable_mkldnn: bool = False
+    cpu_threads: int = Field(default=1, ge=1, le=64)
     api_family: Literal["auto", "v2", "v3"] = "auto"
 
 
@@ -67,6 +68,10 @@ class PaddleOcrBackend:
     @property
     def loaded(self) -> bool:
         return self._engine is not None
+
+    @property
+    def config(self) -> PaddleOcrConfig:
+        return self._config
 
     def recognize(
         self,
@@ -130,9 +135,8 @@ class PaddleOcrBackend:
             paddleocr = importlib.import_module("paddleocr")
         except ImportError as error:
             raise OcrDependencyError(
-                "PaddleOCR is optional and is not installed. Install the project's "
-                "'ocr' extra and configure existing local detector/recognizer model "
-                "directories; Video2Notes will not download weights automatically."
+                "The bundled PaddleOCR runtime is unavailable. Use the full Video2Notes "
+                "portable build or repair the packaged runtime."
             ) from error
         raw_version = getattr(paddleocr, "__version__", "unknown")
         self._version = str(raw_version)
@@ -167,6 +171,7 @@ class PaddleOcrBackend:
                 "lang": self._config.language,
                 "device": self._config.device,
                 "enable_mkldnn": self._config.enable_mkldnn,
+                "cpu_threads": self._config.cpu_threads,
             }
             detection_name = _local_model_name(detection_dir)
             recognition_name = _local_model_name(recognition_dir)
@@ -189,6 +194,7 @@ class PaddleOcrBackend:
             "lang": self._config.language,
             "show_log": False,
             "use_gpu": self._config.device.casefold() not in {"cpu", "none"},
+            "cpu_threads": self._config.cpu_threads,
         }
         self._engine = factory(v2_arguments)
         self._active_api_family = "v2"

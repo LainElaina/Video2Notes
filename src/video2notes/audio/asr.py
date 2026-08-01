@@ -377,8 +377,8 @@ class FasterWhisperBackend:
             module = import_module("faster_whisper")
         except ImportError as error:
             raise ASRDependencyError(
-                "faster-whisper is not installed; install the local ASR extra with "
-                "`pip install 'video2notes[asr]'`"
+                "The bundled faster-whisper runtime is unavailable. Use the full "
+                "Video2Notes portable build or repair the packaged runtime."
             ) from error
         factory = cast(WhisperModelFactory, module.WhisperModel)
         try:

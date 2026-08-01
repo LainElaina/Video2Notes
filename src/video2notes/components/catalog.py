@@ -47,7 +47,7 @@ _ASR_SMALL = ComponentManifest(
     engine="faster_whisper",
     source_kind=DownloadSource.HUGGINGFACE_SNAPSHOT,
     source="Systran/faster-whisper-small",
-    revision="main",
+    revision="536b0662742c02347bc0e980a01041f333bce120",
     target_subdirectory="models/asr/faster-whisper-small/1.0.0",
     required_files=("config.json", "model.bin"),
 )
@@ -60,7 +60,7 @@ _ASR_LARGE_V3 = ComponentManifest(
     engine="faster_whisper",
     source_kind=DownloadSource.HUGGINGFACE_SNAPSHOT,
     source="Systran/faster-whisper-large-v3",
-    revision="main",
+    revision="edaa852ec7e145841d8ffdb056a99866b5f0a478",
     target_subdirectory="models/asr/faster-whisper-large-v3/1.0.0",
     required_files=("config.json", "model.bin"),
 )
@@ -72,7 +72,11 @@ _OCR_MOBILE = ComponentManifest(
     role=LocalModelRole.OCR,
     engine="paddleocr",
     source_kind=DownloadSource.PADDLE_COMPATIBLE,
-    source="paddleocr://PP-OCRv5_mobile_det+PP-OCRv5_mobile_rec",
+    source=(
+        "paddleocr://"
+        "PP-OCRv5_mobile_det@0d63e78e2b680928f6b1747d76a08db6e645efb7+"
+        "PP-OCRv5_mobile_rec@682f20538d8c086cb2128e5cfac775e6c4904e85"
+    ),
     target_subdirectory="models/ocr/ppocrv5-mobile/1.0.0",
     required_nonempty_directories=("detection", "recognition"),
 )
@@ -84,7 +88,11 @@ _OCR_SERVER = ComponentManifest(
     role=LocalModelRole.OCR,
     engine="paddleocr",
     source_kind=DownloadSource.PADDLE_COMPATIBLE,
-    source="paddleocr://PP-OCRv5_server_det+PP-OCRv5_server_rec",
+    source=(
+        "paddleocr://"
+        "PP-OCRv5_server_det@ca867c897ecbca8873081573a802ad70d499cb94+"
+        "PP-OCRv5_server_rec@b26c3587fda8da3c8ec0ce357214b4d661ff1558"
+    ),
     target_subdirectory="models/ocr/ppocrv5-server/1.0.0",
     required_nonempty_directories=("detection", "recognition"),
 )

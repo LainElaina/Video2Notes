@@ -125,7 +125,7 @@ class ASRExecutionTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(
                     ASRDependencyError,
-                    r"video2notes\[asr\]",
+                    r"full Video2Notes portable build|repair the packaged runtime",
                 ),
             ):
                 backend.transcribe(wav)
