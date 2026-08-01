@@ -86,9 +86,9 @@ function Get-PythonRuntimeInventory {
 import importlib.metadata
 import importlib.util
 import json
-import sys
+import os
 
-specs = json.loads(sys.argv[1])
+specs = json.loads(os.environ["VIDEO2NOTES_BUILD_COMPONENT_SPECS"])
 inventory = []
 for spec in specs:
     try:
@@ -110,8 +110,19 @@ for spec in specs:
 print(json.dumps(inventory, separators=(",", ":")))
 '@
     $specsJson = ConvertTo-Json @($ComponentSpecs) -Compress
-    $inventoryJson = (& $Python -c $inventoryScript $specsJson | Out-String).Trim()
-    Assert-LastExitCode "Inspecting the installed Python runtime packages"
+    $previousSpecs = $env:VIDEO2NOTES_BUILD_COMPONENT_SPECS
+    $hadPreviousSpecs = Test-Path Env:VIDEO2NOTES_BUILD_COMPONENT_SPECS
+    try {
+        $env:VIDEO2NOTES_BUILD_COMPONENT_SPECS = $specsJson
+        # Read the script from stdin.  Passing multiline Python through `-c`
+        # is not stable after multiple Windows CreateProcess quoting layers.
+        $inventoryJson = ($inventoryScript | & $Python - | Out-String).Trim()
+        Assert-LastExitCode "Inspecting the installed Python runtime packages"
+    }
+    finally {
+        if ($hadPreviousSpecs) { $env:VIDEO2NOTES_BUILD_COMPONENT_SPECS = $previousSpecs }
+        else { Remove-Item Env:VIDEO2NOTES_BUILD_COMPONENT_SPECS -ErrorAction SilentlyContinue }
+    }
     $inventory = @($inventoryJson | ConvertFrom-Json)
     $missing = @(
         $inventory | Where-Object {
@@ -142,7 +153,7 @@ installed = {dist.metadata["Name"] for dist in importlib.metadata.distributions(
 known = set(paddlex.utils.deps.BASE_DEP_SPECS)
 print(json.dumps(sorted(installed & known, key=str.casefold), separators=(",", ":")))
 '@
-    $metadataJson = (& $Python -c $metadataScript | Out-String).Trim()
+    $metadataJson = ($metadataScript | & $Python - | Out-String).Trim()
     Assert-LastExitCode "Inspecting installed PaddleX dependency metadata"
     return @($metadataJson | ConvertFrom-Json)
 }
