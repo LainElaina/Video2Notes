@@ -64,6 +64,7 @@ class MediaTimestamp(StrictModel):
 
 
 class ArtifactKind(StrEnum):
+    SYSTEM = "system"
     SOURCE = "source"
     MEDIA = "media"
     SUBTITLE = "subtitle"

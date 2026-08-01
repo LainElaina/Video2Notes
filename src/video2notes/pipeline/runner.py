@@ -8,7 +8,7 @@ import os
 import shutil
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
@@ -169,6 +169,15 @@ class PipelineRuntime:
     asr_backend: ASRBackend | None = None
     secondary_asr_backend: ASRBackend | None = None
     ocr_backend: OcrBackend | None = None
+    asr_backends_by_quality: Mapping[QualityMode, ASRBackend] = field(
+        default_factory=dict
+    )
+    secondary_asr_backends_by_quality: Mapping[QualityMode, ASRBackend] = field(
+        default_factory=dict
+    )
+    ocr_backends_by_quality: Mapping[QualityMode, OcrBackend] = field(
+        default_factory=dict
+    )
     hardware: HardwareSnapshot | None = None
     hardware_disk_path: str | Path | None = None
     experience_mode: ExperienceMode = ExperienceMode.GUIDED
@@ -191,6 +200,7 @@ class Video2NotesPipeline:
     STAGE_VERSIONS: Mapping[str, str] = {
         "source.acquire": "2",
         "media.probe": "2",
+        "system.plan": "1",
         "vision.scan": "5",
         "audio.extract": "2",
         "captions.parse": "2",
@@ -254,9 +264,11 @@ class Video2NotesPipeline:
                 media_ref,
                 progress,
             )
+            hardware_snapshot = self.runtime.hardware or detect_hardware(
+                disk_path=self.runtime.hardware_disk_path
+            )
             execution_plan = build_execution_plan(
-                self.runtime.hardware
-                or detect_hardware(disk_path=self.runtime.hardware_disk_path),
+                hardware_snapshot,
                 request.quality_mode,
                 experience_mode=self.runtime.experience_mode,
                 preference=self.runtime.resource_preference,
@@ -264,16 +276,37 @@ class Video2NotesPipeline:
                 overrides=self.runtime.performance_overrides,
             )
             primary_asr_backend = _asr_backend_for_plan(
-                self.runtime.asr_backend,
+                self.runtime.asr_backends_by_quality.get(
+                    request.quality_mode,
+                    self.runtime.asr_backend,
+                ),
                 execution_plan,
             )
             secondary_asr_backend = _asr_backend_for_plan(
-                self.runtime.secondary_asr_backend,
+                self.runtime.secondary_asr_backends_by_quality.get(
+                    request.quality_mode,
+                    self.runtime.secondary_asr_backend,
+                ),
                 execution_plan,
             )
             ocr_backend = _ocr_backend_for_plan(
-                self.runtime.ocr_backend,
+                self.runtime.ocr_backends_by_quality.get(
+                    request.quality_mode,
+                    self.runtime.ocr_backend,
+                ),
                 execution_plan,
+            )
+            current_stage = "system.plan"
+            self._record_execution_plan(
+                workspace,
+                request,
+                media_manifest_ref,
+                hardware_snapshot,
+                execution_plan,
+                primary_asr_backend,
+                secondary_asr_backend,
+                ocr_backend,
+                progress,
             )
             current_stage = "vision.scan"
             visual_states, visual_ref = self._scan_visual_states(
@@ -369,6 +402,59 @@ class Video2NotesPipeline:
             raise
         workspace.set_status(RunStatus.COMPLETED)
         return outcome
+
+    def _record_execution_plan(
+        self,
+        workspace: RunWorkspace,
+        request: PipelineRequest,
+        media_manifest_ref: ArtifactRef,
+        hardware: HardwareSnapshot,
+        execution_plan: ExecutionPlan,
+        primary_asr_backend: ASRBackend | None,
+        secondary_asr_backend: ASRBackend | None,
+        ocr_backend: OcrBackend | None,
+        emit: PipelineEmitter,
+    ) -> ArtifactRef:
+        output = workspace.artifact_path("system", "execution-plan.json")
+        composer = _composer_identity(self.runtime.note_composer)
+        degraded: list[str] = []
+        if primary_asr_backend is None:
+            degraded.append("primary_asr_unavailable")
+        if ocr_backend is None:
+            degraded.append("ocr_unavailable")
+        if (
+            execution_plan.secondary_asr is not SecondaryAsrPolicy.OFF
+            and secondary_asr_backend is None
+        ):
+            degraded.append("secondary_asr_unavailable")
+        if execution_plan.verification_passes > 0 and composer["verifier"] is None:
+            degraded.append("note_verifier_unavailable")
+        payload = {
+            "schema_version": 1,
+            "quality_mode": request.quality_mode.value,
+            "hardware": hardware.model_dump(mode="json"),
+            "effective_plan": execution_plan.model_dump(mode="json"),
+            "actual_backends": {
+                "asr_primary": _backend_identity(primary_asr_backend),
+                "asr_secondary": _backend_identity(secondary_asr_backend),
+                "ocr": _backend_identity(ocr_backend),
+                "notes": composer,
+            },
+            "degraded_features": degraded,
+        }
+        with workspace.stage(
+            "system.plan",
+            stage_version=self.STAGE_VERSIONS["system.plan"],
+            config=payload,
+            inputs=[media_manifest_ref],
+        ) as stage:
+            if not stage.cached:
+                emit("system.plan", progress=0.0, message="记录本次有效执行计划")
+                _write_json(output, payload)
+                stage.add_output(output, kind=ArtifactKind.SYSTEM)
+                stage.add_metric("degraded_feature_count", len(degraded))
+                emit("system.plan", progress=1.0, message="有效执行计划已固定")
+        return workspace.ref_for(output, kind=ArtifactKind.SYSTEM)
 
     def _acquire(
         self,
@@ -1070,7 +1156,12 @@ class Video2NotesPipeline:
                 "composer": _composer_identity(self.runtime.note_composer),
                 "report_spec": resolved_report.model_dump(mode="json"),
                 "title_override": request.title_override,
+                "quality_mode": request.quality_mode.value,
                 "verification_passes": execution_plan.verification_passes,
+                "screenshot_budget_per_section": (
+                    execution_plan.screenshot_budget_per_section
+                ),
+                "remote_model_concurrency": execution_plan.remote_model_concurrency,
             },
             inputs=[fusion_ref],
         ) as stage:

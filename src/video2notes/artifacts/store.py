@@ -57,6 +57,7 @@ class RunWorkspace:
 
     DIRECTORY_NAMES = (
         "source",
+        "system",
         "media",
         "subtitles",
         "audio",

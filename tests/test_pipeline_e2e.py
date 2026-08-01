@@ -50,6 +50,8 @@ class FakeAsr:
         self.text = text
         self.confidence = confidence
         self.provider = provider
+        self.provider_id = provider
+        self.model_id = "fixture"
 
     def transcribe(
         self,
@@ -392,3 +394,51 @@ class PipelineEndToEndTests(unittest.TestCase):
             self.assertIn('"status": "completed"', decisions)
             self.assertIn('"asr_pass": "selective_secondary"', evidence)
             self.assertGreaterEqual(outcome.evidence_count, 3)
+
+    def test_quality_specific_backends_and_effective_plan_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            fallback_asr = FakeAsr(text="fallback", provider="fallback-asr")
+            accurate_asr = FakeAsr(text="accurate", provider="accurate-asr")
+            fallback_ocr = FakeOcr()
+            accurate_ocr = FakeOcr()
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=fallback_asr,
+                ocr_backend=fallback_ocr,
+                asr_backends_by_quality={QualityMode.ACCURATE: accurate_asr},
+                ocr_backends_by_quality={QualityMode.ACCURATE: accurate_ocr},
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.ACCURATE,
+                include_screenshots=False,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(request, run_id="profiled-backends")
+
+            pipeline.run(workspace, request)
+
+            self.assertEqual(fallback_asr.calls, 0)
+            self.assertEqual(fallback_ocr.calls, 0)
+            self.assertEqual(accurate_asr.calls, 1)
+            self.assertGreater(accurate_ocr.calls, 0)
+            plan_path = workspace.root / "system" / "execution-plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["quality_mode"], "accurate")
+            self.assertEqual(
+                plan["actual_backends"]["asr_primary"]["provider_id"],
+                "accurate-asr",
+            )
+            self.assertIn("secondary_asr_unavailable", plan["degraded_features"])
+            self.assertIn("note_verifier_unavailable", plan["degraded_features"])
+            manifest = RunWorkspace(workspace.root).manifest
+            system_record = manifest.stages["system.plan"]
+            self.assertEqual(system_record.metrics["degraded_feature_count"], 2)
+            self.assertEqual(system_record.outputs[0].kind.value, "system")
