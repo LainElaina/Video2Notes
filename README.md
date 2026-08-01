@@ -126,11 +126,11 @@ data/
 
 | 模式 | 视觉计划 | ASR / 复核 | 关键帧与验证 | 适用场景 |
 | --- | --- | --- | --- | --- |
-| `fast` | 480px；2 / 6 fps 粗扫/精扫 | 单路主 ASR；不运行二次 ASR | 较少视觉候选；仍可保留每个证据窗口的代表帧 | 快速判断内容价值 |
-| `balanced`（默认） | 768px；3 / 12 fps | 只对字幕冲突或语言冲突窗口运行第二路已配置 ASR；可绑定异构模型/供应商 | 中等视觉密度；配置 verifier 时执行证据校验 | 日常高质量笔记 |
-| `accurate` | 1080px；6 / 24 fps | 对低置信、缺失、字幕/语言不确定或冲突窗口选择性复核 | 更细候选窗口和 OCR；保留更多独特状态 | 文字密集、需要复核的材料 |
+| `fast` | 场景 480px、OCR 720px；2 / 6 fps 粗扫/精扫 | 单路主 ASR；不运行二次 ASR | 较少视觉候选；仍保留完整时间证据 | 快速判断内容价值 |
+| `balanced`（默认） | 场景 768px、OCR 1280px；3 / 12 fps | 只对字幕冲突或语言冲突窗口运行第二路已配置 ASR；可绑定异构模型/供应商 | 中等视觉密度；配置 verifier 时执行证据校验 | 日常高质量笔记 |
+| `accurate` | 场景 1080px、OCR 2560px；6 / 24 fps | 对低置信、缺失、字幕/语言不确定或冲突窗口选择性复核 | 更细候选窗口和 OCR；保留更多独特状态 | 文字密集、需要复核的材料 |
 
-模式不硬编码具体模型文件；`asr.primary`、`asr.secondary`、OCR 和笔记角色分别绑定模型。硬件档位按可检测的显存分为 CPU/iGPU、约 8 GB、约 12 GB、24 GB 以上。`GET /api/system` 返回硬件快照与各模式执行计划；`POST /api/estimate` 再结合输入时长、分辨率和帧率返回**宽耗时区间**，不是虚假的精确 ETA。网络下载、API 排队、画面变化密度与模型本身会显著改变实际耗时。
+场景检测宽度与 OCR 推理宽度是两套独立预算：低成本场景侦测不会再把 Accurate 的小字 OCR 连带压到 640px。OCR 默认上限会继续按 CPU/iGPU、8 GB、12 GB、24 GB+ 硬件和实时可用内存安全钳制；自定义性能模式可在 320–4096px 范围内请求独立 OCR 宽度，实际值和钳制原因写入 execution plan。模式不硬编码具体模型文件；`asr.primary`、`asr.secondary`、OCR 和笔记角色分别绑定模型。硬件档位按可检测的显存分为 CPU/iGPU、约 8 GB、约 12 GB、24 GB 以上。`GET /api/system` 返回硬件快照与各模式执行计划；`POST /api/estimate` 再结合输入时长、分辨率和帧率返回**宽耗时区间**，不是虚假的精确 ETA。网络下载、API 排队、画面变化密度与模型本身会显著改变实际耗时。
 
 ## 采样计划、局部返工与报告 revision
 
@@ -168,7 +168,7 @@ data/
 
 本地 ASR 使用 `local_files_only=True`，组件管理器只从固定版本清单下载到 `DATA_ROOT\components`，不会在任务处理中临时拉取未声明模型。一个语言提示会固定语言；多个提示会启用多语言解码，并把逐段语言、概率与检测方法写入 evidence。默认 VAD 按自然短句边界切分，低语言概率或语言冲突只在当前质量模式允许时触发第二 ASR。PaddleOCR detector/recognizer 同样使用组件管理器校验过的本地目录；模型缺失或不完整时会明确降级，不会伪造文本。
 
-“入门模式”根据 CPU、可用内存、GPU/显存、FFmpeg 能力、当前占用和磁盘余量生成安全预算，并允许用户选择节能、均衡或性能倾向以及预留给其他程序的资源；每次任务开始前都会重新检测实时余量。“专业模式”在同一安全预算上开放 CPU/远程并发、GPU 引擎槽位、解码线程、固定采样上限、扫描宽度与频率、OCR/ASR 设备和线程、ASR beam、复核轮次及截图预算等已经接入执行器的参数。当前 PTS 保真视觉解码器使用软件解码；尚无真实批处理或学习型检测执行器的字段不会出现在可编辑界面，后端也拒绝非空覆盖。超过当前安全余量的设置会被钳制并显示原因，而不是让任务把整台电脑占满。
+“自动配置”根据 CPU、可用内存、GPU/显存、FFmpeg 能力、当前占用和磁盘余量生成安全预算，并允许用户选择节能、均衡或性能倾向以及预留给其他程序的资源；每次任务开始前都会重新检测实时余量。“自定义性能”在同一安全预算上开放 CPU/远程并发、GPU 引擎槽位、解码线程、固定采样上限、场景检测宽度/频率、独立 OCR 推理宽度、OCR/ASR 设备和线程、ASR beam、复核轮次及截图预算等已经接入执行器的参数。当前 PTS 保真视觉解码器使用软件解码；尚无真实批处理或学习型检测执行器的字段不会出现在可编辑界面，后端也拒绝非空覆盖。超过当前安全余量的设置会被钳制并显示原因，而不是让任务把整台电脑占满。
 
 首次运行 API 或 CLI 时仍会在 `DATA_ROOT\config\providers.json` 生成 schema v2 注册表，供高级排障和备份；桌面界面是推荐且完整的配置入口。[`config/profiles.example.yaml`](config/profiles.example.yaml) 只是带注释的架构参考。LLM 返回的事实卡与草稿只能引用已有 evidence/material ID；校验层拒绝无效引用并回退到可追溯内容。
 
@@ -241,13 +241,15 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 .\scripts\build_portable.ps1 -CoreOnly
 ```
 
-截至 2026-08-01，完整 Python 验证已通过 **217** 个测试；React 已通过 ESLint、TypeScript、**41** 个 Vitest 和 Vite 生产构建，Rust 通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。
+截至 2026-08-01，本阶段完整 Python 验证已通过 **274** 个测试；React 已通过 ESLint、TypeScript、**52** 个 Vitest 和 Vite 生产构建，Rust 通过 `cargo fmt --check`/`cargo check`。`verify.ps1 -Strict` 会先跑显式 demo，再启动临时 token 保护的真实 loopback API，用可再分发样例从 UI 生成并打开真实笔记。请在自己的机器上重新执行这些命令；下载器和 GPU 推理依赖外部平台、驱动和模型，不能由仓库中的历史结果替代。
 
 这些命令还在一个路径含空格、没有既有 `.venv`、`node_modules`、Tauri target 或生成 sidecar 的全新本地克隆中重新执行：`bootstrap.ps1 -WithPlaywright`、`verify.ps1 -Strict` 和标准 `build.ps1` 均通过。bootstrap 会先安装 `pyproject.toml` 声明的 setuptools 构建后端；跟踪的空 backend 占位目录允许 Tauri 在 sidecar 尚未冻结前完成干净克隆的 Rust 检查。
 
 最终冻结 sidecar 还在 `PATH` 仅含 System32、数据目录含空格的条件下直接处理同一内置样例，run `20260728T114922Z-13de3d081925` 生成 3 张自适应截图、Markdown、HTML 和 263,800 B PDF。最终桌面 exe 实际打开后显示后端 `0.1.0`；通过窗口关闭后，托管 sidecar 与 loopback 监听均已退出。
 
 ## 已实测的运行证据（不是精度宣称）
+
+2026-08-01 又使用参考视频 `BV12hsEz3ELL` 的同一 30.021 秒竖屏片段，在 Windows Job Object 25% CPU hard cap、CPU-only、同一 `faster-whisper-small + PP-OCRv5 mobile` 条件下顺序运行三档。Fast/Balanced/Accurate 的 RTF 为 **0.9623 / 4.6322 / 8.0565**，视觉状态为 **4 / 9 / 17**，人工八项术语/步骤检查为 **4/8 / 7/8 / 8/8**；最终 deterministic 后处理在不删 evidence/fact/screenshot 的情况下把章节从 5/10/18 收敛到 4/5/8。完整方法、资源边界、阶段耗时、具体识别例子和不可宣称事项见 [`docs/04-reference-benchmark-2026-08-01.md`](docs/04-reference-benchmark-2026-08-01.md)。
 
 使用 2026-07-28 的开发机（Ryzen 9 9950X3D、RTX 5090 D v2 24,455 MiB、约 100.5 GB RAM）执行了真实平台和本地流水线。下表是当时网络、源分辨率、模型和缓存状态下的观察值，**不能外推为通用性能或识别精度**。
 
@@ -285,4 +287,5 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 - [`reference/BiliNote`](reference/BiliNote) 是固定在 `6d67e5a` 的只读研究 submodule（上游 MIT）；当前代码为新的实现，未复制其源码。
 - 详细技术背景：[`docs/01-bilinote-audit.md`](docs/01-bilinote-audit.md)、[`docs/02-system-architecture.md`](docs/02-system-architecture.md)、[`docs/03-evaluation-and-hardware-profiles.md`](docs/03-evaluation-and-hardware-profiles.md)。
+- 本轮真实受限资源三档实验：[`docs/04-reference-benchmark-2026-08-01.md`](docs/04-reference-benchmark-2026-08-01.md)。
 - 第三方材料与依赖说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
