@@ -4,10 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .hardware import HardwareSnapshot, HardwareTier, recommend_hardware_tier
+from .resources import (
+    GIB,
+    ExperienceMode,
+    ResourceBudget,
+    ResourcePreference,
+    ResourceReserve,
+    recommend_resources,
+)
 
 
 class ProfileModel(BaseModel):
@@ -29,19 +38,76 @@ class SecondaryAsrPolicy(StrEnum):
 class ExecutionPlan(ProfileModel):
     hardware_tier: HardwareTier
     quality_mode: QualityMode
+    experience_mode: ExperienceMode
+    resource_preference: ResourcePreference
+    resource_budget: ResourceBudget
     decode_backend: str
     concurrent_gpu_stages: int = Field(ge=0)
+    cpu_workers: int = Field(ge=1)
+    remote_model_concurrency: int = Field(ge=1)
+    visual_decode_threads: int = Field(ge=1)
+    max_fixed_samples: int = Field(ge=1)
     analysis_width: int = Field(ge=320)
     cheap_scan_fps: float = Field(gt=0)
     expensive_scan_fps: float = Field(gt=0)
     ocr_model_class: str
+    ocr_device: str
+    ocr_batch_size: int = Field(ge=1)
+    ocr_cpu_threads: int = Field(ge=1)
     asr_model_class: str
+    asr_device: str
     asr_compute_type: str
+    asr_batch_size: int = Field(ge=1)
+    asr_cpu_threads: int = Field(ge=1)
+    asr_beam_size: int = Field(ge=1)
     secondary_asr: SecondaryAsrPolicy
     verification_passes: int = Field(ge=0)
     screenshot_budget_per_section: int = Field(ge=0)
     learned_scene_detector: bool
     notes: tuple[str, ...] = ()
+
+
+class PerformanceOverrides(ProfileModel):
+    """Validated professional controls; machine-unsafe values are visibly clamped."""
+
+    decode_backend: Literal["software", "auto_hw"] | None = None
+    concurrent_gpu_stages: int | None = Field(default=None, ge=0, le=8)
+    cpu_workers: int | None = Field(default=None, ge=1, le=256)
+    remote_model_concurrency: int | None = Field(default=None, ge=1, le=16)
+    visual_decode_threads: int | None = Field(default=None, ge=1, le=64)
+    max_fixed_samples: int | None = Field(default=None, ge=1, le=20_000)
+    analysis_width: int | None = Field(default=None, ge=320, le=1920)
+    cheap_scan_fps: float | None = Field(default=None, ge=0.25, le=30)
+    expensive_scan_fps: float | None = Field(default=None, ge=0.25, le=60)
+    ocr_model_class: Literal["mobile", "medium"] | None = None
+    ocr_device: Literal["auto", "cpu", "cuda"] | None = None
+    ocr_batch_size: int | None = Field(default=None, ge=1, le=64)
+    ocr_cpu_threads: int | None = Field(default=None, ge=1, le=64)
+    asr_model_class: str | None = Field(default=None, min_length=1, max_length=100)
+    asr_device: Literal["auto", "cpu", "cuda"] | None = None
+    asr_compute_type: Literal[
+        "default",
+        "int8",
+        "int8_float16",
+        "float16",
+        "float32",
+    ] | None = None
+    asr_batch_size: int | None = Field(default=None, ge=1, le=64)
+    asr_cpu_threads: int | None = Field(default=None, ge=1, le=64)
+    asr_beam_size: int | None = Field(default=None, ge=1, le=10)
+    verification_passes: int | None = Field(default=None, ge=0, le=4)
+    screenshot_budget_per_section: int | None = Field(default=None, ge=0, le=16)
+    learned_scene_detector: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_scan_rates(self) -> PerformanceOverrides:
+        if (
+            self.cheap_scan_fps is not None
+            and self.expensive_scan_fps is not None
+            and self.expensive_scan_fps < self.cheap_scan_fps
+        ):
+            raise ValueError("expensive_scan_fps must be at least cheap_scan_fps")
+        return self
 
 
 @dataclass(frozen=True)
@@ -64,6 +130,8 @@ class _QualityBudget:
     verification_passes: int
     screenshot_budget_per_section: int
     learned_scene_detector: bool
+    asr_beam_size: int
+    max_fixed_samples: int
 
 
 _HARDWARE_BUDGETS: dict[HardwareTier, _HardwareBudget] = {
@@ -109,6 +177,8 @@ _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
         verification_passes=0,
         screenshot_budget_per_section=0,
         learned_scene_detector=False,
+        asr_beam_size=1,
+        max_fixed_samples=1_000,
     ),
     QualityMode.BALANCED: _QualityBudget(
         analysis_width=768,
@@ -120,6 +190,8 @@ _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
         verification_passes=1,
         screenshot_budget_per_section=2,
         learned_scene_detector=False,
+        asr_beam_size=5,
+        max_fixed_samples=3_000,
     ),
     QualityMode.ACCURATE: _QualityBudget(
         analysis_width=1080,
@@ -131,8 +203,50 @@ _QUALITY_BUDGETS: dict[QualityMode, _QualityBudget] = {
         verification_passes=2,
         screenshot_budget_per_section=4,
         learned_scene_detector=True,
+        asr_beam_size=5,
+        max_fixed_samples=5_000,
     ),
 }
+
+
+def _clamp_override(
+    name: str,
+    requested: int,
+    safe_maximum: int,
+    notes: list[str],
+) -> int:
+    if requested <= safe_maximum:
+        return requested
+    notes.append(
+        f"Professional override {name}={requested} was clamped to the current "
+        f"safe budget of {safe_maximum}."
+    )
+    return safe_maximum
+
+
+def _safe_batch_size(budget: ResourceBudget) -> int:
+    if budget.gpu_stage_slots < 1 or budget.vram_budget_bytes is None:
+        return 1
+    if budget.vram_budget_bytes >= 12 * GIB:
+        return 8
+    if budget.vram_budget_bytes >= 8 * GIB:
+        return 4
+    if budget.vram_budget_bytes >= 4 * GIB:
+        return 2
+    return 1
+
+
+def _safe_analysis_width_cap(
+    hardware_cap: int,
+    budget: ResourceBudget,
+) -> int:
+    if budget.memory_budget_bytes is None:
+        return hardware_cap
+    if budget.memory_budget_bytes < 2 * GIB:
+        return min(hardware_cap, 480)
+    if budget.memory_budget_bytes < 4 * GIB:
+        return min(hardware_cap, 640)
+    return hardware_cap
 
 
 def build_execution_plan(
@@ -140,24 +254,51 @@ def build_execution_plan(
     quality_mode: QualityMode,
     *,
     hardware_tier: HardwareTier | None = None,
+    experience_mode: ExperienceMode = ExperienceMode.SIMPLE,
+    preference: ResourcePreference = ResourcePreference.BALANCED,
+    reserve: ResourceReserve | None = None,
+    overrides: PerformanceOverrides | None = None,
 ) -> ExecutionPlan:
     """Compose a safe plan without silently downgrading the requested quality."""
 
     tier = hardware_tier or recommend_hardware_tier(snapshot)
     hardware = _HARDWARE_BUDGETS[tier]
     quality = _QUALITY_BUDGETS[quality_mode]
+    if (
+        overrides is not None
+        and overrides.model_fields_set
+        and experience_mode is not ExperienceMode.PROFESSIONAL
+    ):
+        raise ValueError("performance overrides require professional experience mode")
+    recommendation = recommend_resources(
+        snapshot,
+        experience_mode=experience_mode,
+        preference=preference,
+        reserve=reserve,
+    )
+    budget = recommendation.budget
 
-    requested_width = quality.analysis_width
-    width_cap = hardware.analysis_width_cap
-    notes: list[str] = []
+    requested_width = (
+        overrides.analysis_width
+        if overrides is not None and overrides.analysis_width is not None
+        else quality.analysis_width
+    )
+    width_cap = _safe_analysis_width_cap(hardware.analysis_width_cap, budget)
+    notes: list[str] = list(recommendation.notes)
     if requested_width > width_cap:
         notes.append(
-            "Requested quality is preserved, but visual analysis resolution is "
-            f"capped at {width_cap}px for memory safety; uncertain regions escalate."
+            f"Requested visual analysis width {requested_width}px was capped at "
+            f"{width_cap}px for current memory safety; uncertain regions escalate."
         )
 
-    requested_ocr = quality.ocr_model_class
+    requested_ocr = (
+        overrides.ocr_model_class
+        if overrides is not None and overrides.ocr_model_class is not None
+        else quality.ocr_model_class
+    )
     ocr_cap = hardware.ocr_model_cap
+    if budget.memory_budget_bytes is not None and budget.memory_budget_bytes < 4 * GIB:
+        ocr_cap = "mobile"
     ocr_model = requested_ocr
     if requested_ocr == "medium" and ocr_cap == "mobile":
         ocr_model = "mobile"
@@ -166,25 +307,224 @@ def build_execution_plan(
             "for the first pass and medium/cloud OCR only for uncertain crops."
         )
 
-    decode_backend = hardware.decode_backend
+    decode_backend = (
+        overrides.decode_backend
+        if overrides is not None and overrides.decode_backend is not None
+        else hardware.decode_backend
+    )
     if decode_backend == "auto_hw" and not snapshot.ffmpeg_hwaccels:
         decode_backend = "software"
         notes.append("FFmpeg reports no hardware decoder; software decoding will be used.")
 
+    safe_gpu_stages = min(hardware.concurrent_gpu_stages, budget.gpu_stage_slots)
+    requested_gpu_stages = (
+        overrides.concurrent_gpu_stages
+        if overrides is not None and overrides.concurrent_gpu_stages is not None
+        else safe_gpu_stages
+    )
+    gpu_stages = _clamp_override(
+        "concurrent_gpu_stages",
+        requested_gpu_stages,
+        safe_gpu_stages,
+        notes,
+    )
+
+    requested_cpu_workers = (
+        overrides.cpu_workers
+        if overrides is not None and overrides.cpu_workers is not None
+        else budget.cpu_workers
+    )
+    cpu_workers = _clamp_override(
+        "cpu_workers",
+        requested_cpu_workers,
+        budget.cpu_workers,
+        notes,
+    )
+    requested_remote_concurrency = (
+        overrides.remote_model_concurrency
+        if overrides is not None and overrides.remote_model_concurrency is not None
+        else budget.remote_model_concurrency
+    )
+    remote_concurrency = _clamp_override(
+        "remote_model_concurrency",
+        requested_remote_concurrency,
+        budget.remote_model_concurrency,
+        notes,
+    )
+    safe_decode_threads = max(1, min(cpu_workers, 8))
+    requested_decode_threads = (
+        overrides.visual_decode_threads
+        if overrides is not None and overrides.visual_decode_threads is not None
+        else safe_decode_threads
+    )
+    decode_threads = _clamp_override(
+        "visual_decode_threads",
+        requested_decode_threads,
+        safe_decode_threads,
+        notes,
+    )
+
+    safe_fixed_samples = quality.max_fixed_samples
+    if budget.memory_budget_bytes is not None and budget.memory_budget_bytes < 2 * GIB:
+        safe_fixed_samples = min(safe_fixed_samples, 1_000)
+    if budget.disk_budget_bytes is not None and budget.disk_budget_bytes < 2 * GIB:
+        safe_fixed_samples = min(safe_fixed_samples, 1_000)
+    requested_fixed_samples = (
+        overrides.max_fixed_samples
+        if overrides is not None and overrides.max_fixed_samples is not None
+        else safe_fixed_samples
+    )
+    fixed_samples = _clamp_override(
+        "max_fixed_samples",
+        requested_fixed_samples,
+        safe_fixed_samples,
+        notes,
+    )
+
+    safe_batch_size = _safe_batch_size(budget)
+    requested_ocr_batch = (
+        overrides.ocr_batch_size
+        if overrides is not None and overrides.ocr_batch_size is not None
+        else safe_batch_size
+    )
+    ocr_batch = _clamp_override(
+        "ocr_batch_size",
+        requested_ocr_batch,
+        safe_batch_size,
+        notes,
+    )
+    requested_asr_batch = (
+        overrides.asr_batch_size
+        if overrides is not None and overrides.asr_batch_size is not None
+        else safe_batch_size
+    )
+    asr_batch = _clamp_override(
+        "asr_batch_size",
+        requested_asr_batch,
+        safe_batch_size,
+        notes,
+    )
+
+    safe_ocr_threads = max(1, min(cpu_workers, 4))
+    requested_ocr_threads = (
+        overrides.ocr_cpu_threads
+        if overrides is not None and overrides.ocr_cpu_threads is not None
+        else safe_ocr_threads
+    )
+    ocr_threads = _clamp_override(
+        "ocr_cpu_threads",
+        requested_ocr_threads,
+        safe_ocr_threads,
+        notes,
+    )
+    safe_asr_threads = max(1, min(cpu_workers, 8))
+    requested_asr_threads = (
+        overrides.asr_cpu_threads
+        if overrides is not None and overrides.asr_cpu_threads is not None
+        else safe_asr_threads
+    )
+    asr_threads = _clamp_override(
+        "asr_cpu_threads",
+        requested_asr_threads,
+        safe_asr_threads,
+        notes,
+    )
+
+    default_device = "cuda" if gpu_stages > 0 else "cpu"
+
+    def resolve_device(name: str, requested: str | None) -> str:
+        if requested in {None, "auto"}:
+            return default_device
+        if requested == "cuda" and gpu_stages == 0:
+            notes.append(
+                f"Professional override {name}=cuda was clamped to cpu because no safe "
+                "GPU stage slot is currently available."
+            )
+            return "cpu"
+        assert requested is not None
+        return requested
+
+    ocr_device = resolve_device(
+        "ocr_device",
+        overrides.ocr_device if overrides is not None else None,
+    )
+    asr_device = resolve_device(
+        "asr_device",
+        overrides.asr_device if overrides is not None else None,
+    )
+    requested_compute_type = (
+        overrides.asr_compute_type
+        if overrides is not None and overrides.asr_compute_type is not None
+        else hardware.asr_compute_type
+    )
+    asr_compute_type = requested_compute_type
+    if asr_device == "cpu" and requested_compute_type in {"float16", "int8_float16"}:
+        asr_compute_type = "int8"
+        notes.append(
+            f"ASR compute type {requested_compute_type} was clamped to int8 for CPU execution."
+        )
+
+    cheap_scan_fps = (
+        overrides.cheap_scan_fps
+        if overrides is not None and overrides.cheap_scan_fps is not None
+        else quality.cheap_scan_fps
+    )
+    expensive_scan_fps = (
+        overrides.expensive_scan_fps
+        if overrides is not None and overrides.expensive_scan_fps is not None
+        else quality.expensive_scan_fps
+    )
+    if expensive_scan_fps < cheap_scan_fps:
+        raise ValueError("resolved expensive_scan_fps must be at least cheap_scan_fps")
+
     return ExecutionPlan(
         hardware_tier=tier,
         quality_mode=quality_mode,
+        experience_mode=experience_mode,
+        resource_preference=preference,
+        resource_budget=budget,
         decode_backend=decode_backend,
-        concurrent_gpu_stages=hardware.concurrent_gpu_stages,
+        concurrent_gpu_stages=gpu_stages,
+        cpu_workers=cpu_workers,
+        remote_model_concurrency=remote_concurrency,
+        visual_decode_threads=decode_threads,
+        max_fixed_samples=fixed_samples,
         analysis_width=min(requested_width, width_cap),
-        cheap_scan_fps=quality.cheap_scan_fps,
-        expensive_scan_fps=quality.expensive_scan_fps,
+        cheap_scan_fps=cheap_scan_fps,
+        expensive_scan_fps=expensive_scan_fps,
         ocr_model_class=ocr_model,
-        asr_model_class=quality.asr_model_class,
-        asr_compute_type=hardware.asr_compute_type,
+        ocr_device=ocr_device,
+        ocr_batch_size=ocr_batch,
+        ocr_cpu_threads=ocr_threads,
+        asr_model_class=(
+            overrides.asr_model_class
+            if overrides is not None and overrides.asr_model_class is not None
+            else quality.asr_model_class
+        ),
+        asr_device=asr_device,
+        asr_compute_type=asr_compute_type,
+        asr_batch_size=asr_batch,
+        asr_cpu_threads=asr_threads,
+        asr_beam_size=(
+            overrides.asr_beam_size
+            if overrides is not None and overrides.asr_beam_size is not None
+            else quality.asr_beam_size
+        ),
         secondary_asr=quality.secondary_asr,
-        verification_passes=quality.verification_passes,
-        screenshot_budget_per_section=quality.screenshot_budget_per_section,
-        learned_scene_detector=quality.learned_scene_detector,
-        notes=tuple(notes),
+        verification_passes=(
+            overrides.verification_passes
+            if overrides is not None and overrides.verification_passes is not None
+            else quality.verification_passes
+        ),
+        screenshot_budget_per_section=(
+            overrides.screenshot_budget_per_section
+            if overrides is not None and overrides.screenshot_budget_per_section is not None
+            else quality.screenshot_budget_per_section
+        ),
+        learned_scene_detector=(
+            overrides.learned_scene_detector
+            if overrides is not None and overrides.learned_scene_detector is not None
+            else quality.learned_scene_detector
+        ),
+        notes=tuple(dict.fromkeys(notes)),
     )

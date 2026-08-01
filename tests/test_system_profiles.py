@@ -4,16 +4,23 @@ import subprocess
 import unittest
 from collections.abc import Sequence
 
+from pydantic import ValidationError
+
 from video2notes.system import (
+    ExperienceMode,
     GpuDevice,
     HardwareSnapshot,
     HardwareTier,
+    PerformanceOverrides,
     QualityMode,
+    ResourcePreference,
+    ResourceReserve,
     SecondaryAsrPolicy,
     build_execution_plan,
     detect_hardware,
     estimate_processing_time,
     recommend_hardware_tier,
+    recommend_resources,
 )
 
 
@@ -21,6 +28,10 @@ def snapshot(
     *,
     vram_gib: int | None,
     hwaccels: tuple[str, ...] = ("cuda",),
+    free_vram_gib: float | None = None,
+    gpu_utilization: float | None = None,
+    cpu_load: float | None = None,
+    memory_available_gib: float | None = None,
 ) -> HardwareSnapshot:
     gpus = (
         (
@@ -28,6 +39,12 @@ def snapshot(
                 name="Test GPU",
                 vendor="NVIDIA",
                 memory_total_bytes=vram_gib * 1024**3,
+                memory_free_bytes=(
+                    round(free_vram_gib * 1024**3)
+                    if free_vram_gib is not None
+                    else None
+                ),
+                utilization_percent=gpu_utilization,
             ),
         )
         if vram_gib is not None
@@ -39,7 +56,15 @@ def snapshot(
         architecture="AMD64",
         cpu_name="Test CPU",
         logical_cores=16,
+        cpu_load_percent=cpu_load,
         memory_total_bytes=32 * 1024**3,
+        memory_available_bytes=(
+            round(memory_available_gib * 1024**3)
+            if memory_available_gib is not None
+            else None
+        ),
+        disk_total_bytes=1024 * 1024**3,
+        disk_available_bytes=512 * 1024**3,
         gpus=gpus,
         ffmpeg_hwaccels=hwaccels,
     )
@@ -63,9 +88,12 @@ class HardwareDetectionTests(unittest.TestCase):
             )
 
         result = detect_hardware(runner=runner)
-        self.assertEqual(result.primary_gpu.name, "NVIDIA GeForce RTX 5090 D v2")
+        gpu = result.primary_gpu
+        self.assertIsNotNone(gpu)
+        assert gpu is not None
+        self.assertEqual(gpu.name, "NVIDIA GeForce RTX 5090 D v2")
         self.assertEqual(
-            result.primary_gpu.memory_total_bytes,
+            gpu.memory_total_bytes,
             24455 * 1024 * 1024,
         )
         self.assertEqual(result.ffmpeg_hwaccels, ("cuda", "d3d11va"))
@@ -81,6 +109,25 @@ class HardwareDetectionTests(unittest.TestCase):
         result = detect_hardware(runner=runner)
         self.assertEqual(result.gpus, ())
         self.assertEqual(result.ffmpeg_hwaccels, ())
+
+    def test_live_nvidia_headroom_is_parsed_when_available(self) -> None:
+        def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            if command[0] == "nvidia-smi":
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    "Test GPU, 12288, 9216, 3072, 37, 600.1\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 0, "cuda\n", "")
+
+        result = detect_hardware(runner=runner)
+        gpu = result.primary_gpu
+        self.assertIsNotNone(gpu)
+        assert gpu is not None
+        self.assertEqual(gpu.memory_free_bytes, 9216 * 1024 * 1024)
+        self.assertEqual(gpu.memory_used_bytes, 3072 * 1024 * 1024)
+        self.assertEqual(gpu.utilization_percent, 37)
 
 
 class ExecutionProfileTests(unittest.TestCase):
@@ -141,3 +188,140 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertGreater(difficult.upper_seconds, baseline.upper_seconds)
         self.assertTrue(any("4K" in note for note in difficult.notes))
         self.assertTrue(any("高帧率" in note for note in difficult.notes))
+
+    def test_same_machine_with_low_live_headroom_reduces_concurrency(self) -> None:
+        idle = snapshot(
+            vram_gib=24,
+            free_vram_gib=22,
+            gpu_utilization=5,
+            cpu_load=5,
+            memory_available_gib=28,
+        )
+        busy = snapshot(
+            vram_gib=24,
+            free_vram_gib=4,
+            gpu_utilization=85,
+            cpu_load=85,
+            memory_available_gib=5,
+        )
+
+        idle_plan = build_execution_plan(idle, QualityMode.BALANCED)
+        busy_plan = build_execution_plan(busy, QualityMode.BALANCED)
+
+        self.assertGreater(idle_plan.concurrent_gpu_stages, busy_plan.concurrent_gpu_stages)
+        self.assertGreater(idle_plan.cpu_workers, busy_plan.cpu_workers)
+        self.assertGreater(
+            idle_plan.resource_budget.memory_budget_bytes or 0,
+            busy_plan.resource_budget.memory_budget_bytes or 0,
+        )
+
+    def test_larger_user_reserve_reduces_effective_budget(self) -> None:
+        machine = snapshot(
+            vram_gib=24,
+            free_vram_gib=20,
+            gpu_utilization=0,
+            cpu_load=0,
+            memory_available_gib=24,
+        )
+        low_reserve = ResourceReserve(
+            cpu_reserve_ratio=0.10,
+            memory_reserve_ratio=0.10,
+            gpu_reserve_ratio=0.10,
+            vram_reserve_ratio=0.10,
+        )
+        high_reserve = ResourceReserve(
+            cpu_reserve_ratio=0.60,
+            memory_reserve_ratio=0.60,
+            gpu_reserve_ratio=0.60,
+            vram_reserve_ratio=0.60,
+        )
+
+        low = recommend_resources(machine, reserve=low_reserve).budget
+        high = recommend_resources(machine, reserve=high_reserve).budget
+
+        self.assertGreater(low.cpu_workers, high.cpu_workers)
+        self.assertGreater(low.memory_budget_bytes or 0, high.memory_budget_bytes or 0)
+        self.assertGreater(low.vram_budget_bytes or 0, high.vram_budget_bytes or 0)
+        self.assertGreater(low.gpu_stage_slots, high.gpu_stage_slots)
+
+    def test_professional_overrides_apply_when_inside_safe_budget(self) -> None:
+        machine = snapshot(
+            vram_gib=24,
+            free_vram_gib=22,
+            gpu_utilization=0,
+            cpu_load=0,
+            memory_available_gib=28,
+        )
+        overrides = PerformanceOverrides(
+            concurrent_gpu_stages=1,
+            cpu_workers=4,
+            remote_model_concurrency=1,
+            visual_decode_threads=3,
+            analysis_width=640,
+            cheap_scan_fps=1.5,
+            expensive_scan_fps=5,
+            ocr_batch_size=2,
+            asr_batch_size=2,
+            asr_beam_size=8,
+            verification_passes=3,
+            screenshot_budget_per_section=6,
+        )
+
+        plan = build_execution_plan(
+            machine,
+            QualityMode.ACCURATE,
+            experience_mode=ExperienceMode.PROFESSIONAL,
+            preference=ResourcePreference.THROUGHPUT,
+            overrides=overrides,
+        )
+
+        self.assertEqual(plan.concurrent_gpu_stages, 1)
+        self.assertEqual(plan.cpu_workers, 4)
+        self.assertEqual(plan.remote_model_concurrency, 1)
+        self.assertEqual(plan.visual_decode_threads, 3)
+        self.assertEqual(plan.analysis_width, 640)
+        self.assertEqual(plan.cheap_scan_fps, 1.5)
+        self.assertEqual(plan.expensive_scan_fps, 5)
+        self.assertEqual(plan.ocr_batch_size, 2)
+        self.assertEqual(plan.asr_batch_size, 2)
+        self.assertEqual(plan.asr_beam_size, 8)
+        self.assertEqual(plan.verification_passes, 3)
+        self.assertEqual(plan.screenshot_budget_per_section, 6)
+
+    def test_unsafe_professional_override_is_clamped_with_warning(self) -> None:
+        machine = snapshot(
+            vram_gib=8,
+            free_vram_gib=3,
+            gpu_utilization=80,
+            cpu_load=75,
+            memory_available_gib=5,
+        )
+        plan = build_execution_plan(
+            machine,
+            QualityMode.BALANCED,
+            experience_mode=ExperienceMode.PROFESSIONAL,
+            overrides=PerformanceOverrides(
+                concurrent_gpu_stages=8,
+                cpu_workers=256,
+                analysis_width=1920,
+                ocr_device="cuda",
+            ),
+        )
+
+        self.assertLess(plan.cpu_workers, 256)
+        self.assertEqual(plan.concurrent_gpu_stages, 0)
+        self.assertLess(plan.analysis_width, 1920)
+        self.assertEqual(plan.ocr_device, "cpu")
+        self.assertTrue(any("clamped" in note for note in plan.notes))
+
+    def test_invalid_resource_and_override_ranges_fail_validation(self) -> None:
+        with self.assertRaises(ValidationError):
+            ResourceReserve(cpu_reserve_ratio=0.95)
+        with self.assertRaises(ValidationError):
+            PerformanceOverrides(cheap_scan_fps=10, expensive_scan_fps=5)
+        with self.assertRaises(ValueError):
+            build_execution_plan(
+                snapshot(vram_gib=24),
+                QualityMode.BALANCED,
+                overrides=PerformanceOverrides(cpu_workers=2),
+            )
