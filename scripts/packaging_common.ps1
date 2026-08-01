@@ -1,0 +1,60 @@
+function Get-Video2NotesSidecarSourceFingerprint {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot
+    )
+
+    $resolvedRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd("\")
+    $sourceRoot = Join-Path $resolvedRoot "src\video2notes"
+    if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
+        throw "Video2Notes Python source directory was not found at '$sourceRoot'."
+    }
+
+    # Include every source/data format that can become part of the Python
+    # package, while deliberately excluding volatile __pycache__ output.
+    $sourceFiles = @(
+        Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
+            Where-Object {
+                $_.Extension.ToLowerInvariant() -in @(
+                    ".py", ".pyi", ".json", ".yaml", ".yml", ".toml"
+                ) -or $_.Name -eq "py.typed"
+            }
+    )
+    $packagingFiles = @(
+        "pyproject.toml",
+        "scripts\build_sidecar.ps1",
+        "scripts\packaging_common.ps1",
+        "scripts\pyinstaller_runtime_hook.py",
+        "scripts\sidecar_entry.py"
+    ) | ForEach-Object {
+        $candidate = Join-Path $resolvedRoot $_
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw "Sidecar fingerprint input was not found at '$candidate'."
+        }
+        Get-Item -LiteralPath $candidate
+    }
+
+    $inputs = @($sourceFiles) + @($packagingFiles)
+    if ($inputs.Count -eq 0) {
+        throw "No files were available for the sidecar source fingerprint."
+    }
+
+    $lines = @(
+        $inputs |
+            Sort-Object FullName |
+            ForEach-Object {
+                $relativePath = $_.FullName.Substring($resolvedRoot.Length).TrimStart("\") -replace "\\", "/"
+                $fileHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                "{0}`0{1}" -f $relativePath, $fileHash
+            }
+    )
+    $payload = [Text.UTF8Encoding]::new($false).GetBytes(($lines -join "`n"))
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($algorithm.ComputeHash($payload)) -replace "-", "").ToLowerInvariant()
+    }
+    finally {
+        $algorithm.Dispose()
+    }
+}

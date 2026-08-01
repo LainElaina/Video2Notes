@@ -214,7 +214,7 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 构建脚本会从 FFmpeg 二进制目录或其父目录一并查找许可证；若目录布局不同，使用 `-FfmpegLicensePath` 显式指定。发行包还包含项目 MIT 许可证、第三方 notices、完整 `ffmpeg -version` 输出和对应源码引用。
 
-免安装版输出到 `artifacts/portable/current/`；只需双击其中的 `Video2Notes.exe`，无需安装程序、注册卸载项、系统 Python 或 PATH 中的媒体工具。顶层 EXE 旁的 `backend/`、`demo/`、`licenses/` 是运行资源，不能单独移动 EXE。默认仍把任务与配置放在 Windows AppData，因此反复覆盖 `current` 不会删除已有结果。完整构建会重新冻结 full sidecar；只改 React/Rust 时可显式使用 `.\scripts\build_portable.ps1 -ReuseSidecar`，但复用的 manifest 必须同样是 full。开发者可用 `.\scripts\build_portable.ps1 -CoreOnly` 缩短冻结时间；另加 `-Zip` 可生成搬运用压缩包。每次构建的 commit、dirty 状态、runtime flavor、组件版本/状态和文件哈希记录在产物自己的 `BUILD_INFO.json`、`backend/manifest.json` 与 `SHA256SUMS.txt` 中。
+免安装版输出到 `artifacts/portable/current/`；只需双击其中的 `Video2Notes.exe`，无需安装程序、注册卸载项、系统 Python 或 PATH 中的媒体工具。顶层 EXE 旁的 `backend/`、`demo/`、`licenses/` 是运行资源，不能单独移动 EXE。默认仍把任务与配置放在 Windows AppData，因此反复覆盖 `current` 不会删除已有结果。完整构建会重新冻结 full sidecar；只改 React/Rust 时可显式使用 `.\scripts\build_portable.ps1 -ReuseSidecar`，但复用的 manifest 必须同样是 full，并且其中的 Python/打包源码指纹必须与当前工作区一致；只要改过 Python 或 sidecar 打包脚本，复用就会被拒绝并提示执行完整构建。开发者可用 `.\scripts\build_portable.ps1 -CoreOnly` 缩短冻结时间；另加 `-Zip` 可生成搬运用压缩包。每次构建的 commit、dirty 状态、runtime flavor、源码指纹、组件版本/状态和文件哈希记录在产物自己的 `BUILD_INFO.json`、`backend/manifest.json` 与 `SHA256SUMS.txt` 中。
 
 安装包位于 `apps/desktop/src-tauri/target/release/bundle/{msi,nsis}/`。安装版和免安装版运行时都不依赖系统 Python、仓库 `.venv` 或 PATH 中的 FFmpeg。full sidecar 会明显大于 core-only，因为它真实携带四个推理运行时和原生库；最终大小以构建输出为准。未签名的本地调试构建首次运行时，Windows SmartScreen 可能提示未知发布者；调试构建的变化哈希不硬编码在 README 中，以产物旁的校验文件为准。
 
@@ -232,6 +232,10 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 
 # 构建可反复覆盖、无需安装的 Windows 便携目录
 .\scripts\build_portable.ps1
+
+# 构建后可独立重跑冻结后端的组件、FFmpeg、帮助页与 loopback 健康检查
+.\scripts\test_sidecar.ps1 `
+  -Executable ".\artifacts\portable\current\backend\video2notes.exe"
 
 # 仅供开发快速迭代；输出不具备本地 ASR/OCR runtime
 .\scripts\build_portable.ps1 -CoreOnly

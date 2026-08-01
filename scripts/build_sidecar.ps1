@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "packaging_common.ps1")
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $DesktopTauriRoot = Join-Path $RepoRoot "apps\desktop\src-tauri"
 $ResourceRoot = Join-Path $DesktopTauriRoot "resources\backend"
@@ -21,6 +22,7 @@ $WorkRoot = Join-Path $BuildRoot "work"
 $SidecarPath = Join-Path $ResourceRoot "video2notes.exe"
 $BackendManifestPath = Join-Path $ResourceRoot "manifest.json"
 $RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }
+$SourceFingerprintBeforeBuild = Get-Video2NotesSidecarSourceFingerprint $RepoRoot
 $PythonComponentSpecs = @(
     [ordered]@{ id = "yt-dlp"; distribution = "yt-dlp"; module = "yt_dlp" },
     [ordered]@{ id = "psutil"; distribution = "psutil"; module = "psutil" },
@@ -508,11 +510,18 @@ $RuntimeComponents = @(
     }
 )
 
+$SourceFingerprintAfterBuild = Get-Video2NotesSidecarSourceFingerprint $RepoRoot
+if ($SourceFingerprintAfterBuild -ne $SourceFingerprintBeforeBuild) {
+    throw "Python or sidecar packaging sources changed while PyInstaller was running. Rebuild so the frozen backend has one coherent source fingerprint."
+}
+
 $Manifest = [ordered]@{
     schema = 2
     target_triple = (& rustc --print host-tuple).Trim()
     pyinstaller_version = (& $VenvPython -c "import PyInstaller; print(PyInstaller.__version__)").Trim()
     runtime_flavor = $RuntimeFlavor
+    source_fingerprint_schema = 1
+    source_fingerprint_sha256 = $SourceFingerprintAfterBuild
     user_model_weights_included = $false
     packaged_runtime_assets = if ($CoreOnly) { @() } else { @("faster-whisper/silero-vad-v6") }
     components = $RuntimeComponents

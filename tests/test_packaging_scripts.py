@@ -48,6 +48,9 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('VIDEO2NOTES_RUNTIME_PROBE', script)
         self.assertIn('schema = 2', script)
         self.assertIn('runtime_flavor = $RuntimeFlavor', script)
+        self.assertIn('source_fingerprint_schema = 1', script)
+        self.assertIn('source_fingerprint_sha256 = $SourceFingerprintAfterBuild', script)
+        self.assertIn('Get-Video2NotesSidecarSourceFingerprint', script)
         self.assertIn('user_model_weights_included = $false', script)
         self.assertIn('Where-Object { $_.FullName -ne $BackendManifestPath }', script)
 
@@ -75,6 +78,20 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('-CoreOnly:$CoreOnly', script)
         self.assertIn('runtime_components = $StagedBackendManifest.components', script)
         self.assertIn('runtime_flavor = $RuntimeFlavor', script)
+        self.assertIn('ExpectedSourceFingerprint', script)
+        self.assertIn('sidecar_source_fingerprint_sha256', script)
+        self.assertIn('Rebuild without -ReuseSidecar', script)
+
+    def test_sidecar_source_fingerprint_covers_code_and_packaging_inputs(self) -> None:
+        script = self.read("scripts/packaging_common.ps1")
+
+        self.assertIn('src\\video2notes', script)
+        self.assertIn('pyproject.toml', script)
+        self.assertIn('scripts\\build_sidecar.ps1', script)
+        self.assertIn('scripts\\pyinstaller_runtime_hook.py', script)
+        self.assertIn('scripts\\sidecar_entry.py', script)
+        self.assertIn('Get-FileHash', script)
+        self.assertIn('Security.Cryptography.SHA256', script)
 
     def test_sidecar_smoke_requires_tools_and_full_runtime_imports(self) -> None:
         script = self.read("scripts/test_sidecar.ps1")

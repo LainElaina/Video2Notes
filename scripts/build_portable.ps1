@@ -14,6 +14,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "packaging_common.ps1")
 $DesktopRoot = Join-Path $RepoRoot "apps\desktop"
 $TauriRoot = Join-Path $DesktopRoot "src-tauri"
 $CanonicalBackendRoot = Join-Path $TauriRoot "resources\backend"
@@ -107,6 +108,7 @@ function Assert-BackendManifest {
     param(
         [string]$BackendRoot,
         [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
+        [AllowEmptyString()][string]$ExpectedSourceFingerprint = "",
         [switch]$AllowLegacy
     )
 
@@ -125,6 +127,16 @@ function Assert-BackendManifest {
         }
         if ($ExpectedRuntimeFlavor -and $manifest.runtime_flavor -ne $ExpectedRuntimeFlavor) {
             throw "Portable runtime '$ExpectedRuntimeFlavor' cannot use a '$($manifest.runtime_flavor)' sidecar. Rebuild it or pass the matching -CoreOnly option."
+        }
+        if (
+            $ExpectedSourceFingerprint -and
+            (
+                $manifest.source_fingerprint_schema -ne 1 -or
+                ([string]$manifest.source_fingerprint_sha256).ToLowerInvariant() -ne
+                    $ExpectedSourceFingerprint.ToLowerInvariant()
+            )
+        ) {
+            throw "The frozen backend does not match the current Python/sidecar sources. Rebuild without -ReuseSidecar before creating the portable app."
         }
         if ($manifest.user_model_weights_included -ne $false) {
             throw "The frozen backend manifest does not explicitly exclude user model weights."
@@ -380,7 +392,11 @@ try {
     Require-File (Join-Path $CanonicalBackendRoot "video2notes.exe") "Frozen backend executable"
     Require-File (Join-Path $CanonicalBackendRoot "tools\ffmpeg.exe") "Bundled ffmpeg.exe"
     Require-File (Join-Path $CanonicalBackendRoot "tools\ffprobe.exe") "Bundled ffprobe.exe"
-    $null = Assert-BackendManifest $CanonicalBackendRoot $RuntimeFlavor
+    $ExpectedSidecarSourceFingerprint = Get-Video2NotesSidecarSourceFingerprint $RepoRoot
+    $null = Assert-BackendManifest `
+        $CanonicalBackendRoot `
+        $RuntimeFlavor `
+        -ExpectedSourceFingerprint $ExpectedSidecarSourceFingerprint
 
     if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
         throw "pnpm is unavailable. Run .\scripts\bootstrap.ps1 first."
@@ -406,7 +422,10 @@ try {
     Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination (Join-Path $safeStaging "licenses\VIDEO2NOTES_LICENSE.txt")
     Copy-Item -LiteralPath (Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $safeStaging "licenses\THIRD_PARTY_NOTICES.md")
 
-    $StagedBackendManifest = Assert-BackendManifest (Join-Path $safeStaging "backend") $RuntimeFlavor
+    $StagedBackendManifest = Assert-BackendManifest `
+        (Join-Path $safeStaging "backend") `
+        $RuntimeFlavor `
+        -ExpectedSourceFingerprint $ExpectedSidecarSourceFingerprint
     & (Join-Path $PSScriptRoot "test_sidecar.ps1") `
         -Executable (Join-Path $safeStaging "backend\video2notes.exe") `
         -CoreOnly:$CoreOnly `
@@ -436,6 +455,7 @@ try {
         portable = $true
         sidecar_reused = [bool]$ReuseSidecar
         runtime_flavor = $RuntimeFlavor
+        sidecar_source_fingerprint_sha256 = $ExpectedSidecarSourceFingerprint
         user_model_weights_included = $false
         packaged_runtime_assets = $StagedBackendManifest.packaged_runtime_assets
         runtime_components = $StagedBackendManifest.components
@@ -467,7 +487,7 @@ $PortableRuntimeNote
 后续由应用内模型管理器负责下载、校验、选择和清理。
 
 完整构建：.\scripts\build_portable.ps1
-快速复用后端：.\scripts\build_portable.ps1 -ReuseSidecar
+快速复用后端：.\scripts\build_portable.ps1 -ReuseSidecar（仅当前 Python/打包源码指纹一致时允许）
 开发 core-only：.\scripts\build_portable.ps1 -CoreOnly
 "@ | Set-Content -LiteralPath (Join-Path $safeStaging "PORTABLE_README.txt") -Encoding utf8
     Write-Sha256Sums $safeStaging
