@@ -14,7 +14,11 @@ from video2notes.evaluation.reference_benchmark import (
     run_reference_session,
 )
 from video2notes.providers import ModelRegistry
-from video2notes.system import AccelerationCapabilities, EngineAcceleration
+from video2notes.system import (
+    AccelerationCapabilities,
+    EngineAcceleration,
+    ResourcePreference,
+)
 
 
 def _model_directory(root: Path, name: str, payload_name: str) -> Path:
@@ -250,6 +254,7 @@ class ReferenceBenchmarkTests(unittest.TestCase):
                     asr_device="cuda",
                     asr_compute_type="float16",
                     ocr_device="cpu",
+                    resource_preference=ResourcePreference.THROUGHPUT,
                     gpu_watchdog_percent=97.0,
                     gpu_breach_samples=12,
                 )
@@ -262,6 +267,10 @@ class ReferenceBenchmarkTests(unittest.TestCase):
                     "float16",
                 )
                 self.assertEqual(command[command.index("--ocr-device") + 1], "cpu")
+                self.assertEqual(
+                    command[command.index("--resource-preference") + 1],
+                    "throughput",
+                )
 
             registry = ModelRegistry.load(
                 root / "session" / "data" / "config" / "providers.json"
@@ -282,6 +291,7 @@ class ReferenceBenchmarkTests(unittest.TestCase):
             self.assertEqual(policy["requested_asr_device"], "cuda")
             self.assertEqual(policy["requested_asr_compute_type"], "float16")
             self.assertEqual(policy["requested_ocr_device"], "cpu")
+            self.assertEqual(policy["resource_preference"], "throughput")
             self.assertTrue(manifest["acceleration_probe"]["asr"]["cuda_available"])
             self.assertFalse(manifest["acceleration_probe"]["ocr"]["cuda_available"])
 

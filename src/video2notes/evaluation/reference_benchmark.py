@@ -119,6 +119,7 @@ def run_reference_session(
     asr_device: InferenceDevice = "cpu",
     asr_compute_type: AsrComputeType = "int8",
     ocr_device: InferenceDevice = "cpu",
+    resource_preference: ResourcePreference = ResourcePreference.RESPONSIVE,
     gpu_watchdog_percent: float | None = 95.0,
     gpu_breach_samples: int = 8,
 ) -> Path:
@@ -191,6 +192,7 @@ def run_reference_session(
             "requested_asr_device": asr_device,
             "requested_asr_compute_type": asr_compute_type,
             "requested_ocr_device": ocr_device,
+            "resource_preference": resource_preference.value,
         },
     }
     _atomic_write_json(root / "benchmark-manifest.json", manifest)
@@ -223,6 +225,8 @@ def run_reference_session(
             asr_compute_type,
             "--ocr-device",
             ocr_device,
+            "--resource-preference",
+            resource_preference.value,
             "--ffmpeg",
             ffmpeg_path,
             "--ffprobe",
@@ -284,6 +288,7 @@ def run_worker(
     asr_device: InferenceDevice,
     asr_compute_type: AsrComputeType,
     ocr_device: InferenceDevice,
+    resource_preference: ResourcePreference = ResourcePreference.RESPONSIVE,
 ) -> int:
     """Run one profile.  This function is invoked only inside the guarded child."""
 
@@ -300,7 +305,7 @@ def run_worker(
             registry,
             hardware=hardware,
             experience_mode=ExperienceMode.PROFESSIONAL,
-            resource_preference=ResourcePreference.RESPONSIVE,
+            resource_preference=resource_preference,
             performance_overrides=PerformanceOverrides(
                 concurrent_gpu_stages=(
                     1 if asr_device == "cuda" or ocr_device == "cuda" else 0
@@ -527,6 +532,15 @@ def _parser() -> argparse.ArgumentParser:
         choices=("default", "int8", "int8_float16", "float16", "float32"),
     )
     parser.add_argument("--ocr-device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument(
+        "--resource-preference",
+        choices=[item.value for item in ResourcePreference],
+        default=ResourcePreference.RESPONSIVE.value,
+        help=(
+            "resource headroom policy used by each worker; throughput permits an "
+            "explicit GPU request under heavier desktop load"
+        ),
+    )
     parser.add_argument("--gpu-watchdog-percent", type=float, default=95.0)
     parser.add_argument("--gpu-breach-samples", type=int, default=8)
     parser.add_argument("--disable-gpu-watchdog", action="store_true")
@@ -548,6 +562,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     languages = tuple(args.language or ["zh"])
     asr_device = cast(InferenceDevice, args.asr_device)
     ocr_device = cast(InferenceDevice, args.ocr_device)
+    resource_preference = ResourcePreference(args.resource_preference)
     asr_compute_type = cast(
         AsrComputeType,
         args.asr_compute_type or ("float16" if asr_device == "cuda" else "int8"),
@@ -577,6 +592,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             asr_device=asr_device,
             asr_compute_type=asr_compute_type,
             ocr_device=ocr_device,
+            resource_preference=resource_preference,
         )
 
     required = {
@@ -604,6 +620,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         asr_device=asr_device,
         asr_compute_type=asr_compute_type,
         ocr_device=ocr_device,
+        resource_preference=resource_preference,
         gpu_watchdog_percent=(
             None if args.disable_gpu_watchdog else args.gpu_watchdog_percent
         ),
