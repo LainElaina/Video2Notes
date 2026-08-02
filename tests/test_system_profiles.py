@@ -110,6 +110,15 @@ class HardwareDetectionTests(unittest.TestCase):
         self.assertEqual(result.gpus, ())
         self.assertEqual(result.ffmpeg_hwaccels, ())
 
+    def test_external_tools_not_installed_is_a_valid_cpu_snapshot(self) -> None:
+        def runner(_command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            raise FileNotFoundError("tool is not on PATH")
+
+        result = detect_hardware(runner=runner)
+
+        self.assertEqual(result.gpus, ())
+        self.assertEqual(result.ffmpeg_hwaccels, ())
+
     def test_live_nvidia_headroom_is_parsed_when_available(self) -> None:
         def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
             if command[0] == "nvidia-smi":

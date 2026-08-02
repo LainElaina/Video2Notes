@@ -22,8 +22,8 @@ export const componentReportFixture: ComponentReportDefinition = {
     ocrComponentId: 'ocr-paddle-ppocrv5-server',
     asrDevice: 'cuda',
     asrComputeType: 'float16',
-    ocrDevice: 'gpu:0',
-    reason: '24 GiB or larger GPUs use the highest local ASR/OCR catalog entries.',
+    ocrDevice: 'cpu',
+    reason: '24 GiB or larger GPUs accelerate ASR with CUDA while OCR uses the bundled CPU runtime.',
   },
   inventory: {
     ready: false,

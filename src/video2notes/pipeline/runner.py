@@ -74,6 +74,7 @@ from video2notes.sources import (
     SourceRegistry,
 )
 from video2notes.system import (
+    AccelerationCapabilities,
     ExecutionPlan,
     ExperienceMode,
     HardwareSnapshot,
@@ -82,7 +83,9 @@ from video2notes.system import (
     ResourcePreference,
     ResourceReserve,
     SecondaryAsrPolicy,
+    align_execution_plan_with_acceleration,
     build_execution_plan,
+    detect_acceleration_capabilities,
     detect_hardware,
 )
 from video2notes.vision import (
@@ -185,6 +188,7 @@ class PipelineRuntime:
     resource_preference: ResourcePreference = ResourcePreference.BALANCED
     resource_reserve: ResourceReserve | None = None
     performance_overrides: PerformanceOverrides | None = None
+    acceleration_capabilities: AccelerationCapabilities | None = None
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     pdf_browser_executable: str | Path | None = None
@@ -276,6 +280,14 @@ class Video2NotesPipeline:
                 reserve=self.runtime.resource_reserve,
                 overrides=self.runtime.performance_overrides,
             )
+            acceleration = (
+                self.runtime.acceleration_capabilities
+                or detect_acceleration_capabilities()
+            )
+            execution_plan = align_execution_plan_with_acceleration(
+                execution_plan,
+                acceleration,
+            )
             primary_asr_backend = _asr_backend_for_plan(
                 self.runtime.asr_backends_by_quality.get(
                     request.quality_mode,
@@ -308,6 +320,7 @@ class Video2NotesPipeline:
                 request,
                 media_manifest_ref,
                 hardware_snapshot,
+                acceleration,
                 execution_plan,
                 primary_asr_backend,
                 secondary_asr_backend,
@@ -416,6 +429,7 @@ class Video2NotesPipeline:
         request: PipelineRequest,
         media_manifest_ref: ArtifactRef,
         hardware: HardwareSnapshot,
+        acceleration: AccelerationCapabilities,
         execution_plan: ExecutionPlan,
         primary_asr_backend: ASRBackend | None,
         secondary_asr_backend: ASRBackend | None,
@@ -440,6 +454,7 @@ class Video2NotesPipeline:
             "schema_version": 1,
             "quality_mode": request.quality_mode.value,
             "hardware": hardware.model_dump(mode="json"),
+            "acceleration": acceleration.model_dump(mode="json"),
             "effective_plan": execution_plan.model_dump(mode="json"),
             "actual_backends": {
                 "asr_primary": _backend_identity(primary_asr_backend),

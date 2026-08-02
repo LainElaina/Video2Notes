@@ -420,6 +420,25 @@ export interface ApiSystemReport {
     }>
     ffmpeg_hwaccels?: string[]
   }
+  acceleration?: {
+    schema_version: number
+    asr: {
+      engine: string
+      cuda_available: boolean
+      device_count: number
+      supported_compute_types: string[]
+      runtime_directories: string[]
+      reason: string
+    }
+    ocr: {
+      engine: string
+      cuda_available: boolean
+      device_count: number
+      supported_compute_types: string[]
+      runtime_directories: string[]
+      reason: string
+    }
+  }
   recommended_tier: string
   performance: ApiPerformanceSettings
   recommendation: ApiResourceRecommendation

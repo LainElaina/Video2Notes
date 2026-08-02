@@ -166,9 +166,9 @@ data/
 
 内置线路覆盖 OpenAI Responses、OpenAI Chat Completions、OpenAI Audio Transcriptions、Anthropic Messages、Gemini `generateContent`、Gemini Interactions、Ollama 原生 Chat、OpenAI-compatible 服务和实验性自定义 HTTP。OpenAI-compatible 可用于采用相同线协议的自建网关或第三方服务，并可配置 Bearer、`x-api-key`、`x-goog-api-key` 或受限制的自定义认证头。只有实现了结构化生成适配器的协议才会出现在笔记生成相关绑定中；音频转录与实验性通用 HTTP 不会伪装成可用的结构化笔记模型。
 
-本地 ASR 使用 `local_files_only=True`，组件管理器只从固定版本清单下载到 `DATA_ROOT\components`，不会在任务处理中临时拉取未声明模型。一个语言提示会固定语言；多个提示会启用多语言解码，并把逐段语言、概率与检测方法写入 evidence。默认 VAD 按自然短句边界切分，低语言概率或语言冲突只在当前质量模式允许时触发第二 ASR。PaddleOCR detector/recognizer 同样使用组件管理器校验过的本地目录；模型缺失或不完整时会明确降级，不会伪造文本。
+本地 ASR 使用 `local_files_only=True`，组件管理器只从固定版本清单下载到 `DATA_ROOT\components`，不会在任务处理中临时拉取未声明模型。完整 Windows 运行时包含 CTranslate2 所需的 CUDA 12 cuBLAS、cuDNN 与 NVRTC；程序会分别探测 ASR 和 OCR 的真实 CUDA 能力，而不是把“检测到 N 卡”等同于所有引擎都能用 GPU。一个语言提示会固定语言；多个提示会启用多语言解码，并把逐段语言、概率与检测方法写入 evidence。默认 VAD 按自然短句边界切分，低语言概率或语言冲突只在当前质量模式允许时触发第二 ASR。PaddleOCR detector/recognizer 同样使用组件管理器校验过的本地目录；模型缺失或不完整时会明确降级，不会伪造文本。
 
-“自动配置”根据 CPU、可用内存、GPU/显存、FFmpeg 能力、当前占用和磁盘余量生成安全预算，并允许用户选择节能、均衡或性能倾向以及预留给其他程序的资源；每次任务开始前都会重新检测实时余量。“自定义性能”在同一安全预算上开放 CPU/远程并发、GPU 引擎槽位、解码线程、固定采样上限、场景检测宽度/频率、独立 OCR 推理宽度、OCR/ASR 设备和线程、ASR beam、复核轮次及截图预算等已经接入执行器的参数。当前 PTS 保真视觉解码器使用软件解码；尚无真实批处理或学习型检测执行器的字段不会出现在可编辑界面，后端也拒绝非空覆盖。超过当前安全余量的设置会被钳制并显示原因，而不是让任务把整台电脑占满。
+“自动配置”根据 CPU、可用内存、GPU/显存、FFmpeg 能力、当前占用和磁盘余量生成安全预算，并允许用户选择节能、均衡或性能倾向以及预留给其他程序的资源；每次任务开始前都会重新检测实时余量。执行计划还会经过引擎级能力门控：可用时让 faster-whisper 使用 NVIDIA CUDA；当前 PaddlePaddle 为 CPU build 时，OCR 会在开始前明确保留在 CPU，计划、任务诊断和模型页不会伪装成 GPU。“自定义性能”在同一安全预算上开放 CPU/远程并发、GPU 引擎槽位、解码线程、固定采样上限、场景检测宽度/频率、独立 OCR 推理宽度、OCR/ASR 设备和线程、ASR beam、复核轮次及截图预算等已经接入执行器的参数。当前 PTS 保真视觉解码器使用软件解码；尚无真实批处理或学习型检测执行器的字段不会出现在可编辑界面，后端也拒绝非空覆盖。超过当前安全余量的设置会被钳制并显示原因，而不是让任务把整台电脑占满。
 
 首次运行 API 或 CLI 时仍会在 `DATA_ROOT\config\providers.json` 生成 schema v2 注册表，供高级排障和备份；桌面界面是推荐且完整的配置入口。[`config/profiles.example.yaml`](config/profiles.example.yaml) 只是带注释的架构参考。LLM 返回的事实卡与草稿只能引用已有 evidence/material ID；校验层拒绝无效引用并回退到可追溯内容。
 
@@ -208,7 +208,7 @@ $env:VIDEO2NOTES_TOKEN = "请使用至少16字符的随机本地令牌"
 
 Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口，隐藏启动 Python sidecar，并在桌面程序退出时终止它。令牌只通过子进程环境变量传递。原生文件选择器只返回绝对路径；本地视频与截图 URL 经过 run 目录 canonicalize/范围检查。
 
-发布构建的 sidecar 是 PyInstaller onedir 包。默认 `full` 构建携带固定版本的 Python 业务代码、`yt-dlp`、`psutil`、`faster-whisper`、CTranslate2、Hugging Face Hub、PaddleOCR、PaddlePaddle，以及构建机提供的 `ffmpeg.exe`/`ffprobe.exe`；便携版用户无需另外安装 Python、FFmpeg 或这些推理包。构建过程只冻结已经安装在仓库 `.venv` 中的运行时，不读取用户模型目录和下载缓存，因此发布前应先执行 `bootstrap.ps1 -WithAsr -WithOcr`。`-CoreOnly` 是明确的开发快速迭代开关，绝不是默认发行配置。
+发布构建的 sidecar 是 PyInstaller onedir 包。默认 `full` 构建携带固定版本的 Python 业务代码、`yt-dlp`、`psutil`、`faster-whisper`、CTranslate2、NVIDIA CUDA 12 cuBLAS/cuDNN/NVRTC、Hugging Face Hub、PaddleOCR、PaddlePaddle CPU runtime，以及构建机提供的 `ffmpeg.exe`/`ffprobe.exe`；兼容的 N 卡可直接加速 ASR，便携版用户无需另外安装 Python、CUDA Toolkit、FFmpeg 或这些推理包。构建过程只冻结已经安装在仓库 `.venv` 中的运行时，不读取用户模型目录和下载缓存，因此发布前应先执行 `bootstrap.ps1 -WithAsr -WithOcr`。`-CoreOnly` 是明确的开发快速迭代开关，绝不是默认发行配置。
 
 运行时包与模型权重是两层内容：发行包包含执行 ASR/OCR 所需的程序库，但不包含用户选择的 Whisper、PaddleOCR 或远程大模型权重，也不包含 Cookie、任务数据、下载视频或 API Key。唯一精确允许的模型类随包资产是 faster-whisper 上游自带、默认 VAD 路径必需的小型 Silero VAD 文件；它不是用户选择的听写模型。首次使用可在“模型与算力”页点击“一键准备推荐模型”：组件管理器依据检测到的硬件档位下载固定版本的 ASR/OCR 权重到 Windows AppData，支持中断后续传、完整性校验、原子启用和失败恢复，不需要打开终端或手填模型路径。
 
@@ -275,6 +275,7 @@ Tauri 启动时创建 256-bit 内存会话令牌，选择空闲 loopback 端口�
 ## 已知非阻断限制
 
 - **模型权重首次使用时按需下载。** 默认 full 发行包已经包含 faster-whisper/CTranslate2/Hugging Face Hub/PaddleOCR/PaddlePaddle 程序运行时，但刻意不把数 GB、随硬件档位变化的 ASR/OCR 权重塞进每次更新包。应用内“一键准备推荐模型”会下载、校验并自动绑定推荐权重；在准备完成前，对应模块会保守跳过，Markdown/HTML 仍可从已有字幕、元数据和视觉状态生成。
+- **当前 Windows NVIDIA 加速范围是 ASR。** CTranslate2/faster-whisper 已使用随包 CUDA 12 运行库；PaddleOCR 在 Python 3.13 便携后端中仍使用稳定的 CPU PaddlePaddle。系统会分别显示两者的实际设备。PTS 保真视觉解码也仍使用软件路径，不能因为 FFmpeg 列出 CUDA 就声称启用了 NVDEC。
 - **OCR/ASR 质量尚未用带标注的大规模真实语料校准。** 自适应取帧、PTS 对齐、置信度和选择性复核的机制已经落地，但 WER/CER、专有名词和截图选择还需要按语言/内容类别建立评测集。
 - **平台可用性和清晰度受账号、地区、站点更新、源文件及平台政策影响。** 下载器会记录可用格式与低清警告；不支持 DRM 绕过。
 - **便携包不预塞大体积模型权重。** React/Tauri 发行包包含可自动启动的 full Python/FFmpeg sidecar、本地推理与模型下载运行时以及内置样例；Whisper/PaddleOCR 权重由已经内置的组件管理器按机器档位准备到 AppData。开发构建只有显式传入 `-CoreOnly` 才会省略推理运行时。

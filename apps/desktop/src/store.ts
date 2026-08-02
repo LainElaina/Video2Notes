@@ -49,6 +49,7 @@ import {
   roleFixtures,
 } from './fixtures'
 import type {
+  AccelerationCapabilities,
   BackendProfile,
   BrowserProfile,
   ComponentPrepareResultDefinition,
@@ -373,8 +374,41 @@ const defaultPerformance = (): PerformanceSettings => ({
   overrides: {},
 })
 
+const unavailableAcceleration = (): AccelerationCapabilities => ({
+  asr: {
+    engine: 'faster-whisper/CTranslate2',
+    cudaAvailable: false,
+    deviceCount: 0,
+    supportedComputeTypes: [],
+    reason: '当前后端未返回 ASR 加速能力探测结果；已按 CPU 回退显示。',
+  },
+  ocr: {
+    engine: 'PaddleOCR/PaddlePaddle',
+    cudaAvailable: false,
+    deviceCount: 0,
+    supportedComputeTypes: [],
+    reason: '当前后端未返回 OCR 加速能力探测结果；已按 CPU 回退显示。',
+  },
+})
+
 const demoSystemReport = (): PerformanceSystemReport => ({
   recommendedTier: 'gpu_24gb_plus',
+  acceleration: {
+    asr: {
+      engine: 'faster-whisper/CTranslate2',
+      cudaAvailable: true,
+      deviceCount: 1,
+      supportedComputeTypes: ['float16', 'int8_float16'],
+      reason: '演示环境中的 NVIDIA ASR CUDA 已就绪。',
+    },
+    ocr: {
+      engine: 'PaddleOCR/PaddlePaddle',
+      cudaAvailable: false,
+      deviceCount: 0,
+      supportedComputeTypes: [],
+      reason: '演示环境使用 CPU OCR。',
+    },
+  },
   performance: defaultPerformance(),
   recommendation: {
     experienceMode: 'guided',
@@ -403,7 +437,7 @@ const demoSystemReport = (): PerformanceSystemReport => ({
       experienceMode: 'guided',
       resourcePreference: 'balanced',
       decodeBackend: 'auto_hw',
-      concurrentGpuStages: 3,
+      concurrentGpuStages: 1,
       cpuWorkers: 16,
       remoteModelConcurrency: 4,
       visualDecodeThreads: 8,
@@ -413,8 +447,8 @@ const demoSystemReport = (): PerformanceSystemReport => ({
       cheapScanFps: 3,
       expensiveScanFps: 12,
       ocrModelClass: 'mobile',
-      ocrDevice: 'cuda',
-      ocrBatchSize: 8,
+      ocrDevice: 'cpu',
+      ocrBatchSize: 1,
       ocrCpuThreads: 8,
       asrModelClass: 'large-v3-turbo',
       asrDevice: 'cuda',
@@ -425,7 +459,7 @@ const demoSystemReport = (): PerformanceSystemReport => ({
       verificationPasses: 2,
       screenshotBudgetPerSection: 4,
       learnedSceneDetector: true,
-      notes: ['平衡模式会并行粗扫、OCR 与 ASR，并为前台保留资源。'],
+      notes: ['平衡模式使用 NVIDIA CUDA 加速 ASR，OCR 由 CPU 执行并为前台保留资源。'],
     },
   },
 })
@@ -1485,6 +1519,24 @@ const mapSystemReport = (
   const recommendation = report.recommendation
   return {
     recommendedTier: report.recommended_tier,
+    acceleration: report.acceleration
+      ? {
+          asr: {
+            engine: report.acceleration.asr.engine,
+            cudaAvailable: report.acceleration.asr.cuda_available,
+            deviceCount: report.acceleration.asr.device_count,
+            supportedComputeTypes: [...report.acceleration.asr.supported_compute_types],
+            reason: report.acceleration.asr.reason,
+          },
+          ocr: {
+            engine: report.acceleration.ocr.engine,
+            cudaAvailable: report.acceleration.ocr.cuda_available,
+            deviceCount: report.acceleration.ocr.device_count,
+            supportedComputeTypes: [...report.acceleration.ocr.supported_compute_types],
+            reason: report.acceleration.ocr.reason,
+          },
+        }
+      : unavailableAcceleration(),
     performance,
     recommendation: recommendation
       ? {

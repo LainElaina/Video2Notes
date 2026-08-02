@@ -28,7 +28,13 @@ from video2notes.pipeline import (
     Video2NotesPipeline,
 )
 from video2notes.sources import AcquisitionPolicy, SourceInput, SourceRegistry
-from video2notes.system import GpuDevice, HardwareSnapshot, QualityMode
+from video2notes.system import (
+    AccelerationCapabilities,
+    EngineAcceleration,
+    GpuDevice,
+    HardwareSnapshot,
+    QualityMode,
+)
 from video2notes.vision import (
     SamplingMode,
     SamplingOverride,
@@ -412,6 +418,20 @@ class PipelineEndToEndTests(unittest.TestCase):
                 asr_backends_by_quality={QualityMode.ACCURATE: accurate_asr},
                 ocr_backends_by_quality={QualityMode.ACCURATE: accurate_ocr},
                 hardware=fixture_hardware(),
+                acceleration_capabilities=AccelerationCapabilities(
+                    asr=EngineAcceleration(
+                        engine="faster-whisper/CTranslate2",
+                        cuda_available=True,
+                        device_count=1,
+                        supported_compute_types=("float16",),
+                        reason="fixture CUDA ready",
+                    ),
+                    ocr=EngineAcceleration(
+                        engine="PaddleOCR/PaddlePaddle",
+                        cuda_available=False,
+                        reason="fixture CPU Paddle runtime",
+                    ),
+                ),
             )
             pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
             request = PipelineRequest(
@@ -432,6 +452,10 @@ class PipelineEndToEndTests(unittest.TestCase):
             plan_path = workspace.root / "system" / "execution-plan.json"
             plan = json.loads(plan_path.read_text(encoding="utf-8"))
             self.assertEqual(plan["quality_mode"], "accurate")
+            self.assertTrue(plan["acceleration"]["asr"]["cuda_available"])
+            self.assertFalse(plan["acceleration"]["ocr"]["cuda_available"])
+            self.assertEqual(plan["effective_plan"]["asr_device"], "cuda")
+            self.assertEqual(plan["effective_plan"]["ocr_device"], "cpu")
             self.assertEqual(
                 plan["actual_backends"]["asr_primary"]["provider_id"],
                 "accurate-asr",

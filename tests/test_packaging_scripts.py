@@ -19,6 +19,13 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("faster-whisper") for item in asr))
         self.assertTrue(any(item.startswith("ctranslate2") for item in asr))
         self.assertTrue(any(item.startswith("huggingface-hub") for item in asr))
+        for distribution in (
+            "nvidia-cublas-cu12",
+            "nvidia-cuda-nvrtc-cu12",
+            "nvidia-cudnn-cu12",
+        ):
+            requirement = next(item for item in asr if item.startswith(distribution))
+            self.assertIn("platform_system == 'Windows'", requirement)
         self.assertTrue(
             any(
                 item.startswith("huggingface-hub")
@@ -66,6 +73,61 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('Get-Video2NotesSidecarSourceFingerprint', script)
         self.assertIn('user_model_weights_included = $false', script)
         self.assertIn('Where-Object { $_.FullName -ne $BackendManifestPath }', script)
+
+    def test_full_sidecar_bundles_and_verifies_nvidia_cuda_runtime(self) -> None:
+        build = self.read("scripts/build_sidecar.ps1")
+        smoke = self.read("scripts/test_sidecar.ps1")
+        portable = self.read("scripts/build_portable.ps1")
+        hook = self.read("scripts/pyinstaller_runtime_hook.py")
+
+        distributions = (
+            "nvidia-cublas-cu12",
+            "nvidia-cuda-nvrtc-cu12",
+            "nvidia-cudnn-cu12",
+        )
+        modules = ("nvidia.cublas", "nvidia.cuda_nvrtc", "nvidia.cudnn")
+        for distribution, module in zip(distributions, modules, strict=True):
+            self.assertIn(f'id = "{distribution}"', build)
+            self.assertIn(f'distribution = "{distribution}"', build)
+            self.assertIn(f'module = "{module}"', build)
+            self.assertIn(f'"--hidden-import", "{module}"', build)
+            self.assertIn(f'"--collect-binaries", "{module}"', build)
+            self.assertIn(f'"--copy-metadata", "{distribution}"', build)
+            self.assertIn(f'"{distribution}"', smoke)
+            self.assertIn(f'"{distribution}"', portable)
+
+        cuda_files = (
+            "cublas64_12.dll",
+            "cublasLt64_12.dll",
+            "cudnn64_9.dll",
+            "nvrtc64_120_0.dll",
+        )
+        for filename in cuda_files:
+            self.assertIn(filename, build)
+            self.assertIn(filename, smoke)
+        for metadata_prefix in (
+            "nvidia_cublas_cu12",
+            "nvidia_cuda_nvrtc_cu12",
+            "nvidia_cudnn_cu12",
+        ):
+            self.assertIn(metadata_prefix, build)
+            self.assertIn(metadata_prefix, smoke)
+        self.assertIn("licenses\\License.txt", build)
+        self.assertIn("licenses\\License.txt", smoke)
+        self.assertIn('"--exclude-module", "nvidia"', build)
+        self.assertIn("nvidia/cuda12-cublas-cudnn-nvrtc", build)
+
+        self.assertIn('getattr(sys, "_MEIPASS"', hook)
+        for package_path in ("cublas", "cudnn", "cuda_nvrtc"):
+            self.assertIn(f'/ "{package_path}" / "bin"', hook)
+        self.assertIn('getattr(os, "add_dll_directory", None)', hook)
+        self.assertIn("_DLL_DIRECTORY_HANDLES.append", hook)
+
+    def test_nvidia_runtime_notice_matches_retained_metadata_licenses(self) -> None:
+        notice = self.read("THIRD_PARTY_NOTICES.md")
+
+        self.assertIn("NVIDIA CUDA cuBLAS, cuDNN and NVRTC", notice)
+        self.assertIn("wheel license files are retained in package metadata", notice)
 
     def test_private_payload_rules_allow_packages_but_not_user_models(self) -> None:
         sidecar = self.read("scripts/build_sidecar.ps1")

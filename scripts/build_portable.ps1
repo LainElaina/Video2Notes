@@ -141,7 +141,10 @@ function Assert-BackendManifest {
         if ($manifest.user_model_weights_included -ne $false) {
             throw "The frozen backend manifest does not explicitly exclude user model weights."
         }
-        $fullInferenceIds = @("faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle")
+        $fullInferenceIds = @(
+            "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
+            "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12"
+        )
         $requiredIds = @("yt-dlp", "psutil", "ffmpeg", "ffprobe")
         if ($manifest.runtime_flavor -eq "full") { $requiredIds += $fullInferenceIds }
         foreach ($componentId in $requiredIds) {
@@ -474,7 +477,7 @@ try {
         "这是仅供开发快速迭代的 core-only 构建，不包含本地 faster-whisper/PaddleOCR 推理运行时。"
     }
     else {
-        "这是默认 full 构建，已经包含本地 faster-whisper、CTranslate2、PaddleOCR 与 PaddlePaddle 运行时。"
+        "这是默认 full 构建，已经包含本地 faster-whisper、CTranslate2、NVIDIA CUDA 12 ASR 运行库、PaddleOCR 与 PaddlePaddle CPU 运行时。"
     }
     @"
 Video2Notes 免安装版（runtime=$RuntimeFlavor）

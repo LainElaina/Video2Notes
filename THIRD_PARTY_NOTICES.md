@@ -33,6 +33,7 @@ environment.  Notable components include:
 | [FFmpeg](https://ffmpeg.org/) | Media probe/extraction/processing; sourced from `PATH` in development and copied into Windows release builds | The selected binary distribution determines its license; release builds include `FFMPEG_LICENSE.txt` and exact `FFMPEG_BUILD_INFO.txt` beside the bundled tools |
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | Local ASR; bundled in the default full Windows runtime | MIT (see upstream) |
 | [CTranslate2](https://github.com/OpenNMT/CTranslate2) | Native inference engine used by faster-whisper; bundled in the default full Windows runtime | MIT (see upstream) |
+| [NVIDIA CUDA cuBLAS, cuDNN and NVRTC](https://developer.nvidia.com/cuda-zone) | Self-contained CUDA 12 runtime used by CTranslate2 ASR on compatible NVIDIA GPUs; bundled only in the full Windows runtime | NVIDIA proprietary redistributable terms; wheel license files are retained in package metadata |
 | [Hugging Face Hub](https://github.com/huggingface/huggingface_hub) | Resumable app-managed ASR/OCR model downloads into local App Data | Apache License 2.0 |
 | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) | Local OCR; bundled in the default full Windows runtime | Apache License 2.0 (see upstream) |
 | [PaddlePaddle](https://github.com/PaddlePaddle/Paddle) | PaddleOCR inference engine; bundled in the default full Windows runtime | Apache License 2.0 (see upstream) |
@@ -61,7 +62,7 @@ identifies those binaries as GPLv3.  See
 The default Windows `full` build freezes the installed inference **program
 runtimes** from the repository `.venv`; its backend manifest records the exact
 package versions and import-verification state.  `-CoreOnly` deliberately omits
-those four inference runtimes and is intended only for fast development
+the ASR, OCR and CUDA inference runtimes and is intended only for fast development
 iteration.  The build does not traverse a user model directory or a package
 manager cache.  The small `silero_vad_v6.onnx` shipped by faster-whisper itself
 is precisely allow-listed because Video2Notes enables that upstream VAD path by

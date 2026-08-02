@@ -88,6 +88,7 @@ from video2notes.sources import (
     enumerate_browser_profiles,
 )
 from video2notes.system import (
+    AccelerationCapabilities,
     ExperienceMode,
     HardwareSnapshot,
     HardwareTier,
@@ -97,7 +98,9 @@ from video2notes.system import (
     ResourcePreference,
     ResourceRecommendation,
     ResourceReserve,
+    align_execution_plan_with_acceleration,
     build_execution_plan,
+    detect_acceleration_capabilities,
     detect_hardware,
     estimate_processing_time,
     recommend_hardware_tier,
@@ -163,6 +166,7 @@ class PerformanceSettings(ApiModel):
 
 class SystemReport(ApiModel):
     hardware: HardwareSnapshot
+    acceleration: AccelerationCapabilities
     recommended_tier: str
     performance: PerformanceSettings
     recommendation: ResourceRecommendation
@@ -395,6 +399,7 @@ class ApiContext:
                 resource_preference=self.performance_settings.preference,
                 resource_reserve=self.performance_settings.reserve,
                 performance_overrides=self.performance_settings.overrides,
+                acceleration_capabilities=detect_acceleration_capabilities(),
             )
             self.pipeline = Video2NotesPipeline(
                 self.runs_root,
@@ -479,6 +484,7 @@ def create_app(
     )
     def system_report() -> SystemReport:
         hardware = detect_hardware(disk_path=context.data_root)
+        acceleration = detect_acceleration_capabilities()
         tier = recommend_hardware_tier(hardware)
         with context.configuration_lock:
             settings = context.performance_settings.model_copy(deep=True)
@@ -490,18 +496,22 @@ def create_app(
         )
         return SystemReport(
             hardware=hardware,
+            acceleration=acceleration,
             recommended_tier=tier.value,
             performance=settings,
             recommendation=recommendation,
             plans={
-                mode.value: build_execution_plan(
-                    hardware,
-                    mode,
-                    hardware_tier=tier,
-                    experience_mode=settings.experience_mode,
-                    preference=settings.preference,
-                    reserve=settings.reserve,
-                    overrides=settings.overrides,
+                mode.value: align_execution_plan_with_acceleration(
+                    build_execution_plan(
+                        hardware,
+                        mode,
+                        hardware_tier=tier,
+                        experience_mode=settings.experience_mode,
+                        preference=settings.preference,
+                        reserve=settings.reserve,
+                        overrides=settings.overrides,
+                    ),
+                    acceleration,
                 ).model_dump(mode="json")
                 for mode in QualityMode
             },

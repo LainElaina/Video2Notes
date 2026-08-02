@@ -450,8 +450,22 @@ export interface ExecutionPlan {
   notes: string[]
 }
 
+export interface EngineAcceleration {
+  engine: string
+  cudaAvailable: boolean
+  deviceCount: number
+  supportedComputeTypes: string[]
+  reason: string
+}
+
+export interface AccelerationCapabilities {
+  asr: EngineAcceleration
+  ocr: EngineAcceleration
+}
+
 export interface PerformanceSystemReport {
   recommendedTier: string
+  acceleration: AccelerationCapabilities
   performance: PerformanceSettings
   recommendation: ResourceRecommendation
   plans: Partial<Record<ProcessingMode, ExecutionPlan>>

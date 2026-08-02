@@ -163,8 +163,8 @@ const componentReportPayload = (ready = false) => ({
     ocr_component_id: 'ocr-paddle-ppocrv5-server',
     asr_device: 'cuda',
     asr_compute_type: 'float16',
-    ocr_device: 'gpu:0',
-    reason: '12 GiB GPUs can run large-v3 and the higher-capacity OCR pair serially.',
+    ocr_device: 'cpu',
+    reason: '12 GiB GPUs can run large-v3 on CUDA while OCR uses the bundled CPU runtime.',
   },
   inventory: {
     ready,
@@ -371,6 +371,7 @@ describe('studio store against the real loopback API contract', () => {
   let componentsReady = false
   let failedEstimateMode: 'fast' | 'balanced' | 'accurate' | undefined
   let listedRuns: ApiRunManifest[] = []
+  let includeAcceleration = true
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -391,6 +392,7 @@ describe('studio store against the real loopback API contract', () => {
     componentsReady = false
     failedEstimateMode = undefined
     listedRuns = []
+    includeAcceleration = true
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -416,6 +418,29 @@ describe('studio store against the real loopback API contract', () => {
               memory_total_bytes: 32 * 1024 ** 3,
               gpus: [{ name: 'RTX test', memory_total_bytes: 16 * 1024 ** 3 }],
             },
+            ...(includeAcceleration
+              ? {
+                  acceleration: {
+                    schema_version: 1,
+                    asr: {
+                      engine: 'faster-whisper/CTranslate2',
+                      cuda_available: true,
+                      device_count: 1,
+                      supported_compute_types: ['float16', 'int8_float16'],
+                      runtime_directories: ['D:/runtime/nvidia/cublas/bin'],
+                      reason: 'CUDA 运行库与 CTranslate2 已验证。',
+                    },
+                    ocr: {
+                      engine: 'PaddleOCR/PaddlePaddle',
+                      cuda_available: false,
+                      device_count: 0,
+                      supported_compute_types: [],
+                      runtime_directories: [],
+                      reason: '当前 PaddlePaddle 为 CPU 构建。',
+                    },
+                  },
+                }
+              : {}),
             recommended_tier: 'high',
             performance: performancePayload,
             recommendation: {
@@ -877,6 +902,22 @@ describe('studio store against the real loopback API contract', () => {
     expect(useStudioStore.getState().performance).toMatchObject({
       experienceMode: 'guided',
       preference: 'balanced',
+    })
+    expect(useStudioStore.getState().systemReport?.acceleration).toEqual({
+      asr: {
+        engine: 'faster-whisper/CTranslate2',
+        cudaAvailable: true,
+        deviceCount: 1,
+        supportedComputeTypes: ['float16', 'int8_float16'],
+        reason: 'CUDA 运行库与 CTranslate2 已验证。',
+      },
+      ocr: {
+        engine: 'PaddleOCR/PaddlePaddle',
+        cudaAvailable: false,
+        deviceCount: 0,
+        supportedComputeTypes: [],
+        reason: '当前 PaddlePaddle 为 CPU 构建。',
+      },
     })
 
     useStudioStore.getState().savePerformance({
@@ -1411,6 +1452,26 @@ describe('studio store against the real loopback API contract', () => {
     expect(JSON.parse(providerSave?.body ?? '{}').roles['asr.primary']).toMatchObject({
       primary_model_id: 'asr-main',
       fallback_model_ids: [],
+    })
+  })
+
+  it('uses an honest CPU fallback when an older backend omits acceleration capabilities', async () => {
+    includeAcceleration = false
+
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+
+    expect(useStudioStore.getState().systemReport?.acceleration).toMatchObject({
+      asr: {
+        cudaAvailable: false,
+        deviceCount: 0,
+        reason: expect.stringContaining('未返回 ASR 加速能力'),
+      },
+      ocr: {
+        cudaAvailable: false,
+        deviceCount: 0,
+        reason: expect.stringContaining('未返回 OCR 加速能力'),
+      },
     })
   })
 

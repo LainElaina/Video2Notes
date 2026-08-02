@@ -211,13 +211,16 @@ def _optional_percent(value: str) -> float | None:
 
 
 def _detect_nvidia_gpus(runner: CommandRunner) -> tuple[GpuDevice, ...]:
-    result = runner(
-        (
-            "nvidia-smi",
-            "--query-gpu=name,memory.total,memory.free,memory.used,utilization.gpu,driver_version",
-            "--format=csv,noheader,nounits",
+    try:
+        result = runner(
+            (
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.free,memory.used,utilization.gpu,driver_version",
+                "--format=csv,noheader,nounits",
+            )
         )
-    )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return ()
     if result.returncode != 0:
         return ()
 
@@ -255,7 +258,10 @@ def _detect_nvidia_gpus(runner: CommandRunner) -> tuple[GpuDevice, ...]:
 
 
 def _detect_ffmpeg_hwaccels(runner: CommandRunner) -> tuple[str, ...]:
-    result = runner(("ffmpeg", "-hide_banner", "-hwaccels"))
+    try:
+        result = runner(("ffmpeg", "-hide_banner", "-hwaccels"))
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return ()
     if result.returncode != 0:
         return ()
     accelerators = []

@@ -1,5 +1,12 @@
 """Hardware discovery and independent performance/quality planning."""
 
+from .acceleration import (
+    AccelerationCapabilities,
+    EngineAcceleration,
+    align_execution_plan_with_acceleration,
+    detect_acceleration_capabilities,
+    prepare_nvidia_cuda_runtime,
+)
 from .estimate import ProcessingEstimate, estimate_processing_time
 from .hardware import (
     GpuDevice,
@@ -25,6 +32,8 @@ from .resources import (
 )
 
 __all__ = [
+    "AccelerationCapabilities",
+    "EngineAcceleration",
     "ExecutionPlan",
     "ExperienceMode",
     "GpuDevice",
@@ -38,9 +47,12 @@ __all__ = [
     "ResourceRecommendation",
     "ResourceReserve",
     "SecondaryAsrPolicy",
+    "align_execution_plan_with_acceleration",
     "build_execution_plan",
+    "detect_acceleration_capabilities",
     "detect_hardware",
     "estimate_processing_time",
+    "prepare_nvidia_cuda_runtime",
     "recommend_hardware_tier",
     "recommend_resources",
 ]

@@ -151,6 +151,31 @@ class PaddleOcrBackendTests(unittest.TestCase):
             self.assertEqual(output.lines[0].box.height, 30)
             self.assertEqual(output.invocation.backend, "paddleocr-v3")
 
+    def test_injected_gpu_engine_does_not_probe_host_paddle_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            detector, recognizer = _model_dirs(Path(temporary))
+            backend = PaddleOcrBackend(
+                PaddleOcrConfig(
+                    detection_model_dir=str(detector),
+                    recognition_model_dir=str(recognizer),
+                    device="gpu:0",
+                    api_family="v3",
+                ),
+                engine_factory=lambda _: _FakeV3Engine(),
+            )
+
+            with (
+                patch(
+                    "video2notes.ocr.paddle.detect_acceleration_capabilities",
+                    side_effect=AssertionError("host capability probe must be skipped"),
+                ),
+                patch.object(PaddleOcrBackend, "_image_array", return_value=object()),
+            ):
+                output = backend.recognize(Image.new("RGB", (160, 80)))
+
+            self.assertEqual(output.lines[0].raw_text, "本地模型")
+            self.assertEqual(output.invocation.device, "gpu:0")
+
     def test_v3_passes_explicit_identity_from_local_model_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             detector, recognizer = _model_dirs(Path(temporary))

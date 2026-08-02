@@ -44,6 +44,63 @@ describe('models and performance workspace', () => {
     })
   })
 
+  it('offers CUDA only for engines whose runtime capability is available', () => {
+    render(<ModelsPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: /自定义性能/ }))
+    const asrDevice = screen.getByLabelText('ASR 设备')
+    const ocrDevice = screen.getByLabelText('OCR 设备')
+
+    expect(within(asrDevice).getByRole('option', { name: 'CUDA' })).toBeInTheDocument()
+    expect(within(ocrDevice).queryByRole('option', { name: 'CUDA' })).not.toBeInTheDocument()
+  })
+
+  it('removes unavailable CUDA choices and normalizes stale device overrides', () => {
+    const state = useStudioStore.getState()
+    const systemReport = state.systemReport!
+    useStudioStore.setState({
+      performance: {
+        ...state.performance,
+        experienceMode: 'professional',
+        overrides: {
+          ...state.performance.overrides,
+          asrDevice: 'cuda',
+          ocrDevice: 'cuda',
+        },
+      },
+      systemReport: {
+        ...systemReport,
+        acceleration: {
+          asr: {
+            ...systemReport.acceleration.asr,
+            cudaAvailable: false,
+            deviceCount: 0,
+          },
+          ocr: {
+            ...systemReport.acceleration.ocr,
+            cudaAvailable: false,
+            deviceCount: 0,
+          },
+        },
+      },
+    })
+
+    render(<ModelsPage />)
+
+    const asrDevice = screen.getByLabelText('ASR 设备')
+    const ocrDevice = screen.getByLabelText('OCR 设备')
+    expect(within(asrDevice).queryByRole('option', { name: 'CUDA' })).not.toBeInTheDocument()
+    expect(within(ocrDevice).queryByRole('option', { name: 'CUDA' })).not.toBeInTheDocument()
+    expect(asrDevice).toHaveValue('cpu')
+    expect(ocrDevice).toHaveValue('cpu')
+
+    fireEvent.click(screen.getByRole('button', { name: '保存性能设置' }))
+    expect(useStudioStore.getState().performance.overrides).toMatchObject({
+      asrDevice: 'cpu',
+      ocrDevice: 'cpu',
+    })
+  })
+
   it('does not infer capabilities when a discovered model is selected', () => {
     useStudioStore.setState({
       selectedProviderId: 'provider-openai',
@@ -71,6 +128,8 @@ describe('models and performance workspace', () => {
 
     expect(screen.getByText('工具与识别模型准备')).toBeInTheDocument()
     expect(screen.getByText('24 GB+ 显存')).toBeInTheDocument()
+    expect(screen.getByText(/cuda · float16 · CUDA 运行时就绪/i)).toBeInTheDocument()
+    expect(screen.getByText(/cpu · CPU 运行时/i)).toBeInTheDocument()
     expect(screen.getByText(/模型权重不会随 EXE 预装/)).toBeInTheDocument()
     expect(screen.getByText('FFmpeg')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '一键准备推荐模型' })).toBeDisabled()
@@ -93,6 +152,28 @@ describe('models and performance workspace', () => {
       'ocr-paddle-ppocrv5-server',
     ])
     expect(screen.getByRole('button', { name: '准备所选组件' })).toBeDisabled()
+  })
+
+  it('keeps acceleration status pending until the backend system report arrives', () => {
+    useStudioStore.setState({ systemReport: undefined })
+
+    render(<ModelsPage />)
+
+    expect(screen.getAllByText(/加速能力检测中/)).toHaveLength(2)
+    expect(screen.queryByText(/CPU 回退/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/CPU 运行时/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /自定义性能/ }))
+    expect(
+      within(screen.getByLabelText('ASR 设备')).queryByRole('option', {
+        name: 'CUDA',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(screen.getByLabelText('OCR 设备')).queryByRole('option', {
+        name: 'CUDA',
+      }),
+    ).not.toBeInTheDocument()
   })
 
   it('announces component preparation progress, activation, and errors', () => {

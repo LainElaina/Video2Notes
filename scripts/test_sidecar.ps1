@@ -90,7 +90,10 @@ if ($Manifest.user_model_weights_included -ne $false) {
     throw "The backend manifest does not explicitly exclude user model weights."
 }
 
-$FullInferenceIds = @("faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle")
+$FullInferenceIds = @(
+    "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
+    "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12"
+)
 $RequiredPythonIds = @("yt-dlp", "psutil")
 if (-not $CoreOnly) { $RequiredPythonIds += $FullInferenceIds }
 foreach ($componentId in $RequiredPythonIds) {
@@ -111,6 +114,30 @@ if ($CoreOnly) {
         if ($component.included -ne $false -or $component.status -ne "excluded-core-only") {
             throw "Core-only manifest component '$componentId' was not marked excluded-core-only."
         }
+    }
+}
+else {
+    foreach ($cudaRuntimeFile in @(
+        "_internal\nvidia\cublas\bin\cublas64_12.dll",
+        "_internal\nvidia\cublas\bin\cublasLt64_12.dll",
+        "_internal\nvidia\cudnn\bin\cudnn64_9.dll",
+        "_internal\nvidia\cuda_nvrtc\bin\nvrtc64_120_0.dll"
+    )) {
+        Require-File (Join-Path $BackendRoot $cudaRuntimeFile) "Bundled NVIDIA CUDA runtime DLL"
+    }
+    foreach ($metadataPrefix in @(
+        "nvidia_cublas_cu12", "nvidia_cuda_nvrtc_cu12", "nvidia_cudnn_cu12"
+    )) {
+        $metadataDirectories = @(
+            Get-ChildItem -LiteralPath (Join-Path $BackendRoot "_internal") -Directory |
+                Where-Object { $_.Name -like "$metadataPrefix-*.dist-info" }
+        )
+        if ($metadataDirectories.Count -ne 1) {
+            throw "Expected exactly one bundled '$metadataPrefix' metadata directory, found $($metadataDirectories.Count)."
+        }
+        Require-File `
+            (Join-Path $metadataDirectories[0].FullName "licenses\License.txt") `
+            "Bundled NVIDIA runtime license"
     }
 }
 

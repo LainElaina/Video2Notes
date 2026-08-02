@@ -16,6 +16,8 @@ from typing import Literal, cast
 from PIL import Image
 from pydantic import Field
 
+from video2notes.system.acceleration import detect_acceleration_capabilities
+
 from .models import (
     BackendOcrLine,
     BackendOcrOutput,
@@ -123,6 +125,15 @@ class PaddleOcrBackend:
             self._config.recognition_model_dir,
             label="recognition",
         )
+        if (
+            self._engine_factory is None
+            and self._config.device.casefold() not in {"cpu", "none"}
+        ):
+            capability = detect_acceleration_capabilities().ocr
+            if not capability.cuda_available:
+                raise OcrDependencyError(
+                    "NVIDIA OCR acceleration is unavailable: " + capability.reason
+                )
         if self._engine_factory is not None:
             self._version = "injected"
             return self._create_engine(

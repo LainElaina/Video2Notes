@@ -16,6 +16,7 @@ from typing import Protocol, cast, runtime_checkable
 from pydantic import Field
 
 from video2notes.domain import EvidenceModality, EvidenceSpan
+from video2notes.system.acceleration import detect_acceleration_capabilities
 
 from .models import (
     ASREvidenceResult,
@@ -373,6 +374,12 @@ class FasterWhisperBackend:
     def _load_model(self) -> _WhisperModel:
         if self._model is not None:
             return self._model
+        if self.config.device.casefold() == "cuda":
+            capability = detect_acceleration_capabilities().asr
+            if not capability.cuda_available:
+                raise ASRDependencyError(
+                    "NVIDIA ASR acceleration is unavailable: " + capability.reason
+                )
         try:
             module = import_module("faster_whisper")
         except ImportError as error:

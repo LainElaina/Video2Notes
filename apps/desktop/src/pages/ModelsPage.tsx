@@ -234,6 +234,42 @@ const numericControls: Array<{
   { key: 'screenshotBudgetPerSection', label: '每节截图上限', hint: '每个笔记章节最多截图数', min: 0, max: 16, group: '验证' },
 ]
 
+type DeviceSelection = NonNullable<PerformanceOverrides['asrDevice']>
+
+const availableDeviceSelection = (
+  value: string | undefined,
+  cudaAvailable: boolean,
+): DeviceSelection => {
+  if (value === 'cpu') return 'cpu'
+  if (value === 'cuda') return cudaAvailable ? 'cuda' : 'cpu'
+  return 'auto'
+}
+
+const normalizeUnavailableCudaOverrides = (
+  settings: PerformanceSettings,
+  asrCudaAvailable: boolean,
+  ocrCudaAvailable: boolean,
+): PerformanceSettings => {
+  const asrDevice = settings.overrides.asrDevice
+  const ocrDevice = settings.overrides.ocrDevice
+  const normalizedAsrDevice =
+    asrDevice === 'cuda' && !asrCudaAvailable ? 'cpu' : asrDevice
+  const normalizedOcrDevice =
+    ocrDevice === 'cuda' && !ocrCudaAvailable ? 'cpu' : ocrDevice
+
+  if (normalizedAsrDevice === asrDevice && normalizedOcrDevice === ocrDevice) {
+    return settings
+  }
+  return {
+    ...settings,
+    overrides: {
+      ...settings.overrides,
+      asrDevice: normalizedAsrDevice,
+      ocrDevice: normalizedOcrDevice,
+    },
+  }
+}
+
 export function ModelsPage() {
   const providers = useStudioStore(state => state.providers)
   const models = useStudioStore(state => state.models)
@@ -302,8 +338,20 @@ export function ModelsPage() {
     ? hardwareTierCopy[componentReport.hardwareTier]
     : undefined
   const componentPreparing = componentPreparationStatus === 'preparing'
+  const asrCudaAvailable = systemReport?.acceleration.asr.cudaAvailable === true
+  const ocrCudaAvailable = systemReport?.acceleration.ocr.cudaAvailable === true
 
-  useEffect(() => setPerformanceDraft(performance), [performance])
+  useEffect(
+    () =>
+      setPerformanceDraft(
+        normalizeUnavailableCudaOverrides(
+          performance,
+          asrCudaAvailable,
+          ocrCudaAvailable,
+        ),
+      ),
+    [asrCudaAvailable, ocrCudaAvailable, performance],
+  )
 
   useEffect(() => {
     if (!provider) return
@@ -372,13 +420,15 @@ export function ModelsPage() {
         ocrInferenceMaxWidth: recommendedPlan.ocrInferenceMaxWidth,
         cheapScanFps: recommendedPlan.cheapScanFps,
         expensiveScanFps: recommendedPlan.expensiveScanFps,
-        ocrDevice: ['auto', 'cpu', 'cuda'].includes(recommendedPlan.ocrDevice)
-          ? (recommendedPlan.ocrDevice as 'auto' | 'cpu' | 'cuda')
-          : 'auto',
+        ocrDevice: availableDeviceSelection(
+          recommendedPlan.ocrDevice,
+          ocrCudaAvailable,
+        ),
         ocrCpuThreads: recommendedPlan.ocrCpuThreads,
-        asrDevice: ['auto', 'cpu', 'cuda'].includes(recommendedPlan.asrDevice)
-          ? (recommendedPlan.asrDevice as 'auto' | 'cpu' | 'cuda')
-          : 'auto',
+        asrDevice: availableDeviceSelection(
+          recommendedPlan.asrDevice,
+          asrCudaAvailable,
+        ),
         asrComputeType: [
           'default',
           'int8',
@@ -556,11 +606,27 @@ export function ModelsPage() {
               <dl>
                 <div>
                   <dt>ASR</dt>
-                  <dd>{componentReport.recommendation.asrDevice} · {componentReport.recommendation.asrComputeType}</dd>
+                  <dd title={systemReport?.acceleration.asr.reason}>
+                    {recommendedPlan?.asrDevice ?? componentReport.recommendation.asrDevice}
+                    {' · '}
+                    {recommendedPlan?.asrComputeType ?? componentReport.recommendation.asrComputeType}
+                    {systemReport
+                      ? systemReport.acceleration.asr.cudaAvailable
+                        ? ' · CUDA 运行时就绪'
+                        : ' · CPU 回退'
+                      : ' · 加速能力检测中'}
+                  </dd>
                 </div>
                 <div>
                   <dt>OCR</dt>
-                  <dd>{componentReport.recommendation.ocrDevice}</dd>
+                  <dd title={systemReport?.acceleration.ocr.reason}>
+                    {recommendedPlan?.ocrDevice ?? componentReport.recommendation.ocrDevice}
+                    {systemReport
+                      ? systemReport.acceleration.ocr.cudaAvailable
+                        ? ' · CUDA 运行时就绪'
+                        : ' · CPU 运行时'
+                      : ' · 加速能力检测中'}
+                  </dd>
                 </div>
               </dl>
             </div>
@@ -730,7 +796,7 @@ export function ModelsPage() {
           <div className="hardware-summary" aria-label="硬件建议摘要">
             <span><Cpu size={14} aria-hidden="true" />{recommendation?.budget.cpuWorkers ?? '—'} CPU worker</span>
             <span><Database size={14} aria-hidden="true" />{formatBytes(recommendation?.budget.memoryBudgetBytes)} 可用内存</span>
-            <span><Zap size={14} aria-hidden="true" />{recommendation?.budget.gpuStageSlots ?? 0} GPU 阶段</span>
+            <span><Zap size={14} aria-hidden="true" />{recommendedPlan?.concurrentGpuStages ?? 0} 可用 GPU 阶段</span>
           </div>
         </div>
 
@@ -829,18 +895,28 @@ export function ModelsPage() {
             <div className="professional-selects">
               <label>OCR 设备
                 <select
-                  value={performanceDraft.overrides.ocrDevice ?? recommendedPlan?.ocrDevice ?? 'auto'}
+                  value={availableDeviceSelection(
+                    performanceDraft.overrides.ocrDevice ?? recommendedPlan?.ocrDevice,
+                    ocrCudaAvailable,
+                  )}
                   onChange={event => updateOverride('ocrDevice', event.target.value as 'auto' | 'cpu' | 'cuda')}
                 >
-                  <option value="auto">自动</option><option value="cpu">CPU</option><option value="cuda">CUDA</option>
+                  <option value="auto">自动</option>
+                  <option value="cpu">CPU</option>
+                  {ocrCudaAvailable && <option value="cuda">CUDA</option>}
                 </select>
               </label>
               <label>ASR 设备
                 <select
-                  value={performanceDraft.overrides.asrDevice ?? recommendedPlan?.asrDevice ?? 'auto'}
+                  value={availableDeviceSelection(
+                    performanceDraft.overrides.asrDevice ?? recommendedPlan?.asrDevice,
+                    asrCudaAvailable,
+                  )}
                   onChange={event => updateOverride('asrDevice', event.target.value as 'auto' | 'cpu' | 'cuda')}
                 >
-                  <option value="auto">自动</option><option value="cpu">CPU</option><option value="cuda">CUDA</option>
+                  <option value="auto">自动</option>
+                  <option value="cpu">CPU</option>
+                  {asrCudaAvailable && <option value="cuda">CUDA</option>}
                 </select>
               </label>
               <label>ASR 计算精度
@@ -886,7 +962,19 @@ export function ModelsPage() {
 
         <footer className="performance-actions">
           <span><ShieldCheck size={15} aria-hidden="true" />设置只保存在本机，并由后端再次校验。</span>
-          <button className="button button-primary" type="button" onClick={() => savePerformance(performanceDraft)}>
+          <button
+            className="button button-primary"
+            type="button"
+            onClick={() =>
+              savePerformance(
+                normalizeUnavailableCudaOverrides(
+                  performanceDraft,
+                  asrCudaAvailable,
+                  ocrCudaAvailable,
+                ),
+              )
+            }
+          >
             <Save size={15} aria-hidden="true" />
             保存性能设置
           </button>

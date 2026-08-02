@@ -144,6 +144,7 @@ class ComponentManagerTests(unittest.TestCase):
         self.assertEqual(settings.asr["engine"], "faster_whisper")
         self.assertEqual(settings.asr["device"], "cuda")
         self.assertEqual(settings.ocr["engine"], "paddleocr")
+        self.assertEqual(settings.ocr["device"], "cpu")
         self.assertTrue(Path(str(settings.asr["model_path"])).is_dir())
         self.assertTrue(Path(str(settings.ocr["detection_model_dir"])).is_dir())
         self.assertEqual(set(settings.asr_profiles), set(QualityMode))
@@ -432,6 +433,13 @@ class ComponentManagerTests(unittest.TestCase):
             )
         )
         self.assertTrue(all("llm" not in manifest.id for manifest in catalog.manifests.values()))
+        self.assertTrue(
+            all(
+                recommendation.ocr_device == "cpu"
+                for tier, recommendation in catalog.recommendations.items()
+                if tier is not HardwareTier.CPU_IGPU
+            )
+        )
 
     def test_adapter_settings_require_both_models_to_be_complete(self) -> None:
         manager = self.manager(

@@ -30,11 +30,17 @@ $PythonComponentSpecs = @(
     [ordered]@{ id = "ctranslate2"; distribution = "ctranslate2"; module = "ctranslate2" },
     [ordered]@{ id = "huggingface-hub"; distribution = "huggingface-hub"; module = "huggingface_hub" },
     [ordered]@{ id = "paddleocr"; distribution = "paddleocr"; module = "paddleocr" },
-    [ordered]@{ id = "paddlepaddle"; distribution = "paddlepaddle"; module = "paddle" }
+    [ordered]@{ id = "paddlepaddle"; distribution = "paddlepaddle"; module = "paddle" },
+    [ordered]@{ id = "nvidia-cublas-cu12"; distribution = "nvidia-cublas-cu12"; module = "nvidia.cublas" },
+    [ordered]@{ id = "nvidia-cuda-nvrtc-cu12"; distribution = "nvidia-cuda-nvrtc-cu12"; module = "nvidia.cuda_nvrtc" },
+    [ordered]@{ id = "nvidia-cudnn-cu12"; distribution = "nvidia-cudnn-cu12"; module = "nvidia.cudnn" }
 )
 $IncludedPythonComponentIds = @("yt-dlp", "psutil")
 if (-not $CoreOnly) {
-    $IncludedPythonComponentIds += @("faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle")
+    $IncludedPythonComponentIds += @(
+        "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
+        "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12"
+    )
 }
 
 function Assert-LastExitCode {
@@ -366,6 +372,7 @@ if ($CoreOnly) {
         "--exclude-module", "faster_whisper",
         "--exclude-module", "ctranslate2",
         "--exclude-module", "huggingface_hub",
+        "--exclude-module", "nvidia",
         "--exclude-module", "torch"
     )
 }
@@ -378,6 +385,12 @@ else {
     $PyInstallerArguments += @(
         "--collect-all", "faster_whisper",
         "--collect-all", "ctranslate2",
+        "--hidden-import", "nvidia.cublas",
+        "--hidden-import", "nvidia.cuda_nvrtc",
+        "--hidden-import", "nvidia.cudnn",
+        "--collect-binaries", "nvidia.cublas",
+        "--collect-binaries", "nvidia.cuda_nvrtc",
+        "--collect-binaries", "nvidia.cudnn",
         "--collect-all", "huggingface_hub",
         "--collect-all", "paddleocr",
         "--hidden-import", "paddle",
@@ -387,6 +400,9 @@ else {
         "--copy-metadata", "paddlex",
         "--copy-metadata", "faster-whisper",
         "--copy-metadata", "ctranslate2",
+        "--copy-metadata", "nvidia-cublas-cu12",
+        "--copy-metadata", "nvidia-cuda-nvrtc-cu12",
+        "--copy-metadata", "nvidia-cudnn-cu12",
         "--copy-metadata", "huggingface-hub",
         "--copy-metadata", "paddlepaddle"
     )
@@ -444,6 +460,30 @@ $PlaceholderPath = Join-Path $ResourceRoot ".gitkeep"
     [Text.UTF8Encoding]::new($false)
 )
 Get-ChildItem -LiteralPath $BuiltSidecarDirectory -Force | Copy-Item -Destination $ResourceRoot -Recurse -Force
+if (-not $CoreOnly) {
+    foreach ($cudaRuntimeFile in @(
+        "_internal\nvidia\cublas\bin\cublas64_12.dll",
+        "_internal\nvidia\cublas\bin\cublasLt64_12.dll",
+        "_internal\nvidia\cudnn\bin\cudnn64_9.dll",
+        "_internal\nvidia\cuda_nvrtc\bin\nvrtc64_120_0.dll"
+    )) {
+        Require-File (Join-Path $ResourceRoot $cudaRuntimeFile) "Bundled NVIDIA CUDA runtime DLL"
+    }
+    foreach ($metadataPrefix in @(
+        "nvidia_cublas_cu12", "nvidia_cuda_nvrtc_cu12", "nvidia_cudnn_cu12"
+    )) {
+        $metadataDirectories = @(
+            Get-ChildItem -LiteralPath (Join-Path $ResourceRoot "_internal") -Directory |
+                Where-Object { $_.Name -like "$metadataPrefix-*.dist-info" }
+        )
+        if ($metadataDirectories.Count -ne 1) {
+            throw "Expected exactly one bundled '$metadataPrefix' metadata directory, found $($metadataDirectories.Count)."
+        }
+        Require-File `
+            (Join-Path $metadataDirectories[0].FullName "licenses\License.txt") `
+            "Bundled NVIDIA runtime license"
+    }
+}
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffmpeg.exe") -Destination (Join-Path $ToolRoot "ffmpeg.exe") -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffprobe.exe") -Destination (Join-Path $ToolRoot "ffprobe.exe") -Force
 Copy-Item -LiteralPath $FfmpegLicenseSource -Destination (Join-Path $ToolRoot "FFMPEG_LICENSE.txt") -Force
@@ -566,7 +606,12 @@ $Manifest = [ordered]@{
     source_fingerprint_schema = 1
     source_fingerprint_sha256 = $SourceFingerprintAfterBuild
     user_model_weights_included = $false
-    packaged_runtime_assets = if ($CoreOnly) { @() } else { @("faster-whisper/silero-vad-v6") }
+    packaged_runtime_assets = if ($CoreOnly) {
+        @()
+    }
+    else {
+        @("faster-whisper/silero-vad-v6", "nvidia/cuda12-cublas-cudnn-nvrtc")
+    }
     components = $RuntimeComponents
     files = @(
         Get-ChildItem -LiteralPath $ResourceRoot -Recurse -File |

@@ -41,6 +41,7 @@ from video2notes.providers import (
 )
 from video2notes.sources import SourceRegistry
 from video2notes.system import (
+    AccelerationCapabilities,
     ExperienceMode,
     HardwareSnapshot,
     PerformanceOverrides,
@@ -101,6 +102,7 @@ def build_pipeline_runtime(
     resource_preference: ResourcePreference = ResourcePreference.BALANCED,
     resource_reserve: ResourceReserve | None = None,
     performance_overrides: PerformanceOverrides | None = None,
+    acceleration_capabilities: AccelerationCapabilities | None = None,
     ffmpeg_path: str = "ffmpeg",
     ffprobe_path: str = "ffprobe",
     pdf_browser_executable: str | None = None,
@@ -167,6 +169,7 @@ def build_pipeline_runtime(
             resource_preference=resource_preference,
             resource_reserve=resource_reserve,
             performance_overrides=performance_overrides,
+            acceleration_capabilities=acceleration_capabilities,
             ffmpeg_path=ffmpeg_path,
             ffprobe_path=ffprobe_path,
             pdf_browser_executable=pdf_browser_executable,

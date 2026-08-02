@@ -138,8 +138,8 @@ DEFAULT_COMPONENT_CATALOG = ComponentCatalog(
             ocr_component_id=_OCR_MOBILE.id,
             asr_device="cuda",
             asr_compute_type="int8_float16",
-            ocr_device="gpu:0",
-            reason="8 GiB GPUs prioritize large-v3 ASR and mobile OCR with tight VRAM use.",
+            ocr_device="cpu",
+            reason="8 GiB GPUs accelerate ASR; the Windows PaddleOCR runtime remains on CPU.",
         ),
         HardwareTier.GPU_12GB: TierRecommendation(
             hardware_tier=HardwareTier.GPU_12GB,
@@ -147,8 +147,8 @@ DEFAULT_COMPONENT_CATALOG = ComponentCatalog(
             ocr_component_id=_OCR_SERVER.id,
             asr_device="cuda",
             asr_compute_type="float16",
-            ocr_device="gpu:0",
-            reason="12 GiB GPUs can run large-v3 and the higher-capacity OCR pair serially.",
+            ocr_device="cpu",
+            reason="12 GiB GPUs accelerate large-v3 ASR; PaddleOCR remains on CPU.",
         ),
         HardwareTier.GPU_24GB_PLUS: TierRecommendation(
             hardware_tier=HardwareTier.GPU_24GB_PLUS,
@@ -156,8 +156,11 @@ DEFAULT_COMPONENT_CATALOG = ComponentCatalog(
             ocr_component_id=_OCR_SERVER.id,
             asr_device="cuda",
             asr_compute_type="float16",
-            ocr_device="gpu:0",
-            reason="24 GiB or larger GPUs use the highest local ASR/OCR catalog entries.",
+            ocr_device="cpu",
+            reason=(
+                "24 GiB or larger GPUs use the strongest local models "
+                "with CUDA ASR and CPU OCR."
+            ),
         ),
     },
 )

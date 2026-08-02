@@ -29,6 +29,52 @@ from video2notes.providers import (
     ProviderSpec,
 )
 from video2notes.sources import SourceInput
+from video2notes.system import (
+    AccelerationCapabilities,
+    EngineAcceleration,
+    GpuDevice,
+    HardwareSnapshot,
+)
+
+
+def _mixed_acceleration() -> AccelerationCapabilities:
+    return AccelerationCapabilities(
+        asr=EngineAcceleration(
+            engine="faster-whisper/CTranslate2",
+            cuda_available=True,
+            device_count=1,
+            supported_compute_types=("float16",),
+            reason="fixture CUDA ready",
+        ),
+        ocr=EngineAcceleration(
+            engine="PaddleOCR/PaddlePaddle",
+            cuda_available=False,
+            reason="fixture CPU Paddle runtime",
+        ),
+    )
+
+
+def _gpu_hardware() -> HardwareSnapshot:
+    return HardwareSnapshot(
+        os_name="Windows",
+        os_version="test",
+        architecture="AMD64",
+        cpu_name="fixture",
+        logical_cores=16,
+        memory_total_bytes=32 * 1024**3,
+        memory_available_bytes=24 * 1024**3,
+        disk_total_bytes=1024**4,
+        disk_available_bytes=512 * 1024**3,
+        gpus=(
+            GpuDevice(
+                name="NVIDIA fixture",
+                vendor="NVIDIA",
+                memory_total_bytes=24 * 1024**3,
+                memory_free_bytes=20 * 1024**3,
+            ),
+        ),
+        ffmpeg_hwaccels=("cuda",),
+    )
 
 
 class InMemoryKeyring:
@@ -108,6 +154,30 @@ class ApiAppTests(unittest.TestCase):
         )
         self.assertEqual(response.json()["performance"]["experience_mode"], "guided")
         self.assertIn("budget", response.json()["recommendation"])
+
+    def test_system_report_exposes_engine_specific_acceleration_and_mixed_plan(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "video2notes.api.app.detect_hardware",
+                return_value=_gpu_hardware(),
+            ),
+            patch(
+                "video2notes.api.app.detect_acceleration_capabilities",
+                return_value=_mixed_acceleration(),
+            ),
+        ):
+            response = self.client.get("/api/system", headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["acceleration"]["asr"]["cuda_available"])
+        self.assertFalse(payload["acceleration"]["ocr"]["cuda_available"])
+        for plan in payload["plans"].values():
+            self.assertEqual(plan["asr_device"], "cuda")
+            self.assertEqual(plan["ocr_device"], "cpu")
+            self.assertEqual(plan["concurrent_gpu_stages"], 1)
 
     def test_performance_settings_are_validated_persisted_and_applied(self) -> None:
         guided = self.client.get("/api/performance", headers=self.headers)
