@@ -482,6 +482,7 @@ class OptionalDownloaderTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(Path(str(calls[0]["local_dir"])), destination)
         self.assertTrue(Path(str(calls[0]["cache_dir"])).is_relative_to(destination))
+        self.assertIs(calls[0]["token"], False)
         self.assertNotIn("local_dir_use_symlinks", calls[0])
 
     def test_default_paddle_downloader_fetches_two_pinned_managed_snapshots(
@@ -513,6 +514,7 @@ class OptionalDownloaderTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(len(str(item["revision"])) == 40 for item in calls))
+        self.assertTrue(all(item["token"] is False for item in calls))
         self.assertIn("PP-OCRv5_mobile_det@", result.source_revision or "")
 
     def test_missing_huggingface_optional_dependency_is_actionable(self) -> None:

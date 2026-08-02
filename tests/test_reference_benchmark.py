@@ -134,6 +134,13 @@ class ReferenceBenchmarkTests(unittest.TestCase):
                     "video2notes.evaluation.reference_benchmark.render_comparison_markdown",
                     return_value="# comparison",
                 ),
+                patch(
+                    "video2notes.evaluation.reference_benchmark.write_reference_analysis",
+                    return_value=(
+                        root / "session" / "detailed-comparison.json",
+                        root / "session" / "detailed-comparison.md",
+                    ),
+                ) as detailed,
             ):
                 output = run_reference_session(
                     source=source,
@@ -151,6 +158,7 @@ class ReferenceBenchmarkTests(unittest.TestCase):
                 ["fast", "balanced", "accurate"],
             )
             self.assertEqual(compare.call_count, 1)
+            self.assertEqual(detailed.call_count, 1)
             self.assertEqual(output.read_text(encoding="utf-8"), "# comparison\n")
             manifest = json.loads(
                 (root / "session" / "benchmark-manifest.json").read_text(encoding="utf-8")
@@ -218,6 +226,13 @@ class ReferenceBenchmarkTests(unittest.TestCase):
                 patch(
                     "video2notes.evaluation.reference_benchmark.render_comparison_markdown",
                     return_value="# comparison",
+                ),
+                patch(
+                    "video2notes.evaluation.reference_benchmark.write_reference_analysis",
+                    return_value=(
+                        root / "session" / "detailed-comparison.json",
+                        root / "session" / "detailed-comparison.md",
+                    ),
                 ),
                 patch(
                     "video2notes.evaluation.reference_benchmark.detect_acceleration_capabilities",

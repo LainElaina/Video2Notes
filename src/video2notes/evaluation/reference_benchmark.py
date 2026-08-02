@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from video2notes.evaluation.diagnostics import compare_runs
+from video2notes.evaluation.reference_analysis import write_reference_analysis
 from video2notes.evaluation.render import render_comparison_markdown, render_json
 from video2notes.pipeline import PipelineRequest, Video2NotesPipeline
 from video2notes.providers import ModelRegistry
@@ -249,6 +250,10 @@ def run_reference_session(
     _atomic_write_text(root / "comparison.json", render_json(comparison))
     comparison_path = root / "comparison.md"
     _atomic_write_text(comparison_path, render_comparison_markdown(comparison))
+    detailed_json_path, detailed_markdown_path = write_reference_analysis(
+        root,
+        run_directories,
+    )
     _atomic_write_json(
         root / "session-result.json",
         {
@@ -256,6 +261,8 @@ def run_reference_session(
             "status": "completed",
             "comparison_markdown": str(comparison_path),
             "comparison_json": str(root / "comparison.json"),
+            "detailed_comparison_markdown": str(detailed_markdown_path),
+            "detailed_comparison_json": str(detailed_json_path),
             "run_directories": [str(item) for item in run_directories],
         },
     )

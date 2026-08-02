@@ -49,6 +49,9 @@ class HuggingFaceSnapshotDownloader:
         arguments: dict[str, object] = {
             "repo_id": manifest.source,
             "local_dir": str(destination),
+            # Catalog assets are public and pinned.  Never read or forward a
+            # user's global Hugging Face credential while preparing them.
+            "token": False,
             # New huggingface_hub releases use a small local-dir metadata cache;
             # older releases use this explicit cache. Both remain below app data.
             "cache_dir": str(destination / ".hf-cache"),
@@ -103,6 +106,7 @@ class PaddleHuggingFaceDownloader:
                 "revision": revision,
                 "local_dir": str(local_dir),
                 "cache_dir": str(local_dir / ".hf-cache"),
+                "token": False,
             }
             try:
                 snapshot_download(**arguments)
