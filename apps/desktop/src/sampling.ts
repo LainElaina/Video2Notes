@@ -11,7 +11,11 @@ export interface SamplingValidationResult {
 
 type SamplingDraft = Pick<
   DraftState,
-  'manifest' | 'samplingMode' | 'samplingIntervalSeconds' | 'samplingOverrides'
+  | 'manifest'
+  | 'processingScope'
+  | 'samplingMode'
+  | 'samplingIntervalSeconds'
+  | 'samplingOverrides'
 >
 
 interface NormalizedOverride {
@@ -37,6 +41,9 @@ const apiSamplingSpec = (mode: SamplingMode, intervalSeconds: number): ApiSampli
     : { mode }
 
 export function serializeSamplingPlan(draft: SamplingDraft): ApiSamplingPlan {
+  if (draft.processingScope === 'audio_only') {
+    return { default: { mode: 'skip' }, overrides: [] }
+  }
   return {
     default: apiSamplingSpec(draft.samplingMode, draft.samplingIntervalSeconds),
     overrides: draft.samplingOverrides.map(override => ({
@@ -50,6 +57,9 @@ export function serializeSamplingPlan(draft: SamplingDraft): ApiSamplingPlan {
 }
 
 export function validateSamplingDraft(draft: SamplingDraft): SamplingValidationResult {
+  if (draft.processingScope === 'audio_only') {
+    return { errors: [], fixedSampleCount: 0 }
+  }
   const errors: string[] = []
   const durationSeconds = draft.manifest?.durationSeconds
   const durationUs =

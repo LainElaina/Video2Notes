@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, AudioLines, Check, Plus, Trash2 } from 'lucide-react'
 import type { ReportPreset, SamplingMode } from '../domain'
 import {
   MAX_FIXED_SAMPLES,
@@ -55,6 +55,7 @@ export function CreateProcessingOptions() {
   const setReportPreset = useStudioStore(state => state.setReportPreset)
   const setIncludeScreenshots = useStudioStore(state => state.setIncludeScreenshots)
   const setGeneratePdf = useStudioStore(state => state.setGeneratePdf)
+  const audioOnly = draft.processingScope === 'audio_only'
   const validation = validateSamplingDraft(draft)
   const reportLanguage =
     draft.languageHints
@@ -64,30 +65,62 @@ export function CreateProcessingOptions() {
 
   return (
     <div className="create-processing-options">
-      <section className="create-advanced-panel" aria-labelledby="sampling-plan-title">
+      <section
+        className={`create-advanced-panel ${audioOnly ? 'is-audio-only' : ''}`}
+        aria-labelledby="sampling-plan-title"
+      >
         <div className="create-advanced-panel-heading">
           <div>
-            <span className="section-kicker">VISUAL SAMPLING</span>
-            <h4 id="sampling-plan-title">画面采样计划</h4>
-            <p>默认使用变化检测；只在确有节奏规律的片段使用固定间隔。</p>
+            <span className="section-kicker">
+              {audioOnly ? 'VISUAL BYPASS' : 'VISUAL SAMPLING'}
+            </span>
+            <h4 id="sampling-plan-title">
+              {audioOnly ? '本任务已跳过画面处理' : '画面采样计划'}
+            </h4>
+            <p>
+              {audioOnly
+                ? '后端以“仅识别音频”为准，不执行视觉扫描、OCR 或关键帧截图。'
+                : '默认使用变化检测；只在确有节奏规律的片段使用固定间隔。'}
+            </p>
           </div>
           <div className="create-sampling-budget">
             <span>
-              {draft.manifest
+              {audioOnly
+                ? '视觉预算 0 帧'
+                : draft.manifest
                 ? `视频 ${draft.manifest.durationSeconds.toFixed(1)}s`
                 : '探测后校验时长'}
             </span>
             <strong>
-              固定预算{' '}
-              {validation.fixedSampleCount === null
-                ? '—'
-                : validation.fixedSampleCount.toLocaleString('zh-CN')}{' '}
-              / {MAX_FIXED_SAMPLES.toLocaleString('zh-CN')}
+              {audioOnly ? (
+                'OCR 与截图关闭'
+              ) : (
+                <>
+                  固定预算{' '}
+                  {validation.fixedSampleCount === null
+                    ? '—'
+                    : validation.fixedSampleCount.toLocaleString('zh-CN')}{' '}
+                  / {MAX_FIXED_SAMPLES.toLocaleString('zh-CN')}
+                </>
+              )}
             </strong>
           </div>
         </div>
 
-        <div className="create-sampling-default">
+        {audioOnly ? (
+          <div className="create-audio-only-contract" role="note">
+            <AudioLines size={20} aria-hidden="true" />
+            <div>
+              <strong>保留音频识别与报告生成</strong>
+              <p>
+                平台字幕、音轨提取、语言识别、ASR、时间戳、事实融合与 Markdown / HTML / PDF
+                输出仍会运行。切回“完整音画”后，原来的画面采样设置会恢复。
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="create-sampling-default">
           <label>
             全局采样方式
             <select
@@ -115,9 +148,9 @@ export function CreateProcessingOptions() {
                 ?.description
             }
           </p>
-        </div>
+            </div>
 
-        <div className="create-sampling-overrides">
+            <div className="create-sampling-overrides">
           <div className="create-sampling-overrides-heading">
             <div>
               <strong>时间段覆盖</strong>
@@ -223,20 +256,22 @@ export function CreateProcessingOptions() {
               ))}
             </div>
           )}
-        </div>
-
-        {validation.errors.length > 0 && (
-          <div className="create-sampling-errors" role="alert">
-            <AlertTriangle size={16} aria-hidden="true" />
-            <div>
-              <strong>采样计划尚不能提交</strong>
-              <ul>
-                {validation.errors.map(error => (
-                  <li key={error}>{error}</li>
-                ))}
-              </ul>
             </div>
-          </div>
+
+            {validation.errors.length > 0 && (
+              <div className="create-sampling-errors" role="alert">
+                <AlertTriangle size={16} aria-hidden="true" />
+                <div>
+                  <strong>采样计划尚不能提交</strong>
+                  <ul>
+                    {validation.errors.map(error => (
+                      <li key={error}>{error}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </section>
 
@@ -301,16 +336,19 @@ export function CreateProcessingOptions() {
               <small>同时生成可打印离线版本</small>
             </span>
           </label>
-          <label className="create-output-toggle">
+          <label className={`create-output-toggle ${audioOnly ? 'is-disabled' : ''}`}>
             <input
               type="checkbox"
               aria-label="嵌入关键帧截图"
-              checked={draft.includeScreenshots}
+              checked={audioOnly ? false : draft.includeScreenshots}
+              disabled={audioOnly}
               onChange={event => setIncludeScreenshots(event.currentTarget.checked)}
             />
             <span>
               <strong>关键帧截图</strong>
-              <small>只嵌入证据筛选后的画面</small>
+              <small>
+                {audioOnly ? '仅音频模式自动关闭' : '只嵌入证据筛选后的画面'}
+              </small>
             </span>
           </label>
         </div>

@@ -90,9 +90,14 @@ export function RunPage() {
         <div className="run-summary-title">
           <div className={`status-indicator status-${task.status}`} aria-hidden="true" />
           <div>
-            <span className="section-kicker">
-              {task.mode.toUpperCase()} / {statusLabel[task.status]}
-            </span>
+            <div className="run-summary-kicker">
+              <span className="section-kicker">
+                {task.mode.toUpperCase()} / {statusLabel[task.status]}
+              </span>
+              <span className={`run-scope-badge scope-${task.processingScope}`}>
+                {task.processingScope === 'audio_only' ? '仅音频' : '完整音画'}
+              </span>
+            </div>
             <h2>{task.source.title}</h2>
             <p>
               {task.source.quality} · {task.source.audio} · {task.source.authLabel}

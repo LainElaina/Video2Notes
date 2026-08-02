@@ -1,6 +1,7 @@
 export type ViewId = 'create' | 'tasks' | 'reader' | 'models'
 export type SourcePlatform = 'bilibili' | 'youtube' | 'x' | 'local'
 export type ProcessingMode = 'fast' | 'balanced' | 'accurate'
+export type ProcessingScope = 'audio_visual' | 'audio_only'
 export type SamplingMode = 'adaptive' | 'fixed_interval' | 'skip'
 export type ReportPreset = 'concise' | 'detailed' | 'professional' | 'beginner' | 'executive'
 export type TaskStatus = 'running' | 'paused' | 'cancelled' | 'completed' | 'failed'
@@ -246,6 +247,7 @@ export interface ProcessingTask {
   id: string
   source: SourceManifest
   mode: ProcessingMode
+  processingScope: ProcessingScope
   status: TaskStatus
   progress: number
   etaSeconds: number
@@ -576,6 +578,7 @@ export interface BrowserProfile {
 export interface BackendProfile {
   mode: 'connecting' | 'real' | 'demo' | 'offline'
   version?: string
+  capabilities?: string[]
   detail: string
   dataRoot?: string
 }
@@ -591,6 +594,7 @@ export interface SamplingOverrideDraft {
 export interface DraftState {
   input: string
   mode: ProcessingMode
+  processingScope: ProcessingScope
   status: 'idle' | 'stale' | 'probing' | 'ready' | 'submitting' | 'error'
   error?: string
   manifest?: SourceManifest

@@ -96,9 +96,56 @@ describe('desktop workflow', () => {
 
     render(<App />)
 
-    expect(screen.getByText('本机预计 00:31–01:02 · 0.02–0.04×')).toBeInTheDocument()
-    expect(screen.getByText('预计耗时约视频时长的 0.55–1.0×')).toBeInTheDocument()
+    expect(screen.getByText('本机工程预算 00:31–01:02 · 0.02–0.04×')).toBeInTheDocument()
+    expect(screen.getByText('基准实测 3.68× · 探测后显示本机预算')).toBeInTheDocument()
     expect(screen.getByText(/未返回的模式继续显示通用区间/)).toBeInTheDocument()
+  })
+
+  it('reveals the measured tier reference inline and exposes honest performance scopes', () => {
+    render(<App />)
+
+    const guide = screen.getByRole('button', { name: /实测档位与性能说明/ })
+    expect(guide).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(guide)
+
+    expect(guide).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('table', { name: '完整视频三档处理指标' })).toBeVisible()
+    expect(screen.getByText('3013.919 秒')).toBeInTheDocument()
+    expect(screen.getByText(/墙钟时间占比，不是 CPU\/GPU 利用率/)).toBeInTheDocument()
+    expect(screen.getByText(/这些预算是允许上限/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: /仅识别音频/ }))
+    expect(useStudioStore.getState().draft.processingScope).toBe('audio_only')
+    expect(screen.getAllByText('仅音频 · 等待本机估算')).toHaveLength(3)
+    expect(screen.getByText(/专有名词仍应人工复核/)).toBeInTheDocument()
+
+    const details = document.querySelector<HTMLDetailsElement>('.advanced-options')
+    fireEvent.click(details!.querySelector('summary')!)
+    expect(screen.getByText('本任务已跳过画面处理')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '嵌入关键帧截图' })).toBeDisabled()
+  })
+
+  it('disables audio-only when the connected backend does not declare support', () => {
+    useStudioStore.setState({
+      backend: { mode: 'real', version: 'legacy', detail: 'legacy backend' },
+    })
+
+    render(<App />)
+
+    expect(screen.getByRole('radio', { name: /仅识别音频/ })).toBeDisabled()
+    expect(screen.getByText(/后端版本不支持仅音频/)).toBeInTheDocument()
+  })
+
+  it('locks both scope controls while a task submission is in flight', () => {
+    useStudioStore.setState(state => ({
+      submissionInFlight: true,
+      draft: { ...state.draft, status: 'submitting' },
+    }))
+
+    render(<App />)
+
+    expect(screen.getByRole('radio', { name: /完整音画/ })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /仅识别音频/ })).toBeDisabled()
   })
 
   it('adds and edits a fixed sampling override in advanced options', () => {

@@ -25,6 +25,7 @@ const manifest = (durationSeconds = 100): SourceManifest => ({
 const draft = (overrides: Partial<DraftState> = {}): DraftState => ({
   input: 'D:/clips/sampling-test.mp4',
   mode: 'balanced',
+  processingScope: 'audio_visual',
   status: 'ready',
   manifest: manifest(),
   sourceKind: 'local',
@@ -169,6 +170,33 @@ describe('desktop sampling plan contract', () => {
       language: 'zh-CN',
       include_screenshots: true,
       output_formats: ['markdown', 'html', 'pdf'],
+    })
+  })
+
+  it('serializes audio-only as an authoritative scope with visual safeguards', () => {
+    const value = draft({
+      processingScope: 'audio_only',
+      samplingMode: 'fixed_interval',
+      samplingIntervalSeconds: 0.05,
+      samplingOverrides: [
+        segment('ignored-visual-segment', 90, 120, {
+          mode: 'fixed_interval',
+          intervalSeconds: 0.01,
+        }),
+      ],
+      includeScreenshots: true,
+    })
+
+    expect(validateSamplingDraft(value)).toEqual({ errors: [], fixedSampleCount: 0 })
+    expect(serializeSamplingPlan(value)).toEqual({
+      default: { mode: 'skip' },
+      overrides: [],
+    })
+    expect(buildPipelineSubmission(value)).toMatchObject({
+      processing_scope: 'audio_only',
+      sampling_plan: { default: { mode: 'skip' }, overrides: [] },
+      include_screenshots: false,
+      report_spec: { include_screenshots: false },
     })
   })
 })

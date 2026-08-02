@@ -51,6 +51,7 @@ export function ReworkDrawer({
   const runAsrRework = useStudioStore(state => state.runAsrRework)
   const correctEvidence = useStudioStore(state => state.correctEvidence)
   const refreshOperations = useStudioStore(state => state.refreshOperations)
+  const audioOnly = task.processingScope === 'audio_only'
   const initialRange = useMemo(
     () =>
       clampInitialRange(
@@ -68,7 +69,7 @@ export function ReworkDrawer({
     task.evidence.find(item => item.id === selectedEvidenceId)?.id ??
     task.evidence[0]?.id ??
     ''
-  const [tab, setTab] = useState<ReworkTab>('vision')
+  const [tab, setTab] = useState<ReworkTab>(audioOnly ? 'asr' : 'vision')
   const [startSeconds, setStartSeconds] = useState(initialRange.start)
   const [endSeconds, setEndSeconds] = useState(initialRange.end)
   const [visionMode, setVisionMode] = useState<'adaptive' | 'fixed_interval'>(
@@ -114,6 +115,7 @@ export function ReworkDrawer({
         ) + 1
       : 0
   const visionValid =
+    !audioOnly &&
     rangeValid &&
     (visionMode === 'adaptive' ||
       (intervalSeconds >= 0.1 && fixedCount <= 5_000))
@@ -121,7 +123,7 @@ export function ReworkDrawer({
   const manualValid = Boolean(selectedEvidence && manualText.trim())
 
   const submitVision = () => {
-    if (!visionValid) return
+    if (audioOnly || !visionValid) return
     setPending('vision')
     runVisionRework(task.id, {
       startSeconds,
@@ -236,6 +238,8 @@ export function ReworkDrawer({
                 type="button"
                 role="tab"
                 aria-selected={tab === 'vision'}
+                disabled={audioOnly}
+                title={audioOnly ? '仅音频任务不能执行画面返工' : undefined}
                 onClick={() => setTab('vision')}
               >
                 <Eye size={15} aria-hidden="true" />
@@ -260,6 +264,13 @@ export function ReworkDrawer({
                 文字校正
               </button>
             </div>
+
+            {audioOnly && (
+              <p className="rework-explainer" role="status">
+                此任务以仅音频范围创建，后端未生成视觉基线，因此不能执行画面重新识别或 OCR
+                返工。语音返工与人工文字校正仍可使用。
+              </p>
+            )}
 
             {tab === 'vision' && (
               <div className="rework-tab-panel" role="tabpanel">
@@ -322,7 +333,7 @@ export function ReworkDrawer({
                 <button
                   type="button"
                   className="button button-primary"
-                  disabled={!visionValid || pending !== null}
+                  disabled={audioOnly || !visionValid || pending !== null}
                   onClick={submitVision}
                 >
                   <Eye size={15} aria-hidden="true" />

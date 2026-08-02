@@ -139,6 +139,7 @@ describe('real local API client', () => {
         prefer_hardlink: true,
       },
       quality_mode: 'balanced',
+      processing_scope: 'audio_visual',
       language_hints: ['zh-CN', 'en'],
       sampling_plan: {
         default: { mode: 'adaptive' },
@@ -199,6 +200,7 @@ describe('real local API client', () => {
         output_formats: ['markdown', 'html'],
       },
     })
+    expect(JSON.parse(String(calls[2].init.body))).not.toHaveProperty('processing_scope')
     expect(calls[3].url).toBe('http://127.0.0.1:43119/api/jobs/run%20%2F%2001/result')
     expect(calls[4]).toMatchObject({
       url: 'http://127.0.0.1:43119/api/providers/cloud%2Fone/secret',
@@ -299,6 +301,7 @@ describe('real local API client', () => {
       client.estimateProcessing({
         duration_seconds: 600,
         quality_mode: 'accurate',
+        processing_scope: 'audio_only',
         source_height: 1440,
         source_fps: 60,
       }),
@@ -312,6 +315,7 @@ describe('real local API client', () => {
     expect(JSON.parse(String(call.init.body))).toEqual({
       duration_seconds: 600,
       quality_mode: 'accurate',
+      processing_scope: 'audio_only',
       source_height: 1440,
       source_fps: 60,
     })

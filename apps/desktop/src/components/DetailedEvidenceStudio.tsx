@@ -191,6 +191,10 @@ export function DetailedEvidenceStudio({
               <dd>{task.mode.toUpperCase()}</dd>
             </div>
             <div>
+              <dt>处理范围</dt>
+              <dd>{task.processingScope === 'audio_only' ? '仅音频' : '完整音画'}</dd>
+            </div>
+            <div>
               <dt>画质</dt>
               <dd>{task.source.quality}</dd>
             </div>

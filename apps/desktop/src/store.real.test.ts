@@ -15,6 +15,14 @@ const json = (value: unknown, status = 200): Response =>
     headers: { 'Content-Type': 'application/json' },
   })
 
+const deferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>(next => {
+    resolve = next
+  })
+  return { promise, resolve }
+}
+
 const createdAt = '2026-07-28T12:00:00Z'
 const runtimeWarnings = ['CUDA OCR unavailable; CPU fallback selected.']
 const textMaterial: ApiRunMaterial = {
@@ -290,6 +298,7 @@ const runningRun: ApiRunManifest = {
     author: 'Video2Notes test',
   },
   profile: 'balanced' as const,
+  processing_scope: 'audio_visual' as const,
   status: 'running' as const,
   created_at: createdAt,
   updated_at: createdAt,
@@ -372,6 +381,9 @@ describe('studio store against the real loopback API contract', () => {
   let failedEstimateMode: 'fast' | 'balanced' | 'accurate' | undefined
   let listedRuns: ApiRunManifest[] = []
   let includeAcceleration = true
+  let includeProcessingScopeCapability = true
+  let probeGate: Promise<void> | undefined
+  let submissionGate: Promise<void> | undefined
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -393,6 +405,9 @@ describe('studio store against the real loopback API contract', () => {
     failedEstimateMode = undefined
     listedRuns = []
     includeAcceleration = true
+    includeProcessingScopeCapability = true
+    probeGate = undefined
+    submissionGate = undefined
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -407,7 +422,16 @@ describe('studio store against the real loopback API contract', () => {
       })
 
       if (url.pathname === '/api/health') {
-        return Promise.resolve(json({ status: 'ok', version: '0.1.0', scope: 'loopback' }))
+        return Promise.resolve(
+          json({
+            status: 'ok',
+            version: '0.1.0',
+            scope: 'loopback',
+            ...(includeProcessingScopeCapability
+              ? { capabilities: ['processing_scope_audio_only'] }
+              : {}),
+          }),
+        )
       }
       if (url.pathname === '/api/system') {
         return Promise.resolve(
@@ -558,7 +582,7 @@ describe('studio store against the real loopback API contract', () => {
       }
       if (url.pathname === '/api/runs') return Promise.resolve(json(listedRuns))
       if (url.pathname === '/api/sources/probe') {
-        return Promise.resolve(
+        const response = () =>
           json({
             platform: 'youtube',
             source: { kind: 'url', value: 'https://www.youtube.com/watch?v=real-api-test' },
@@ -581,8 +605,8 @@ describe('studio store against the real loopback API contract', () => {
             automatic_captions: {},
             selected_format_ids: ['137+140'],
             auth_kind: 'browser_profile',
-          }),
-        )
+          })
+        return probeGate ? probeGate.then(response) : Promise.resolve(response())
       }
       if (url.pathname === '/api/estimate' && method === 'POST') {
         const body = JSON.parse(String(init?.body)) as {
@@ -616,9 +640,9 @@ describe('studio store against the real loopback API contract', () => {
         )
       }
       if (url.pathname === '/api/jobs' && method === 'POST') {
-        return Promise.resolve(
-          json({ run: currentRun, job: currentJob, runtime_warnings: runtimeWarnings }),
-        )
+        const response = () =>
+          json({ run: currentRun, job: currentJob, runtime_warnings: runtimeWarnings })
+        return submissionGate ? submissionGate.then(response) : Promise.resolve(response())
       }
       if (url.pathname === '/api/jobs' && method === 'GET') return Promise.resolve(json([currentJob]))
       if (url.pathname === '/api/jobs/run-real-01/result') {
@@ -856,6 +880,7 @@ describe('studio store against the real loopback API contract', () => {
       draft: {
         input: '',
         mode: 'balanced',
+        processingScope: 'audio_visual',
         status: 'idle',
         sourceKind: 'url',
         authKind: 'none',
@@ -1009,6 +1034,11 @@ describe('studio store against the real loopback API contract', () => {
         expect.objectContaining({ quality_mode: 'accurate' }),
       ]),
     )
+    expect(
+      estimateRequests
+        .map(request => JSON.parse(request.body ?? '{}'))
+        .every(request => !('processing_scope' in request)),
+    ).toBe(true)
     expect(useStudioStore.getState().processingEstimates.accurate).toMatchObject({
       hardwareTier: 'gpu_12gb',
       lowerRealtimeFactor: 0.2,
@@ -1039,6 +1069,7 @@ describe('studio store against the real loopback API contract', () => {
         output_formats: ['markdown', 'html', 'pdf'],
       },
     })
+    expect(JSON.parse(submission?.body ?? '{}')).not.toHaveProperty('processing_scope')
 
     useStudioStore.getState().refreshTasks()
     await vi.waitFor(() =>
@@ -1049,6 +1080,7 @@ describe('studio store against the real loopback API contract', () => {
     )
     expect(useStudioStore.getState().tasks[0]).toMatchObject({
       id: 'run-real-01',
+      processingScope: 'audio_visual',
       status: 'running',
       lastMessage: '正在校准语音时间戳',
       runtimeWarnings,
@@ -1453,6 +1485,95 @@ describe('studio store against the real loopback API contract', () => {
       primary_model_id: 'asr-main',
       fallback_model_ids: [],
     })
+  })
+
+  it('keeps the first source probe alive across scope changes and estimates the latest scope', async () => {
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+    const gate = deferred<void>()
+    probeGate = gate.promise
+    const store = useStudioStore.getState()
+    store.setDraftInput('https://www.youtube.com/watch?v=scope-during-probe')
+    store.probeSource()
+    expect(useStudioStore.getState().draft.status).toBe('probing')
+
+    store.setProcessingScope('audio_only')
+    expect(useStudioStore.getState().draft).toMatchObject({
+      status: 'probing',
+      processingScope: 'audio_only',
+    })
+    gate.resolve()
+
+    await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().processingEstimateStatus).toBe('ready'),
+    )
+    expect(requests.filter(request => request.url === '/api/sources/probe')).toHaveLength(1)
+    const estimates = requests
+      .filter(request => request.url === '/api/estimate')
+      .map(request => JSON.parse(request.body ?? '{}'))
+    expect(estimates).toHaveLength(3)
+    expect(estimates.every(request => request.processing_scope === 'audio_only')).toBe(true)
+  })
+
+  it('keeps submission locked and ignores stale draft completion updates', async () => {
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+    await vi.waitFor(() => expect(useStudioStore.getState().tasks).toHaveLength(1))
+    const store = useStudioStore.getState()
+    store.setDraftInput('https://www.youtube.com/watch?v=deferred-submit')
+    store.probeSource()
+    await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
+
+    const gate = deferred<void>()
+    submissionGate = gate.promise
+    currentRun = { ...runningRun, processing_scope: 'audio_only' }
+    useStudioStore.getState().createTask()
+    expect(useStudioStore.getState().submissionInFlight).toBe(true)
+    expect(useStudioStore.getState().draft.status).toBe('submitting')
+
+    useStudioStore.getState().setProcessingScope('audio_only')
+    expect(useStudioStore.getState().draft.processingScope).toBe('audio_visual')
+    useStudioStore
+      .getState()
+      .setDraftInput('https://www.youtube.com/watch?v=newer-draft')
+    useStudioStore.getState().createTask()
+    expect(
+      requests.filter(
+        request => request.url === '/api/jobs' && request.method === 'POST',
+      ),
+    ).toHaveLength(1)
+
+    gate.resolve()
+    await vi.waitFor(() => expect(useStudioStore.getState().submissionInFlight).toBe(false))
+    await vi.waitFor(() =>
+      expect(
+        useStudioStore.getState().tasks.filter(task => task.id === 'run-real-01'),
+      ).toHaveLength(1),
+    )
+    expect(useStudioStore.getState().tasks[0].processingScope).toBe('audio_only')
+    expect(useStudioStore.getState().draft).toMatchObject({
+      input: 'https://www.youtube.com/watch?v=newer-draft',
+      status: 'stale',
+      processingScope: 'audio_visual',
+    })
+    expect(useStudioStore.getState().view).toBe('create')
+    expect(
+      requests.filter(
+        request => request.url === '/api/jobs' && request.method === 'POST',
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('treats a legacy health response without capabilities as full-scope only', async () => {
+    includeProcessingScopeCapability = false
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+
+    expect(useStudioStore.getState().backend.capabilities).toEqual([])
+    useStudioStore.getState().setProcessingScope('audio_only')
+    expect(useStudioStore.getState().draft.processingScope).toBe('audio_visual')
+    expect(useStudioStore.getState().notice).toContain('后端版本不支持仅音频')
   })
 
   it('uses an honest CPU fallback when an older backend omits acceleration capabilities', async () => {

@@ -81,6 +81,79 @@ describe('studio store', () => {
     expect(useStudioStore.getState().draft.error).toContain('重新探测')
   })
 
+  it('defaults to full audio-visual processing and reuses the source probe when scope changes', () => {
+    const store = useStudioStore.getState()
+    expect(store.draft.processingScope).toBe('audio_visual')
+    store.probeSource()
+    const previousManifest = useStudioStore.getState().draft.manifest
+
+    store.setProcessingScope('audio_only')
+
+    expect(useStudioStore.getState().draft).toMatchObject({
+      processingScope: 'audio_only',
+      status: 'ready',
+    })
+    expect(useStudioStore.getState().draft.manifest).toBe(previousManifest)
+    expect(useStudioStore.getState().processingEstimates).toEqual({})
+  })
+
+  it('does not expose audio-only to a real backend without the declared capability', () => {
+    useStudioStore.setState({
+      backend: { mode: 'real', version: 'legacy', detail: 'legacy backend' },
+    })
+
+    useStudioStore.getState().setProcessingScope('audio_only')
+
+    expect(useStudioStore.getState().draft.processingScope).toBe('audio_visual')
+    expect(useStudioStore.getState().notice).toContain('后端版本不支持仅音频')
+  })
+
+  it('keeps audio-only demo tasks free of visual evidence, stages, screenshots, and rework', () => {
+    const store = useStudioStore.getState()
+    store.probeSource()
+    store.setProcessingScope('audio_only')
+    store.createTask()
+    const taskId = useStudioStore.getState().tasks[0].id
+    let task = useStudioStore.getState().tasks[0]
+
+    expect(task.processingScope).toBe('audio_only')
+    expect(task.evidence.every(item => item.kind !== 'ocr' && item.kind !== 'visual')).toBe(true)
+    expect(task.stages.some(stage => stage.id === 'vision')).toBe(false)
+    expect(task.telemetry.some(sample => sample.stage === 'vision.scan')).toBe(false)
+
+    useStudioStore.setState(state => ({
+      tasks: state.tasks.map(item =>
+        item.id === taskId ? { ...item, progress: 99.9 } : item,
+      ),
+    }))
+    useStudioStore.getState().advanceTasks()
+    task = useStudioStore.getState().tasks.find(item => item.id === taskId)!
+    expect(task.status).toBe('completed')
+    expect(task.telemetry.at(-1)?.metrics).toMatchObject({
+      embedded_screenshot_count: 0,
+    })
+    expect(
+      task.note?.sections.every(
+        section =>
+          section.screenshotAt === undefined &&
+          section.screenshotPath === undefined &&
+          section.screenshotUrl === undefined,
+      ),
+    ).toBe(true)
+
+    const operationCount = task.operations.length
+    useStudioStore.getState().runVisionRework(taskId, {
+      startSeconds: 0,
+      endSeconds: 10,
+      mode: 'adaptive',
+      runOcr: true,
+    })
+    expect(
+      useStudioStore.getState().tasks.find(item => item.id === taskId)?.operations,
+    ).toHaveLength(operationCount)
+    expect(useStudioStore.getState().notice).toContain('仅音频任务没有视觉基线')
+  })
+
   it('loads the redistributable demo media without an account', () => {
     useStudioStore.getState().chooseBundledDemo()
 

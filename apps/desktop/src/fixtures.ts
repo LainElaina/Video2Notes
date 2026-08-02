@@ -4,6 +4,7 @@ import type {
   MachineProfile,
   ModelDefinition,
   NoteDocument,
+  ProcessingScope,
   ProcessingTask,
   ProviderDefinition,
   RoleBinding,
@@ -293,18 +294,36 @@ const demoStageData: Record<
   },
 }
 
-export const makeStages = (progress: number): TaskStage[] => {
-  const activeIndex = Math.min(stageBlueprint.length - 1, Math.floor(progress / 12.5))
-  return stageBlueprint.map(([id, label, detail], index) => {
+export const makeStages = (
+  progress: number,
+  processingScope: ProcessingScope = 'audio_visual',
+): TaskStage[] => {
+  const visibleStages =
+    processingScope === 'audio_only'
+      ? stageBlueprint.filter(([id]) => id !== 'vision')
+      : [...stageBlueprint]
+  const stageSpan = 100 / visibleStages.length
+  const activeIndex = Math.min(
+    visibleStages.length - 1,
+    Math.floor(progress / stageSpan),
+  )
+  return visibleStages.map(([id, label, detail], index) => {
     const completed = progress >= 100 || index < activeIndex
     const running = progress < 100 && index === activeIndex
     const hasStarted = completed || running
     const localProgress = completed
       ? 100
       : running
-        ? Math.min(96, Math.round(((progress % 12.5) / 12.5) * 100))
+        ? Math.min(96, Math.round(((progress % stageSpan) / stageSpan) * 100))
         : 0
     const demo = demoStageData[id]
+    const metrics = hasStarted ? { ...demo.metrics } : {}
+    if (processingScope === 'audio_only' && id === 'fusion' && hasStarted) {
+      metrics.evidence_count = demoEvidenceForScope(processingScope).length
+    }
+    if (processingScope === 'audio_only' && id === 'render' && hasStarted) {
+      metrics.embedded_screenshot_count = 0
+    }
     const outputArtifacts = completed
       ? [
           {
@@ -326,7 +345,7 @@ export const makeStages = (progress: number): TaskStage[] => {
       progress: localProgress,
       durationSeconds: completed ? 7 + index * 5 : undefined,
       artifactCount: outputArtifacts.length,
-      metrics: hasStarted ? { ...demo.metrics } : {},
+      metrics,
       warnings: hasStarted ? [...(demo.warnings ?? [])] : [],
       outputArtifacts,
       metric: hasStarted ? demo.metric : undefined,
@@ -385,8 +404,9 @@ export const makeDemoMaterials = (runId: string): SupportingMaterial[] => {
 export const makeDemoTelemetry = (
   progress: number,
   runId = 'demo-fixture',
+  processingScope: ProcessingScope = 'audio_visual',
 ): TelemetrySample[] =>
-  makeStages(progress)
+  makeStages(progress, processingScope)
     .filter(stage => stage.status !== 'pending')
     .map((stage, index, samples) => ({
       sequence: index + 1,
@@ -535,6 +555,11 @@ export const evidenceFixture: EvidenceItem[] = [
   },
 ]
 
+export const demoEvidenceForScope = (processingScope: ProcessingScope): EvidenceItem[] =>
+  processingScope === 'audio_only'
+    ? evidenceFixture.filter(item => item.kind !== 'ocr' && item.kind !== 'visual')
+    : evidenceFixture
+
 export const noteFixture: NoteDocument = {
   title: '从视频到可追溯知识：统一证据时间轴',
   overview:
@@ -619,11 +644,39 @@ export const noteFixture: NoteDocument = {
   ],
 }
 
+export const demoNoteForScope = (processingScope: ProcessingScope): NoteDocument => {
+  if (processingScope === 'audio_visual') return noteFixture
+  const allowedEvidenceIds = new Set(
+    demoEvidenceForScope(processingScope).map(item => item.id),
+  )
+  return {
+    ...noteFixture,
+    overview:
+      '仅音频演示把平台字幕与语音证据对齐到同一条可核验时间线，不生成 OCR、视觉状态或关键帧截图。',
+    sourceSummary: `Bilibili · 25:18 · 1080p · Accurate · ${allowedEvidenceIds.size} 条音频与章节证据`,
+    sections: noteFixture.sections.map(section => {
+      const audioSection = { ...section }
+      delete audioSection.screenshotAt
+      delete audioSection.screenshotPath
+      delete audioSection.screenshotUrl
+      delete audioSection.screenshotCaption
+      return {
+        ...audioSection,
+        claims: section.claims.map(claim => ({
+          ...claim,
+          evidenceIds: claim.evidenceIds.filter(id => allowedEvidenceIds.has(id)),
+        })),
+      }
+    }),
+  }
+}
+
 export const makeTaskFixtures = (): ProcessingTask[] => [
   {
     id: 'task-running',
     source: runningSourceFixture,
     mode: 'accurate',
+    processingScope: 'audio_visual',
     status: 'running',
     progress: 36,
     etaSeconds: 1062,
@@ -639,6 +692,7 @@ export const makeTaskFixtures = (): ProcessingTask[] => [
     id: 'task-complete',
     source: completedSourceFixture,
     mode: 'accurate',
+    processingScope: 'audio_visual',
     status: 'completed',
     progress: 100,
     etaSeconds: 0,

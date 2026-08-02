@@ -36,15 +36,15 @@ import type {
 } from './api'
 import {
   componentReportFixture,
+  demoEvidenceForScope,
+  demoNoteForScope,
   demoRuntimeWarnings,
-  evidenceFixture,
   machineFixture,
   makeDemoMaterials,
   makeDemoTelemetry,
   makeStages,
   makeTaskFixtures,
   modelFixtures,
-  noteFixture,
   providerFixtures,
   roleFixtures,
 } from './fixtures'
@@ -122,6 +122,7 @@ interface StudioData {
   processingEstimates: Partial<Record<ProcessingMode, ProcessingEstimate>>
   processingEstimateStatus: ProcessingEstimateStatus
   processingEstimateError?: string
+  submissionInFlight: boolean
   discoveredModels: DiscoveredModelDefinition[]
   discoveryProviderId?: string
   providerDiscoveryStatus: 'idle' | 'loading' | 'ready' | 'error'
@@ -136,6 +137,7 @@ interface StudioActions {
   setTaskSearch: (value: string) => void
   setDraftInput: (input: string) => void
   setDraftMode: (mode: ProcessingMode) => void
+  setProcessingScope: (scope: DraftState['processingScope']) => void
   setDraftAuthKind: (kind: DraftState['authKind']) => void
   setDraftBrowser: (browser: DraftState['browser']) => void
   setDraftProfile: (profile: string) => void
@@ -153,6 +155,7 @@ interface StudioActions {
   removeSamplingOverride: (id: string) => void
   setReportPreset: (preset: DraftState['reportPreset']) => void
   probeSource: () => void
+  refreshProcessingEstimates: () => void
   chooseLocalFile: () => void
   chooseBundledDemo: () => void
   selectLocalFile: (fileName: string, sizeBytes: number) => void
@@ -276,6 +279,26 @@ let demoMaterialSequence = 0
 let demoOperationSequence = 0
 let samplingOverrideSequence = 0
 let sourceProbeSequence = 0
+let processingEstimateSequence = 0
+let submissionSequence = 0
+
+interface ProcessingEstimateContext {
+  manifestId: string
+  mediaProfile: { source_height?: number; source_fps?: number }
+}
+
+let processingEstimateContext: ProcessingEstimateContext | undefined
+
+export const AUDIO_ONLY_PROCESSING_CAPABILITY = 'processing_scope_audio_only'
+
+export const backendSupportsAudioOnly = (backend: BackendProfile): boolean =>
+  backend.mode === 'demo' ||
+  Boolean(backend.capabilities?.includes(AUDIO_ONLY_PROCESSING_CAPABILITY))
+
+const invalidateProcessingEstimateContext = (): void => {
+  processingEstimateSequence += 1
+  processingEstimateContext = undefined
+}
 
 const MICROSECONDS_PER_SECOND = 1_000_000
 const MIN_OPERATION_INTERVAL_US = 100_000
@@ -554,6 +577,7 @@ const demoRoles = (): RoleBinding[] =>
 const emptyDraft = (): DraftState => ({
   input: '',
   mode: 'balanced',
+  processingScope: 'audio_visual',
   status: 'idle',
   sourceKind: 'url',
   authKind: 'none',
@@ -583,7 +607,12 @@ const initialData = (demo = false): StudioData => ({
   currentTimeSeconds: demo ? 92 : 0,
   taskSearch: '',
   backend: demo
-    ? { mode: 'demo', version: 'fixture', detail: '显式视觉演示；未连接处理后端' }
+    ? {
+        mode: 'demo',
+        version: 'fixture',
+        capabilities: [AUDIO_ONLY_PROCESSING_CAPABILITY],
+        detail: '显式视觉演示；未连接处理后端',
+      }
     : { mode: 'connecting', detail: '正在启动本机处理后端…' },
   machine: demo
     ? machineFixture
@@ -617,6 +646,7 @@ const initialData = (demo = false): StudioData => ({
     : [],
   processingEstimates: {},
   processingEstimateStatus: 'idle',
+  submissionInFlight: false,
   discoveredModels: [],
   providerDiscoveryStatus: 'idle',
 })
@@ -811,19 +841,22 @@ export const buildPipelineSubmission = (draft: DraftState): PipelineSubmission =
     .filter(Boolean)
   const reportLanguage =
     languageHints.find(value => value.toLowerCase() !== 'auto') ?? 'zh-CN'
+  const includeScreenshots =
+    draft.processingScope === 'audio_visual' && draft.includeScreenshots
   return {
     source: sourceInput(draft),
     auth: authSpec(draft),
     acquisition: acquisitionPolicy(draft.mode),
     quality_mode: draft.mode,
+    processing_scope: draft.processingScope,
     language_hints: languageHints,
     sampling_plan: serializeSamplingPlan(draft),
-    include_screenshots: draft.includeScreenshots,
+    include_screenshots: includeScreenshots,
     generate_pdf: draft.generatePdf,
     report_spec: {
       preset: draft.reportPreset,
       language: reportLanguage,
-      include_screenshots: draft.includeScreenshots,
+      include_screenshots: includeScreenshots,
       output_formats: draft.generatePdf
         ? ['markdown', 'html', 'pdf']
         : ['markdown', 'html'],
@@ -1314,6 +1347,7 @@ const taskFromRun = (
     id: run.run_id,
     source,
     mode: run.profile,
+    processingScope: run.processing_scope ?? 'audio_visual',
     status: taskStatus(run, job),
     progress: overallProgress(run, job),
     etaSeconds: 0,
@@ -2138,6 +2172,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           backend: {
             mode: 'real',
             version: health.version,
+            capabilities: health.capabilities ?? [],
             detail:
               warnings.length > 0
                 ? `本地后端可用 · ${warnings.length} 条模型配置提示`
@@ -2285,6 +2320,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   setDraftInput: input => {
     if (input === get().draft.input) return
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     set(state => ({
       draft: invalidateProbedDraft(state.draft, {
         input,
@@ -2302,6 +2338,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   setDraftMode: mode => {
     if (mode === get().draft.mode) return
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     set(state => ({
       draft: invalidateProbedDraft(state.draft, { mode }),
       processingEstimates: {},
@@ -2309,9 +2346,30 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimateError: undefined,
     }))
   },
+  setProcessingScope: processingScope => {
+    if (processingScope === get().draft.processingScope) return
+    if (get().submissionInFlight || get().draft.status === 'submitting') return
+    if (processingScope === 'audio_only' && !backendSupportsAudioOnly(get().backend)) {
+      set({ notice: '后端版本不支持仅音频；请升级本地后端后再试。' })
+      return
+    }
+    processingEstimateSequence += 1
+    set(state => ({
+      draft: {
+        ...state.draft,
+        processingScope,
+        error: undefined,
+      },
+      processingEstimates: {},
+      processingEstimateStatus: 'idle',
+      processingEstimateError: undefined,
+    }))
+    get().refreshProcessingEstimates()
+  },
   setDraftAuthKind: authKind => {
     if (authKind === get().draft.authKind) return
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     set(state => ({
       draft: invalidateProbedDraft(state.draft, { authKind }),
       processingEstimates: {},
@@ -2322,6 +2380,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   setDraftBrowser: browser => {
     if (browser === get().draft.browser) return
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     set(state => ({
       draft: invalidateProbedDraft(state.draft, { browser, profile: '' }),
       processingEstimates: {},
@@ -2332,6 +2391,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   setDraftProfile: profile => {
     if (profile === get().draft.profile) return
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     set(state => ({
       draft: invalidateProbedDraft(state.draft, { profile }),
       processingEstimates: {},
@@ -2342,6 +2402,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   setDraftCookieFile: cookieFile => {
     if (cookieFile === get().draft.cookieFile) return
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     set(state => ({
       draft: invalidateProbedDraft(state.draft, { cookieFile }),
       processingEstimates: {},
@@ -2403,6 +2464,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       return
     }
     const probeId = ++sourceProbeSequence
+    invalidateProcessingEstimateContext()
     set({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
@@ -2458,52 +2520,17 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .then(raw => {
         if (probeId !== sourceProbeSequence) return
         const manifest = mapSource(raw, draft)
+        processingEstimateContext = {
+          manifestId: manifest.id,
+          mediaProfile: estimateMediaProfile(raw),
+        }
         set(state => ({
           draft: { ...state.draft, status: 'ready', manifest, error: undefined },
-          processingEstimateStatus: 'loading',
+          processingEstimateStatus: 'idle',
           processingEstimateError: undefined,
           notice: raw.quality_warning || `已探测 ${manifest.quality}；下载会校验实际格式。`,
         }))
-        const mediaProfile = estimateMediaProfile(raw)
-        void Promise.allSettled(
-          processingModes.map(mode =>
-            api!.estimateProcessing({
-              duration_seconds: manifest.durationSeconds,
-              quality_mode: mode,
-              ...mediaProfile,
-            }),
-          ),
-        ).then(results => {
-          if (
-            probeId !== sourceProbeSequence ||
-            get().draft.status !== 'ready' ||
-            get().draft.manifest?.id !== manifest.id
-          ) {
-            return
-          }
-          const estimates: Partial<Record<ProcessingMode, ProcessingEstimate>> = {}
-          const failures: string[] = []
-          results.forEach((result, index) => {
-            const mode = processingModes[index]
-            if (result.status === 'fulfilled') {
-              estimates[mode] = mapProcessingEstimate(result.value)
-            } else {
-              failures.push(`${mode}: ${errorMessage(result.reason)}`)
-            }
-          })
-          const successCount = Object.keys(estimates).length
-          set({
-            processingEstimates: estimates,
-            processingEstimateStatus:
-              successCount === processingModes.length
-                ? 'ready'
-                : successCount > 0
-                  ? 'partial'
-                  : 'error',
-            processingEstimateError:
-              failures.length > 0 ? [...new Set(failures)].join('；') : undefined,
-          })
-        })
+        get().refreshProcessingEstimates()
       })
       .catch(error => {
         if (probeId !== sourceProbeSequence) return
@@ -2514,6 +2541,82 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           processingEstimateError: undefined,
         }))
       })
+  },
+
+  refreshProcessingEstimates: () => {
+    const client = api
+    const draft = get().draft
+    const manifest = draft.manifest
+    const context = processingEstimateContext
+    if (
+      !client ||
+      get().backend.mode !== 'real' ||
+      draft.status !== 'ready' ||
+      !manifest ||
+      !context ||
+      context.manifestId !== manifest.id
+    ) {
+      return
+    }
+    if (
+      draft.processingScope === 'audio_only' &&
+      !backendSupportsAudioOnly(get().backend)
+    ) {
+      set({
+        processingEstimates: {},
+        processingEstimateStatus: 'error',
+        processingEstimateError: '后端版本不支持仅音频。',
+      })
+      return
+    }
+    const estimateId = ++processingEstimateSequence
+    const processingScope = draft.processingScope
+    set({
+      processingEstimates: {},
+      processingEstimateStatus: 'loading',
+      processingEstimateError: undefined,
+    })
+    void Promise.allSettled(
+      processingModes.map(mode =>
+        client.estimateProcessing({
+          duration_seconds: manifest.durationSeconds,
+          quality_mode: mode,
+          processing_scope: processingScope,
+          ...context.mediaProfile,
+        }),
+      ),
+    ).then(results => {
+      if (
+        estimateId !== processingEstimateSequence ||
+        get().draft.status !== 'ready' ||
+        get().draft.manifest?.id !== manifest.id ||
+        get().draft.processingScope !== processingScope
+      ) {
+        return
+      }
+      const estimates: Partial<Record<ProcessingMode, ProcessingEstimate>> = {}
+      const failures: string[] = []
+      results.forEach((result, index) => {
+        const mode = processingModes[index]
+        if (result.status === 'fulfilled') {
+          estimates[mode] = mapProcessingEstimate(result.value)
+        } else {
+          failures.push(`${mode}: ${errorMessage(result.reason)}`)
+        }
+      })
+      const successCount = Object.keys(estimates).length
+      set({
+        processingEstimates: estimates,
+        processingEstimateStatus:
+          successCount === processingModes.length
+            ? 'ready'
+            : successCount > 0
+              ? 'partial'
+              : 'error',
+        processingEstimateError:
+          failures.length > 0 ? [...new Set(failures)].join('；') : undefined,
+      })
+    })
   },
 
   chooseLocalFile: () => {
@@ -2548,6 +2651,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
 
   selectLocalFile: (fileName, sizeBytes) => {
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
     if (get().backend.mode === 'demo') {
       const sizeMb = Math.max(1, Math.round(sizeBytes / 1024 / 1024))
       const manifest: SourceManifest = {
@@ -2602,7 +2706,24 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   },
 
   createTask: () => {
+    if (get().submissionInFlight || get().draft.status === 'submitting') {
+      set({ notice: '已有任务正在提交，请等待本次提交确认。' })
+      return
+    }
     const draft = get().draft
+    if (
+      draft.processingScope === 'audio_only' &&
+      !backendSupportsAudioOnly(get().backend)
+    ) {
+      set(state => ({
+        draft: {
+          ...state.draft,
+          error: '后端版本不支持仅音频；请升级本地后端后再试。',
+        },
+        notice: '任务未提交：后端版本不支持仅音频。',
+      }))
+      return
+    }
     if (draft.status !== 'ready' || !draft.manifest) {
       set(state => ({
         draft: {
@@ -2625,20 +2746,22 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     }
     if (get().backend.mode === 'demo') {
       const taskId = `task-${Date.now().toString(36)}`
+      const demoEvidence = demoEvidenceForScope(draft.processingScope)
       const task: ProcessingTask = {
         id: taskId,
         source: draft.manifest,
         mode: draft.mode,
+        processingScope: draft.processingScope,
         status: 'running',
         progress: 0,
         etaSeconds: draft.mode === 'fast' ? 520 : draft.mode === 'balanced' ? 780 : 1140,
         createdAt: '刚刚',
-        stages: makeStages(0),
-        telemetry: makeDemoTelemetry(0, taskId),
+        stages: makeStages(0, draft.processingScope),
+        telemetry: makeDemoTelemetry(0, taskId, draft.processingScope),
         runtimeWarnings: [...demoRuntimeWarnings],
         materials: makeDemoMaterials(taskId),
         operations: [],
-        evidence: evidenceFixture.slice(0, 3),
+        evidence: demoEvidence.slice(0, 3),
       }
       set(state => ({
         tasks: [task, ...state.tasks],
@@ -2652,11 +2775,18 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set({ notice: '本地后端尚未连接。' })
       return
     }
+    const client = api
     const submission = buildPipelineSubmission(draft)
-    set(state => ({ draft: { ...state.draft, status: 'submitting', error: undefined } }))
-    void api
+    const submissionId = ++submissionSequence
+    const submittedProbeSequence = sourceProbeSequence
+    set(state => ({
+      submissionInFlight: true,
+      draft: { ...state.draft, status: 'submitting', error: undefined },
+    }))
+    void client
       .submitJob(submission)
       .then(response => {
+        if (submissionId !== submissionSequence) return
         sourceByRun.set(response.run.run_id, draft.manifest!)
         submissionByRun.set(response.run.run_id, submission)
         const task = taskFromRun(
@@ -2665,20 +2795,44 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           draft.manifest,
           response.runtime_warnings,
         )
-        set(state => ({
-          draft: { ...state.draft, status: 'ready' },
-          tasks: [task, ...state.tasks],
-          activeTaskId: task.id,
-          view: 'tasks',
-          notice:
-            response.runtime_warnings[0] || `真实任务 ${task.id} 已提交到本机处理队列。`,
-        }))
+        set(state => {
+          const submittedDraftStillCurrent =
+            sourceProbeSequence === submittedProbeSequence &&
+            state.draft.status === 'submitting'
+          return {
+            submissionInFlight: false,
+            draft: submittedDraftStillCurrent
+              ? { ...state.draft, status: 'ready', error: undefined }
+              : state.draft,
+            tasks: [task, ...state.tasks.filter(item => item.id !== task.id)],
+            activeTaskId: submittedDraftStillCurrent ? task.id : state.activeTaskId,
+            view: submittedDraftStillCurrent ? 'tasks' : state.view,
+            notice:
+              response.runtime_warnings[0] ||
+              (submittedDraftStillCurrent
+                ? `真实任务 ${task.id} 已提交到本机处理队列。`
+                : `较早的草稿已提交为任务 ${task.id}；当前草稿保持不变。`),
+          }
+        })
       })
-      .catch(error =>
-        set(state => ({
-          draft: { ...state.draft, status: 'error', error: errorMessage(error) },
-        })),
-      )
+      .catch(error => {
+        if (submissionId !== submissionSequence) return
+        const message = errorMessage(error)
+        set(state => {
+          const submittedDraftStillCurrent =
+            sourceProbeSequence === submittedProbeSequence &&
+            state.draft.status === 'submitting'
+          return {
+            submissionInFlight: false,
+            draft: submittedDraftStillCurrent
+              ? { ...state.draft, status: 'error', error: message }
+              : state.draft,
+            notice: submittedDraftStillCurrent
+              ? state.notice
+              : `较早的任务提交失败：${message}；当前草稿保持不变。`,
+          }
+        })
+      })
   },
 
   advanceTasks: () => {
@@ -2693,21 +2847,22 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         const step = task.mode === 'fast' ? 1.1 : task.mode === 'balanced' ? 0.82 : 0.65
         const progress = Math.min(100, Number((task.progress + step).toFixed(2)))
         const completed = progress >= 100
+        const demoEvidence = demoEvidenceForScope(task.processingScope)
         return {
           ...task,
           progress,
           status: completed ? 'completed' : 'running',
           etaSeconds: completed ? 0 : Math.max(0, task.etaSeconds - 1),
-          stages: makeStages(progress),
-          telemetry: makeDemoTelemetry(progress, task.id),
+          stages: makeStages(progress, task.processingScope),
+          telemetry: makeDemoTelemetry(progress, task.id, task.processingScope),
           evidence:
-            progress > 55 && task.evidence.length < evidenceFixture.length
-              ? evidenceFixture.slice(
+            progress > 55 && task.evidence.length < demoEvidence.length
+              ? demoEvidence.slice(
                   0,
-                  Math.max(3, Math.ceil((progress / 100) * evidenceFixture.length)),
+                  Math.max(3, Math.ceil((progress / 100) * demoEvidence.length)),
                 )
               : task.evidence,
-          note: completed ? noteFixture : task.note,
+          note: completed ? demoNoteForScope(task.processingScope) : task.note,
         }
       }),
     }))
@@ -2786,8 +2941,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
                 status: 'running',
                 progress: 0,
                 etaSeconds: task.mode === 'fast' ? 520 : 1140,
-                stages: makeStages(0),
-                telemetry: makeDemoTelemetry(0, task.id),
+                stages: makeStages(0, task.processingScope),
+                telemetry: makeDemoTelemetry(0, task.id, task.processingScope),
                 runtimeWarnings: [...demoRuntimeWarnings],
                 note: undefined,
               }
@@ -2886,6 +3041,10 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要执行视觉返工的任务。' })
+      return
+    }
+    if (task.processingScope === 'audio_only') {
+      set({ notice: '仅音频任务没有视觉基线，不能执行画面或 OCR 返工。' })
       return
     }
     if (task.status !== 'completed') {
@@ -4128,6 +4287,8 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     demoOperationSequence = 0
     samplingOverrideSequence = 0
     sourceProbeSequence += 1
+    invalidateProcessingEstimateContext()
+    submissionSequence += 1
     sourceByRun.clear()
     submissionByRun.clear()
     for (const url of objectUrls.values()) URL.revokeObjectURL(url)

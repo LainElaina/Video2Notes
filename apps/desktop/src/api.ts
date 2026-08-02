@@ -122,6 +122,7 @@ export interface ApiSourceManifest {
 export interface ApiProcessingEstimateRequest {
   duration_seconds: number
   quality_mode: 'fast' | 'balanced' | 'accurate'
+  processing_scope?: 'audio_visual' | 'audio_only'
   source_height?: number
   source_fps?: number
 }
@@ -210,6 +211,7 @@ export interface ApiRunManifest {
     author?: string
   }
   profile: 'fast' | 'balanced' | 'accurate'
+  processing_scope?: 'audio_visual' | 'audio_only'
   status: 'created' | 'running' | 'completed' | 'failed' | 'cancelled'
   created_at: string
   updated_at: string
@@ -243,6 +245,7 @@ export interface ApiJobSnapshot {
 
 export interface ApiPipelineOutcome {
   run_id: string
+  processing_scope?: 'audio_visual' | 'audio_only'
   markdown: ApiArtifactRef
   html: ApiArtifactRef
   pdf?: ApiArtifactRef
@@ -770,12 +773,29 @@ export interface PipelineSubmission {
   auth: ApiAuthSpec
   acquisition: ApiAcquisitionPolicy
   quality_mode: 'fast' | 'balanced' | 'accurate'
+  processing_scope?: 'audio_visual' | 'audio_only'
   title_override?: string
   language_hints: string[]
   sampling_plan: ApiSamplingPlan
   include_screenshots: boolean
   generate_pdf: boolean
   report_spec: ApiReportSpec
+}
+
+export interface ApiHealth {
+  status: string
+  version: string
+  scope: string
+  capabilities?: string[]
+}
+
+const backwardCompatibleScopePayload = <
+  T extends { processing_scope?: 'audio_visual' | 'audio_only' },
+>(request: T): T => {
+  if (request.processing_scope !== 'audio_visual') return request
+  const compatible = { ...request }
+  delete compatible.processing_scope
+  return compatible
 }
 
 export class Video2NotesApiError extends Error {
@@ -907,13 +927,13 @@ export class Video2NotesApi {
     return (await response.json()) as T
   }
 
-  health(): Promise<{ status: string; version: string; scope: string }> {
+  health(): Promise<ApiHealth> {
     return this.request('/api/health', {}, true)
   }
 
   async waitForHealth(
     timeoutMs = 15_000,
-  ): Promise<{ status: string; version: string; scope: string }> {
+  ): Promise<ApiHealth> {
     const deadline = Date.now() + timeoutMs
     let lastError: unknown
     while (Date.now() < deadline) {
@@ -983,7 +1003,7 @@ export class Video2NotesApi {
   estimateProcessing(request: ApiProcessingEstimateRequest): Promise<ApiProcessingEstimate> {
     return this.request('/api/estimate', {
       method: 'POST',
-      body: JSON.stringify(request),
+      body: JSON.stringify(backwardCompatibleScopePayload(request)),
     })
   }
 
@@ -998,7 +1018,7 @@ export class Video2NotesApi {
   submitJob(request: PipelineSubmission): Promise<ApiProcessingRun> {
     return this.request('/api/jobs', {
       method: 'POST',
-      body: JSON.stringify(request),
+      body: JSON.stringify(backwardCompatibleScopePayload(request)),
     })
   }
 

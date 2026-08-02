@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  AudioLines,
   ArrowRight,
   Check,
   ChevronDown,
@@ -8,46 +9,56 @@ import {
   Globe2,
   MonitorUp,
   RefreshCw,
+  ScanText,
   ShieldCheck,
   Sparkles,
   Timer,
   Upload,
 } from 'lucide-react'
 import { CreateProcessingOptions } from '../components/CreateProcessingOptions'
+import { ProcessingBenchmarkGuide } from '../components/ProcessingBenchmarkGuide'
 import { formatTime, platformLabel } from '../domain'
 import type { ProcessingMode } from '../domain'
 import { validateSamplingDraft } from '../sampling'
-import { useStudioStore } from '../store'
+import { backendSupportsAudioOnly, useStudioStore } from '../store'
 
 const modeCopy: Record<
   ProcessingMode,
   {
     label: string
     description: string
+    audioDescription: string
     estimate: string
     bullets: string[]
+    audioBullets: string[]
     icon: typeof Gauge
   }
 > = {
   fast: {
     label: 'Fast',
     description: '预期精度：语音主线可靠，减少视觉复核与截图密度',
-    estimate: '预计耗时约视频时长的 0.35–0.65×',
+    audioDescription: '速度优先：优先现有字幕，并使用轻量语音识别策略',
+    estimate: '基准实测 1.17× · 探测后显示本机预算',
     bullets: ['平台字幕优先', '单路本地 ASR', '精选关键画面'],
+    audioBullets: ['平台字幕优先', '轻量 ASR 搜索', '跳过视觉与 OCR'],
     icon: Gauge,
   },
   balanced: {
     label: 'Balanced',
     description: '预期精度：高，平衡视觉密度、冲突复核与资源消耗',
-    estimate: '预计耗时约视频时长的 0.55–1.0×',
+    audioDescription: '默认推荐：平衡语音搜索、时间戳质量与字幕/语言冲突复核',
+    estimate: '基准实测 3.68× · 探测后显示本机预算',
     bullets: ['字幕 + 本地 ASR', '冲突片段复核', '每章精选截图'],
+    audioBullets: ['字幕 + 本地 ASR', '时间戳对齐', '字幕/语言冲突复核'],
     icon: Timer,
   },
   accurate: {
     label: 'Accurate',
     description: '预期精度：最高，把额外算力集中在低置信与内容变化处',
-    estimate: '预计耗时约视频时长的 0.9–1.7×',
+    audioDescription: '语音优先：把额外 ASR 计算集中在低置信、多语言和冲突片段',
+    estimate: '基准实测 6.66× · 探测后显示本机预算',
     bullets: ['选择性二次识别', '更细视觉与 OCR', '事实支持度验证'],
+    audioBullets: ['更完整 ASR 搜索', '多语言提示', '选择性二次识别'],
     icon: Sparkles,
   },
 }
@@ -56,12 +67,14 @@ export function CreatePage() {
   const draft = useStudioStore(state => state.draft)
   const setDraftInput = useStudioStore(state => state.setDraftInput)
   const setDraftMode = useStudioStore(state => state.setDraftMode)
+  const setProcessingScope = useStudioStore(state => state.setProcessingScope)
   const probeSource = useStudioStore(state => state.probeSource)
   const chooseLocalFile = useStudioStore(state => state.chooseLocalFile)
   const chooseBundledDemo = useStudioStore(state => state.chooseBundledDemo)
   const selectLocalFile = useStudioStore(state => state.selectLocalFile)
   const createTask = useStudioStore(state => state.createTask)
   const backend = useStudioStore(state => state.backend)
+  const submissionInFlight = useStudioStore(state => state.submissionInFlight)
   const machine = useStudioStore(state => state.machine)
   const processingEstimates = useStudioStore(state => state.processingEstimates)
   const processingEstimateStatus = useStudioStore(state => state.processingEstimateStatus)
@@ -73,6 +86,8 @@ export function CreatePage() {
   const setDraftCookieFile = useStudioStore(state => state.setDraftCookieFile)
   const setLanguageHints = useStudioStore(state => state.setLanguageHints)
   const [dragActive, setDragActive] = useState(false)
+  const audioOnlySupported = backendSupportsAudioOnly(backend)
+  const scopeLocked = submissionInFlight || draft.status === 'submitting'
   const samplingValidation = validateSamplingDraft(draft)
   const manifestNeedsRefresh = Boolean(
     draft.manifest && draft.status !== 'ready' && draft.status !== 'submitting',
@@ -80,14 +95,18 @@ export function CreatePage() {
 
   const estimateLabel = (mode: ProcessingMode): string => {
     const estimate = processingEstimates[mode]
-    if (!estimate) return modeCopy[mode].estimate
+    if (!estimate) {
+      return draft.processingScope === 'audio_only'
+        ? '仅音频 · 等待本机估算'
+        : modeCopy[mode].estimate
+    }
     const lowerRtf = estimate.lowerRealtimeFactor.toFixed(
       estimate.lowerRealtimeFactor >= 1 ? 1 : 2,
     )
     const upperRtf = estimate.upperRealtimeFactor.toFixed(
       estimate.upperRealtimeFactor >= 1 ? 1 : 2,
     )
-    return `本机预计 ${formatTime(Math.ceil(estimate.lowerSeconds))}–${formatTime(
+    return `本机工程预算 ${formatTime(Math.ceil(estimate.lowerSeconds))}–${formatTime(
       Math.ceil(estimate.upperSeconds),
     )} · ${lowerRtf}–${upperRtf}×`
   }
@@ -255,6 +274,65 @@ export function CreatePage() {
             {machine.backend === 'ready' ? `已根据 ${machine.gpu} 调整` : backend.detail}
           </div>
         </div>
+        <ProcessingBenchmarkGuide />
+
+        <section className="processing-scope" aria-labelledby="processing-scope-title">
+          <div className="processing-scope-heading">
+            <div>
+              <span className="section-kicker">PROCESSING SCOPE</span>
+              <h4 id="processing-scope-title">选择要识别的内容</h4>
+            </div>
+            <span>仅音频可跳过本次基准中最耗时的视觉与 OCR 阶段</span>
+          </div>
+          <div className="processing-scope-options" role="radiogroup" aria-label="处理范围">
+            <label
+              className={draft.processingScope === 'audio_visual' ? 'is-selected' : ''}
+            >
+              <input
+                type="radio"
+                name="processing-scope"
+                value="audio_visual"
+                checked={draft.processingScope === 'audio_visual'}
+                disabled={scopeLocked}
+                onChange={() => setProcessingScope('audio_visual')}
+              />
+              <span className="processing-scope-icon">
+                <ScanText size={18} aria-hidden="true" />
+              </span>
+              <span>
+                <strong>完整音画</strong>
+                <small>语音、字幕、画面变化、屏幕文字与关键帧进入同一时间轴</small>
+              </span>
+            </label>
+            <label
+              className={`${draft.processingScope === 'audio_only' ? 'is-selected' : ''} ${!audioOnlySupported ? 'is-disabled' : ''}`.trim()}
+            >
+              <input
+                type="radio"
+                name="processing-scope"
+                value="audio_only"
+                checked={draft.processingScope === 'audio_only'}
+                disabled={scopeLocked || !audioOnlySupported}
+                onChange={() => setProcessingScope('audio_only')}
+              />
+              <span className="processing-scope-icon">
+                <AudioLines size={18} aria-hidden="true" />
+              </span>
+              <span>
+                <strong>仅识别音频</strong>
+                <small>跳过视觉扫描、OCR 与截图，只处理平台字幕、音轨和语音时间戳</small>
+              </span>
+            </label>
+          </div>
+          <p className={`processing-scope-note scope-${draft.processingScope}`} aria-live="polite">
+            {!audioOnlySupported
+              ? '后端版本不支持仅音频；请升级本地后端后再选择。完整音画仍可继续使用。'
+              : draft.processingScope === 'audio_only'
+              ? '适合播客、访谈、配图无关或已确认画面没有重要信息的视频。Fast / Balanced / Accurate 仍会控制 ASR 搜索与复核策略；准确度取决于字幕质量、音质、语言提示和所选 ASR 模型，专有名词仍应人工复核。'
+              : '适合软件教程、演示文稿、带字幕图表或界面操作。系统会对齐音频与视觉证据，因此处理时间通常明显高于仅音频。'}
+          </p>
+        </section>
+
         <div className="mode-grid" role="radiogroup" aria-label="处理模式">
           {(Object.keys(modeCopy) as ProcessingMode[]).map(mode => {
             const item = modeCopy[mode]
@@ -280,9 +358,16 @@ export function CreatePage() {
                       {estimateLabel(mode)}
                     </span>
                   </span>
-                  <span className="mode-description">{item.description}</span>
+                  <span className="mode-description">
+                    {draft.processingScope === 'audio_only'
+                      ? item.audioDescription
+                      : item.description}
+                  </span>
                   <span className="mode-bullets">
-                    {item.bullets.map(bullet => (
+                    {(draft.processingScope === 'audio_only'
+                      ? item.audioBullets
+                      : item.bullets
+                    ).map(bullet => (
                       <span key={bullet}>
                         <Check size={12} aria-hidden="true" />
                         {bullet}
@@ -301,9 +386,9 @@ export function CreatePage() {
             title={processingEstimateError}
           >
             {processingEstimateStatus === 'loading'
-              ? '正在根据这台电脑与当前视频计算三档耗时区间…'
+              ? `正在根据这台电脑、当前视频与${draft.processingScope === 'audio_only' ? '仅音频' : '完整音画'}范围计算三档耗时区间…`
               : processingEstimateStatus === 'ready'
-                ? '三档均为当前硬件与已探测画质的本机工程预算，不是速度保证。'
+                ? `${draft.processingScope === 'audio_only' ? '仅音频' : '完整音画'}三档均为当前硬件的宽区间工程预算，不是当前模型实测或速度保证。`
                 : processingEstimateStatus === 'partial'
                   ? '部分本机估算暂不可用；未返回的模式继续显示通用区间。'
                   : '本机估算暂不可用，当前显示通用区间；这不会阻止处理。'}
@@ -324,7 +409,9 @@ export function CreatePage() {
             >
               {samplingValidation.errors.length > 0
                 ? `采样计划有 ${samplingValidation.errors.length} 项错误，修正后才能开始`
-                : '身份、语言、画面采样计划与报告输出'}
+                : draft.processingScope === 'audio_only'
+                  ? '身份、语言、语音识别策略与报告输出'
+                  : '身份、语言、画面采样计划与报告输出'}
             </small>
           </span>
           <ChevronDown size={17} aria-hidden="true" />
@@ -406,9 +493,14 @@ export function CreatePage() {
           className="button button-primary button-large"
           type="button"
           onClick={createTask}
-          disabled={draft.status !== 'ready' || samplingValidation.errors.length > 0}
+          disabled={
+            submissionInFlight ||
+            draft.status !== 'ready' ||
+            samplingValidation.errors.length > 0 ||
+            (draft.processingScope === 'audio_only' && !audioOnlySupported)
+          }
         >
-          {draft.status === 'submitting'
+          {submissionInFlight || draft.status === 'submitting'
             ? '正在提交…'
             : manifestNeedsRefresh
               ? '需重新探测'
