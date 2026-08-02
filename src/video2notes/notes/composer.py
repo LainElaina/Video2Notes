@@ -30,6 +30,12 @@ from .models import (
     SupportingMaterial,
     SupportingMaterialKind,
 )
+from .redaction import (
+    redact_note_text,
+    redacted_evidence_payload,
+    redacted_supporting_material_copy,
+    sanitize_note_document,
+)
 from .reporting import ReportPreset, ReportSpec, ResolvedReportSpec
 
 
@@ -117,6 +123,7 @@ class EvidenceNoteComposer:
         fusion: FusionResult,
         *,
         screenshots_by_window: Mapping[str, list[NoteScreenshot]] | None = None,
+        max_screenshots_per_section: int | None = None,
         report_spec: ReportSpec | None = None,
         supporting_materials: Sequence[RunMaterial | SupportingMaterial] = (),
         artifact_root: str | Path | None = None,
@@ -129,7 +136,12 @@ class EvidenceNoteComposer:
             raise ValueError("verification_passes cannot be negative")
         if max_model_concurrency < 1:
             raise ValueError("max_model_concurrency must be positive")
+        _validate_screenshot_budget(max_screenshots_per_section)
         resolved_report = (report_spec or ReportSpec()).resolve()
+        screenshot_budget = _report_screenshot_budget(
+            max_screenshots_per_section,
+            resolved_report,
+        )
         metadata = metadata.model_copy(
             update={
                 "report_preset": resolved_report.preset.value,
@@ -143,6 +155,7 @@ class EvidenceNoteComposer:
                 metadata,
                 fusion,
                 screenshots_by_window=screenshots,
+                max_screenshots_per_section=screenshot_budget,
                 report_spec=report_spec,
                 supporting_materials=materials,
             )
@@ -169,14 +182,17 @@ class EvidenceNoteComposer:
                 supporting_materials=materials,
                 artifact_root=artifact_root,
             )
-            note = _note_from_draft(
-                metadata,
-                fusion,
-                facts,
-                draft,
-                screenshots_by_window=screenshots,
-                report_spec=resolved_report,
-                supporting_materials=materials,
+            note = sanitize_note_document(
+                _note_from_draft(
+                    metadata,
+                    fusion,
+                    facts,
+                    draft,
+                    screenshots_by_window=screenshots,
+                    max_screenshots_per_section=screenshot_budget,
+                    report_spec=resolved_report,
+                    supporting_materials=materials,
+                )
             )
             if self.verifier_backend is not None and facts:
                 for _ in range(verification_passes):
@@ -194,6 +210,7 @@ class EvidenceNoteComposer:
                 metadata,
                 fusion,
                 screenshots_by_window=screenshots,
+                max_screenshots_per_section=screenshot_budget,
                 report_spec=report_spec,
                 supporting_materials=materials,
             )
@@ -294,10 +311,16 @@ class EvidenceNoteComposer:
                 system_prompt=_DRAFT_SYSTEM_PROMPT,
                 user_prompt=json.dumps(
                     {
-                        "title": metadata.title,
+                        "title": redact_note_text(metadata.title),
                         "duration_us": metadata.duration_us,
                         "report_spec": report_spec.model_dump(mode="json"),
-                        "facts": [item.model_dump(mode="json") for item in facts],
+                        "facts": [
+                            {
+                                **item.model_dump(mode="json"),
+                                "claim": redact_note_text(item.claim),
+                            }
+                            for item in facts
+                        ],
                         "windows": [item.model_dump(mode="json") for item in fusion.windows],
                         "supporting_materials": material_payload,
                     },
@@ -329,9 +352,15 @@ class EvidenceNoteComposer:
                 system_prompt=_VERIFY_SYSTEM_PROMPT,
                 user_prompt=json.dumps(
                     {
-                        "facts": [item.model_dump(mode="json") for item in note.facts],
+                        "facts": [
+                            {
+                                **item.model_dump(mode="json"),
+                                "claim": redact_note_text(item.claim),
+                            }
+                            for item in note.facts
+                        ],
                         "evidence": {
-                            identifier: evidence_by_id[identifier].model_dump(mode="json")
+                            identifier: redacted_evidence_payload(evidence_by_id[identifier])
                             for identifier in sorted(
                                 {
                                     evidence_id
@@ -371,6 +400,7 @@ def build_deterministic_note(
     fusion: FusionResult,
     *,
     screenshots_by_window: Mapping[str, list[NoteScreenshot]] | None = None,
+    max_screenshots_per_section: int | None = None,
     report_spec: ReportSpec | None = None,
     supporting_materials: Sequence[RunMaterial | SupportingMaterial] = (),
 ) -> NoteDocument:
@@ -378,7 +408,12 @@ def build_deterministic_note(
 
     if fusion.run_id != metadata.run_id:
         raise ValueError("note metadata and fusion result must belong to one run")
+    _validate_screenshot_budget(max_screenshots_per_section)
     resolved_report = (report_spec or ReportSpec()).resolve()
+    screenshot_budget = _report_screenshot_budget(
+        max_screenshots_per_section,
+        resolved_report,
+    )
     metadata = metadata.model_copy(
         update={
             "report_preset": resolved_report.preset.value,
@@ -434,9 +469,8 @@ def build_deterministic_note(
             ):
                 continue
             if evidence.modality is EvidenceModality.OCR:
-                if (
-                    resolved_report.preset is ReportPreset.CONCISE
-                    and _is_persistent_edge_chrome(evidence)
+                if resolved_report.preset is ReportPreset.CONCISE and _is_persistent_edge_chrome(
+                    evidence
                 ):
                     continue
                 if ocr_fact_count >= ocr_fact_limit:
@@ -500,24 +534,45 @@ def build_deterministic_note(
         quality_mode=metadata.quality_mode,
         max_sections=resolved_report.max_sections,
     )
+    sections, facts = _apply_final_section_fact_budget(
+        sections,
+        facts,
+        evidence_by_id=evidence_by_id,
+        max_facts_per_section=resolved_report.max_facts_per_section,
+    )
+    sections = [
+        section.model_copy(
+            update={
+                "screenshots": _select_section_screenshots(
+                    section.screenshots,
+                    max_screenshots=screenshot_budget,
+                    start_us=section.start_us,
+                    end_us=section.end_us,
+                )
+            }
+        )
+        for section in sections
+    ]
     takeaway_candidates = _select_deterministic_takeaways(
         speech_takeaway_candidates,
         ocr_takeaway_candidates,
         limit=resolved_report.max_takeaways,
     )
     abstract = (
-        "；".join(takeaway_candidates[:3])
+        "；".join(_temporally_spread_texts(takeaway_candidates, limit=3))
         if takeaway_candidates
         else "视频中没有可安全提取的文字证据。"
     )
-    return NoteDocument(
-        metadata=metadata,
-        abstract=abstract,
-        key_takeaways=takeaway_candidates[: resolved_report.max_takeaways],
-        sections=sections,
-        facts=facts,
-        evidence=fusion.evidence,
-        supporting_materials=materials,
+    return sanitize_note_document(
+        NoteDocument(
+            metadata=metadata,
+            abstract=abstract,
+            key_takeaways=takeaway_candidates[: resolved_report.max_takeaways],
+            sections=sections,
+            facts=facts,
+            evidence=fusion.evidence,
+            supporting_materials=materials,
+        )
     )
 
 
@@ -556,9 +611,7 @@ def _ocr_information_tier(evidence: EvidenceSpan) -> int:
         # Short counters remain eligible facts and exact numeric changes are
         # never deduplicated, but they should not outrank a complete sentence.
         return 2
-    ascii_letters = [
-        character for character in text if character.isascii() and character.isalpha()
-    ]
+    ascii_letters = [character for character in text if character.isascii() and character.isalpha()]
     if (
         ascii_letters
         and len(ascii_letters) >= 2
@@ -584,22 +637,34 @@ def _select_deterministic_takeaways(
     selected: list[str] = []
     seen: set[str] = set()
 
-    def add(evidence: EvidenceSpan) -> None:
+    def eligible(evidence: EvidenceSpan) -> bool:
         text = _evidence_text(evidence)
         canonical = _canonical_note_text(text)
         if (
-            evidence.modality
-            in {EvidenceModality.ASR, EvidenceModality.PLATFORM_CAPTION}
+            evidence.modality in {EvidenceModality.ASR, EvidenceModality.PLATFORM_CAPTION}
             and len(canonical) < 2
         ):
             # Keep acknowledgements such as “好”/“嗯” in the timed fact layer,
             # but do not spend scarce overview slots on non-informative fillers.
-            return
-        if canonical and canonical not in seen and len(selected) < limit:
+            return False
+        return bool(canonical) and canonical not in seen
+
+    def add(evidence: EvidenceSpan) -> None:
+        text = _evidence_text(evidence)
+        canonical = _canonical_note_text(text)
+        if eligible(evidence) and len(selected) < limit:
             seen.add(canonical)
             selected.append(text)
 
+    speech_candidates: list[EvidenceSpan] = []
+    speech_seen: set[str] = set()
     for evidence in sorted(speech, key=lambda item: (item.start_us, item.end_us, item.id)):
+        canonical = _canonical_note_text(_evidence_text(evidence))
+        if not eligible(evidence) or canonical in speech_seen:
+            continue
+        speech_seen.add(canonical)
+        speech_candidates.append(evidence)
+    for evidence in _temporally_spread_evidence(speech_candidates, limit=limit):
         add(evidence)
     if len(selected) >= limit:
         return selected
@@ -616,6 +681,149 @@ def _select_deterministic_takeaways(
         if _ocr_information_tier(evidence) <= 1 and not _is_persistent_edge_chrome(evidence):
             add(evidence)
     return selected
+
+
+def _temporally_spread_evidence(
+    evidence: Sequence[EvidenceSpan],
+    *,
+    limit: int,
+) -> list[EvidenceSpan]:
+    """Select stable timeline quantiles instead of exhausting the opening minute."""
+
+    ordered = sorted(evidence, key=lambda item: (item.start_us, item.end_us, item.id))
+    if limit <= 0:
+        return []
+    if len(ordered) <= limit:
+        return ordered
+    if limit == 1:
+        target_numerators = [(ordered[0].start_us + ordered[-1].end_us, 2)]
+    else:
+        start_us = ordered[0].start_us
+        end_us = ordered[-1].end_us
+        denominator = limit - 1
+        target_numerators = [
+            (start_us * (denominator - index) + end_us * index, denominator)
+            for index in range(limit)
+        ]
+    selection_radius_us = max(
+        1,
+        (ordered[-1].end_us - ordered[0].start_us) // max(2, 2 * (limit - 1)),
+    )
+    available = set(range(len(ordered)))
+    selected: list[int] = []
+    for target_numerator, target_denominator in target_numerators:
+        nearby = {
+            candidate
+            for candidate in available
+            if abs(
+                ((ordered[candidate].start_us + ordered[candidate].end_us) // 2)
+                * target_denominator
+                - target_numerator
+            )
+            <= selection_radius_us * target_denominator
+        }
+        pool = nearby or available
+        index = max(
+            pool,
+            key=lambda candidate: (
+                _speech_information_score(ordered[candidate]),
+                -abs(
+                    ((ordered[candidate].start_us + ordered[candidate].end_us) // 2)
+                    * target_denominator
+                    - target_numerator
+                ),
+                -ordered[candidate].start_us,
+                ordered[candidate].id,
+            ),
+        )
+        selected.append(index)
+        available.remove(index)
+    return [ordered[index] for index in sorted(selected)]
+
+
+_SPEECH_ACTION_CUES = (
+    "打开",
+    "点击",
+    "选择",
+    "安装",
+    "下载",
+    "添加",
+    "输入",
+    "复制",
+    "粘贴",
+    "登录",
+    "连接",
+    "设置",
+    "切换",
+    "发布",
+    "上传",
+    "启动",
+    "搜索",
+    "填写",
+    "保存",
+    "关闭",
+    "开启",
+    "使用",
+    "需要",
+    "可以",
+    "直播",
+    "推流",
+    "视频",
+    "账号",
+    "手机",
+    "电脑",
+    "插件",
+    "浏览器",
+    "本机",
+    "窗口",
+    "服务器",
+    "obs",
+    "windows",
+)
+_SPEECH_FILLER_CUES = (
+    "嗨呀",
+    "哎呀",
+    "哈哈",
+    "呵呵",
+    "嗯嗯",
+    "啊啊",
+    "谁谁谁",
+    "什么什么",
+    "这个这个",
+    "呀呀呀",
+    "好好好",
+    "然后然后",
+)
+
+
+def _speech_information_score(evidence: EvidenceSpan) -> int:
+    """Prefer actionable, content-bearing speech inside each timeline region."""
+
+    text = _evidence_text(evidence).casefold()
+    canonical = _canonical_note_text(text)
+    length = len(canonical)
+    score = min(length, 96)
+    score += 12 * sum(cue in text for cue in _SPEECH_ACTION_CUES)
+    score -= 30 * sum(cue in text for cue in _SPEECH_FILLER_CUES)
+    score += round((evidence.confidence if evidence.confidence is not None else 0.5) * 20)
+    if length < 8:
+        score -= 35
+    if canonical and len(set(canonical)) < max(4, length // 4):
+        score -= 20
+    return score
+
+
+def _temporally_spread_texts(values: Sequence[str], *, limit: int) -> list[str]:
+    if limit <= 0:
+        return []
+    if len(values) <= limit:
+        return list(values)
+    if limit == 1:
+        return [values[len(values) // 2]]
+    indices = [
+        (index * (len(values) - 1) + (limit - 1) // 2) // (limit - 1) for index in range(limit)
+    ]
+    return [values[index] for index in indices]
 
 
 _SECTION_TARGET_US = {
@@ -666,10 +874,7 @@ def _merge_deterministic_section_group(
     representative = max(
         group,
         key=lambda section: (
-            int(
-                "**语音**" in section.body_markdown
-                or "**平台字幕**" in section.body_markdown
-            ),
+            int("**语音**" in section.body_markdown or "**平台字幕**" in section.body_markdown),
             len(_canonical_note_text(section.title)),
             -section.start_us,
         ),
@@ -686,9 +891,7 @@ def _merge_deterministic_section_group(
         evidence_ids=_stable_unique(
             identifier for section in group for identifier in section.evidence_ids
         ),
-        fact_ids=_stable_unique(
-            identifier for section in group for identifier in section.fact_ids
-        ),
+        fact_ids=_stable_unique(identifier for section in group for identifier in section.fact_ids),
         material_ids=_stable_unique(
             identifier for section in group for identifier in section.material_ids
         ),
@@ -704,6 +907,213 @@ def _stable_unique(values: Iterable[str]) -> list[str]:
             seen.add(value)
             output.append(value)
     return output
+
+
+def _apply_final_section_fact_budget(
+    sections: Sequence[NoteSection],
+    facts: Sequence[FactCard],
+    *,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+    max_facts_per_section: int,
+) -> tuple[list[NoteSection], list[FactCard]]:
+    """Enforce the report budget after evidence windows become final sections."""
+
+    facts_by_id = {item.id: item for item in facts}
+    selected_fact_ids: set[str] = set()
+    output: list[NoteSection] = []
+    for section in sections:
+        candidates = [
+            facts_by_id[identifier]
+            for identifier in section.fact_ids
+            if identifier in facts_by_id
+        ]
+        selected = _select_section_facts(
+            candidates,
+            evidence_by_id=evidence_by_id,
+            start_us=section.start_us,
+            end_us=section.end_us,
+            limit=max_facts_per_section,
+        )
+        selected_fact_ids.update(item.id for item in selected)
+        body = "\n".join(_fact_body_line(item, evidence_by_id) for item in selected)
+        output.append(
+            section.model_copy(
+                update={
+                    "fact_ids": [item.id for item in selected],
+                    "body_markdown": body or section.body_markdown,
+                }
+            )
+        )
+    return output, [item for item in facts if item.id in selected_fact_ids]
+
+
+def _select_section_facts(
+    candidates: Sequence[FactCard],
+    *,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+    start_us: int,
+    end_us: int,
+    limit: int,
+) -> list[FactCard]:
+    if len(candidates) <= limit:
+        return sorted(candidates, key=lambda item: _fact_timeline_key(item, evidence_by_id))
+
+    speech = [item for item in candidates if item.kind == "speech"]
+    screen_text = [item for item in candidates if item.kind == "screen_text"]
+    selected: list[FactCard] = []
+    if speech and screen_text and limit >= 2:
+        screen_limit = max(1, limit // 3)
+        speech_limit = limit - screen_limit
+        selected.extend(
+            _select_temporally_ranked_facts(
+                speech,
+                evidence_by_id=evidence_by_id,
+                start_us=start_us,
+                end_us=end_us,
+                limit=speech_limit,
+            )
+        )
+        selected.extend(
+            _select_temporally_ranked_facts(
+                screen_text,
+                evidence_by_id=evidence_by_id,
+                start_us=start_us,
+                end_us=end_us,
+                limit=screen_limit,
+            )
+        )
+    else:
+        selected.extend(
+            _select_temporally_ranked_facts(
+                candidates,
+                evidence_by_id=evidence_by_id,
+                start_us=start_us,
+                end_us=end_us,
+                limit=limit,
+            )
+        )
+
+    if len(selected) < limit:
+        chosen = {item.id for item in selected}
+        selected.extend(
+            _select_temporally_ranked_facts(
+                [item for item in candidates if item.id not in chosen],
+                evidence_by_id=evidence_by_id,
+                start_us=start_us,
+                end_us=end_us,
+                limit=limit - len(selected),
+            )
+        )
+    unique = {item.id: item for item in selected}
+    return sorted(unique.values(), key=lambda item: _fact_timeline_key(item, evidence_by_id))
+
+
+def _select_temporally_ranked_facts(
+    candidates: Sequence[FactCard],
+    *,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+    start_us: int,
+    end_us: int,
+    limit: int,
+) -> list[FactCard]:
+    if limit <= 0 or not candidates:
+        return []
+    ordered = sorted(candidates, key=lambda item: _fact_timeline_key(item, evidence_by_id))
+    if len(ordered) <= limit:
+        return ordered
+    if limit == 1:
+        targets = [(start_us + end_us, 2)]
+    else:
+        denominator = limit - 1
+        targets = [
+            (start_us * (denominator - index) + end_us * index, denominator)
+            for index in range(limit)
+        ]
+    radius_us = max(1, (end_us - start_us) // max(2, 2 * (limit - 1)))
+    available = set(range(len(ordered)))
+    selected: list[int] = []
+    for target_numerator, target_denominator in targets:
+        nearby = {
+            index
+            for index in available
+            if abs(
+                _fact_midpoint_us(ordered[index], evidence_by_id) * target_denominator
+                - target_numerator
+            )
+            <= radius_us * target_denominator
+        }
+        pool = nearby or available
+        index = max(
+            pool,
+            key=lambda candidate: (
+                _fact_information_score(ordered[candidate], evidence_by_id),
+                -abs(
+                    _fact_midpoint_us(ordered[candidate], evidence_by_id)
+                    * target_denominator
+                    - target_numerator
+                ),
+                -_fact_midpoint_us(ordered[candidate], evidence_by_id),
+                ordered[candidate].id,
+            ),
+        )
+        selected.append(index)
+        available.remove(index)
+    return [ordered[index] for index in sorted(selected)]
+
+
+def _fact_timeline_key(
+    fact: FactCard,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+) -> tuple[int, int, str]:
+    evidence = [evidence_by_id[item] for item in fact.evidence_ids if item in evidence_by_id]
+    if not evidence:
+        return (0, 0, fact.id)
+    return (
+        min(item.start_us for item in evidence),
+        max(item.end_us for item in evidence),
+        fact.id,
+    )
+
+
+def _fact_midpoint_us(
+    fact: FactCard,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+) -> int:
+    start_us, end_us, _ = _fact_timeline_key(fact, evidence_by_id)
+    return (start_us + end_us) // 2
+
+
+def _fact_information_score(
+    fact: FactCard,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+) -> int:
+    evidence = [evidence_by_id[item] for item in fact.evidence_ids if item in evidence_by_id]
+    primary = evidence[0] if evidence else None
+    if primary is not None and primary.modality in {
+        EvidenceModality.ASR,
+        EvidenceModality.PLATFORM_CAPTION,
+    }:
+        return _speech_information_score(primary)
+    text = _canonical_note_text(fact.claim)
+    confidence = fact.confidence if fact.confidence is not None else 0.5
+    information_tier = _ocr_information_tier(primary) if primary is not None else 4
+    action_bonus = 8 * sum(cue in fact.claim.casefold() for cue in _SPEECH_ACTION_CUES)
+    return 100 - information_tier * 20 + min(len(text), 72) + round(confidence * 20) + action_bonus
+
+
+def _fact_body_line(
+    fact: FactCard,
+    evidence_by_id: Mapping[str, EvidenceSpan],
+) -> str:
+    evidence = next(
+        (evidence_by_id[item] for item in fact.evidence_ids if item in evidence_by_id),
+        None,
+    )
+    if evidence is not None:
+        label = _modality_label(evidence.modality)
+    else:
+        label = "语音" if fact.kind == "speech" else "画面文字"
+    return f"- **{label}** {fact.claim}"
 
 
 def _canonical_note_text(text: str) -> str:
@@ -761,6 +1171,7 @@ def _note_from_draft(
     draft: NoteDraftEnvelope,
     *,
     screenshots_by_window: Mapping[str, list[NoteScreenshot]],
+    max_screenshots_per_section: int | None,
     report_spec: ResolvedReportSpec,
     supporting_materials: Sequence[SupportingMaterial],
 ) -> NoteDocument:
@@ -786,6 +1197,12 @@ def _note_from_draft(
             for item in all_screenshots
             if candidate.start_us <= item.timestamp_us <= candidate.end_us
         ]
+        section_screenshots = _select_section_screenshots(
+            section_screenshots,
+            max_screenshots=max_screenshots_per_section,
+            start_us=candidate.start_us,
+            end_us=candidate.end_us,
+        )
         sections.append(
             NoteSection(
                 id=f"section-{index + 1:03d}",
@@ -856,7 +1273,8 @@ def _material_prompt_payload(
     payload: list[dict[str, object]] = []
     images: list[ImageInput] = []
     for material in materials:
-        item = material.model_dump(mode="json")
+        safe_material = redacted_supporting_material_copy(material)
+        item = safe_material.model_dump(mode="json")
         item["source_classification"] = "external_supporting_material"
         if material.kind is SupportingMaterialKind.IMAGE and root is not None:
             image_path = (root / material.artifact_path).resolve()
@@ -898,7 +1316,7 @@ def _window_prompt_payload(
     return {
         "window": window.model_dump(mode="json"),
         "evidence": [
-            evidence_by_id[identifier].model_dump(mode="json")
+            redacted_evidence_payload(evidence_by_id[identifier])
             for identifier in window.evidence_ids
             if identifier in evidence_by_id
         ],
@@ -918,6 +1336,79 @@ def _invocation_summary(result: GenerationResult) -> InvocationSummary:
 
 def _evidence_text(evidence: EvidenceSpan) -> str:
     return (evidence.normalized_text or evidence.raw_text or "").strip()
+
+
+def _validate_screenshot_budget(max_screenshots_per_section: int | None) -> None:
+    if max_screenshots_per_section is not None and max_screenshots_per_section < 0:
+        raise ValueError("max_screenshots_per_section cannot be negative")
+
+
+def _report_screenshot_budget(
+    runtime_budget: int | None,
+    report_spec: ResolvedReportSpec,
+) -> int | None:
+    if not report_spec.include_screenshots:
+        return 0
+    if runtime_budget is None:
+        return None
+    if report_spec.preset in {ReportPreset.CONCISE, ReportPreset.EXECUTIVE}:
+        return min(runtime_budget, 1)
+    if report_spec.preset is ReportPreset.BEGINNER:
+        return min(runtime_budget, 2)
+    return runtime_budget
+
+
+def _select_section_screenshots(
+    screenshots: Sequence[NoteScreenshot],
+    *,
+    max_screenshots: int | None,
+    start_us: int,
+    end_us: int,
+) -> list[NoteScreenshot]:
+    """Apply a final section budget while keeping temporal coverage deterministic."""
+
+    if max_screenshots is None or len(screenshots) <= max_screenshots:
+        return list(screenshots)
+    if max_screenshots == 0:
+        return []
+
+    candidates = list(enumerate(screenshots))
+    selected_indices: list[int] = []
+    available_indices = {index for index, _ in candidates}
+
+    if max_screenshots == 1:
+        targets = [(start_us + end_us, 2)]
+    else:
+        denominator = max_screenshots - 1
+        targets = [
+            (start_us * (denominator - index) + end_us * index, denominator)
+            for index in range(max_screenshots)
+        ]
+
+    for target_numerator, target_denominator in targets:
+        selected_index = min(
+            available_indices,
+            key=lambda index: (
+                abs(screenshots[index].timestamp_us * target_denominator - target_numerator),
+                -len(set(screenshots[index].evidence_ids)),
+                screenshots[index].timestamp_us,
+                screenshots[index].relative_path,
+                screenshots[index].caption,
+                index,
+            ),
+        )
+        selected_indices.append(selected_index)
+        available_indices.remove(selected_index)
+
+    selected_indices.sort(
+        key=lambda index: (
+            screenshots[index].timestamp_us,
+            screenshots[index].relative_path,
+            screenshots[index].caption,
+            index,
+        )
+    )
+    return [screenshots[index] for index in selected_indices]
 
 
 def _short_title(text: str, *, fallback: str) -> str:

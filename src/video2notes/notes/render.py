@@ -922,6 +922,8 @@ footer {
 @media print {
   body { background: #fff; font-size: 10.5pt; }
   .masthead, main, footer { width: 100%; }
+  main { padding-bottom: 0; }
+  footer { display: none; }
   .masthead { padding-top: 0; }
   .opening-grid { margin: 24px 0 36px; }
   .section-stack { border-color: #bfc7c4; }

@@ -15,6 +15,14 @@ from .models import (
     SupportingMaterial,
     SupportingMaterialKind,
 )
+from .redaction import (
+    contains_sensitive_note_text,
+    redact_note_text,
+    redacted_evidence_copy,
+    redacted_evidence_payload,
+    redacted_supporting_material_copy,
+    sanitize_note_document,
+)
 from .render import (
     format_timestamp,
     render_html,
@@ -52,9 +60,15 @@ __all__ = [
     "ResolvedReportSpec",
     "format_timestamp",
     "build_deterministic_note",
+    "contains_sensitive_note_text",
+    "redact_note_text",
+    "redacted_evidence_copy",
+    "redacted_evidence_payload",
+    "redacted_supporting_material_copy",
     "render_html",
     "render_markdown",
     "render_pdf_from_html",
+    "sanitize_note_document",
     "write_html",
     "write_markdown",
 ]

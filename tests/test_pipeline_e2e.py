@@ -111,8 +111,9 @@ class FakeAsr:
 
 
 class FakeOcr:
-    def __init__(self) -> None:
+    def __init__(self, *, text: str = "Evidence First") -> None:
         self.calls = 0
+        self.text = text
 
     def recognize(
         self,
@@ -125,7 +126,7 @@ class FakeOcr:
         return BackendOcrOutput(
             lines=[
                 BackendOcrLine(
-                    raw_text="Evidence First",
+                    raw_text=self.text,
                     box=OcrBox(
                         x=0,
                         y=0,
@@ -235,9 +236,7 @@ class PipelineEndToEndTests(unittest.TestCase):
             pipeline.run(workspace, request)
 
             states = json.loads(
-                (workspace.root / "vision" / "visual-states.json").read_text(
-                    encoding="utf-8"
-                )
+                (workspace.root / "vision" / "visual-states.json").read_text(encoding="utf-8")
             )
             self.assertIn("fixed_interval", {item["change_reason"] for item in states})
             self.assertTrue(
@@ -246,9 +245,7 @@ class PipelineEndToEndTests(unittest.TestCase):
                     for item in states
                 )
             )
-            fixed_states = [
-                item for item in states if item["change_reason"] == "fixed_interval"
-            ]
+            fixed_states = [item for item in states if item["change_reason"] == "fixed_interval"]
             self.assertGreaterEqual(len(fixed_states), 4)
             self.assertTrue(
                 all(
@@ -290,9 +287,7 @@ class PipelineEndToEndTests(unittest.TestCase):
                 (workspace.root / "notes" / "document.json").read_text(encoding="utf-8")
             )
             screenshots = [
-                screenshot
-                for section in note.sections
-                for screenshot in section.screenshots
+                screenshot for section in note.sections for screenshot in section.screenshots
             ]
             self.assertEqual(len(screenshots), 1)
             self.assertEqual(
@@ -300,6 +295,83 @@ class PipelineEndToEndTests(unittest.TestCase):
                 "内容自适应扫描选出的稳定代表画面",
             )
             self.assertTrue((workspace.root / screenshots[0].relative_path).is_file())
+
+    def test_final_sections_enforce_balanced_screenshot_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=FakeAsr(),
+                ocr_backend=None,
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.BALANCED,
+                sampling_plan=SamplingPlan(
+                    default=SamplingSpec(
+                        mode=SamplingMode.FIXED_INTERVAL,
+                        interval_us=250_000,
+                    )
+                ),
+                include_screenshots=True,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(request, run_id="screenshot-budget")
+
+            outcome = pipeline.run(workspace, request)
+
+            note = NoteDocument.model_validate_json(
+                (workspace.root / "notes" / "document.json").read_text(encoding="utf-8")
+            )
+            screenshots = [
+                screenshot for section in note.sections for screenshot in section.screenshots
+            ]
+            self.assertGreaterEqual(outcome.visual_state_count, 4)
+            self.assertEqual(len(note.sections), 1)
+            self.assertEqual(len(screenshots), 2)
+            self.assertLess(screenshots[0].timestamp_us, 1_000_000)
+            self.assertGreater(screenshots[1].timestamp_us, 1_000_000)
+            self.assertTrue(all(len(section.screenshots) <= 2 for section in note.sections))
+
+    def test_sensitive_ocr_stays_local_and_frame_is_not_exported(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=FakeAsr(),
+                ocr_backend=FakeOcr(text="交流群 1060030164"),
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.BALANCED,
+                include_screenshots=True,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(request, run_id="private-screen")
+
+            pipeline.run(workspace, request)
+
+            raw_ocr = (workspace.root / "ocr" / "ocr-evidence.json").read_text(encoding="utf-8")
+            note_payload = (workspace.root / "notes" / "document.json").read_text(encoding="utf-8")
+            note = NoteDocument.model_validate_json(note_payload)
+            self.assertIn("1060030164", raw_ocr)
+            self.assertNotIn("1060030164", note_payload)
+            self.assertEqual(
+                sum(len(section.screenshots) for section in note.sections),
+                0,
+            )
 
     def test_local_video_runs_to_markdown_html_and_reuses_every_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -336,9 +408,7 @@ class PipelineEndToEndTests(unittest.TestCase):
             self.assertIn("证据优先", markdown)
             self.assertIn("Evidence First", markdown)
             self.assertIn("video2notes://seek/", markdown)
-            document = (workspace.root / "notes" / "document.json").read_text(
-                encoding="utf-8"
-            )
+            document = (workspace.root / "notes" / "document.json").read_text(encoding="utf-8")
             self.assertIn('"relative_path": "notes/assets/', document)
             self.assertIn("](assets/", markdown)
             self.assertTrue(any((workspace.root / "notes" / "assets").iterdir()))

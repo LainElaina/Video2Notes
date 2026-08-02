@@ -50,6 +50,7 @@ from video2notes.notes import (
     NoteScreenshot,
     OutputFormat,
     ReportSpec,
+    contains_sensitive_note_text,
     render_pdf_from_html,
     write_html,
     write_markdown,
@@ -173,15 +174,11 @@ class PipelineRuntime:
     asr_backend: ASRBackend | None = None
     secondary_asr_backend: ASRBackend | None = None
     ocr_backend: OcrBackend | None = None
-    asr_backends_by_quality: Mapping[QualityMode, ASRBackend] = field(
-        default_factory=dict
-    )
+    asr_backends_by_quality: Mapping[QualityMode, ASRBackend] = field(default_factory=dict)
     secondary_asr_backends_by_quality: Mapping[QualityMode, ASRBackend] = field(
         default_factory=dict
     )
-    ocr_backends_by_quality: Mapping[QualityMode, OcrBackend] = field(
-        default_factory=dict
-    )
+    ocr_backends_by_quality: Mapping[QualityMode, OcrBackend] = field(default_factory=dict)
     hardware: HardwareSnapshot | None = None
     hardware_disk_path: str | Path | None = None
     experience_mode: ExperienceMode = ExperienceMode.GUIDED
@@ -212,8 +209,8 @@ class Video2NotesPipeline:
         "audio.asr": "5",
         "ocr.extract": "4",
         "evidence.fuse": "3",
-        "notes.compose": "7",
-        "render.outputs": "6",
+        "notes.compose": "10",
+        "render.outputs": "7",
     }
 
     def __init__(
@@ -281,8 +278,7 @@ class Video2NotesPipeline:
                 overrides=self.runtime.performance_overrides,
             )
             acceleration = (
-                self.runtime.acceleration_capabilities
-                or detect_acceleration_capabilities()
+                self.runtime.acceleration_capabilities or detect_acceleration_capabilities()
             )
             execution_plan = align_execution_plan_with_acceleration(
                 execution_plan,
@@ -656,10 +652,7 @@ class Video2NotesPipeline:
                 )
                 adaptive_probe = (
                     scanner.probe(media.source_path)
-                    if any(
-                        item.sampling.mode is SamplingMode.ADAPTIVE
-                        for item in segments
-                    )
+                    if any(item.sampling.mode is SamplingMode.ADAPTIVE for item in segments)
                     else None
                 )
                 discovered: list[ChangeEvent] = []
@@ -747,17 +740,11 @@ class Video2NotesPipeline:
                 stage.add_metric("sampling_segment_count", len(segments))
                 stage.add_metric(
                     "adaptive_segment_count",
-                    sum(
-                        item.sampling.mode is SamplingMode.ADAPTIVE
-                        for item in segments
-                    ),
+                    sum(item.sampling.mode is SamplingMode.ADAPTIVE for item in segments),
                 )
                 stage.add_metric(
                     "fixed_interval_segment_count",
-                    sum(
-                        item.sampling.mode is SamplingMode.FIXED_INTERVAL
-                        for item in segments
-                    ),
+                    sum(item.sampling.mode is SamplingMode.FIXED_INTERVAL for item in segments),
                 )
                 stage.add_metric(
                     "skip_segment_count",
@@ -1186,9 +1173,7 @@ class Video2NotesPipeline:
                 "title_override": request.title_override,
                 "quality_mode": request.quality_mode.value,
                 "verification_passes": execution_plan.verification_passes,
-                "screenshot_budget_per_section": (
-                    execution_plan.screenshot_budget_per_section
-                ),
+                "screenshot_budget_per_section": (execution_plan.screenshot_budget_per_section),
                 "remote_model_concurrency": execution_plan.remote_model_concurrency,
             },
             inputs=[fusion_ref],
@@ -1249,6 +1234,7 @@ class Video2NotesPipeline:
                     metadata,
                     fusion,
                     screenshots_by_window=screenshots,
+                    max_screenshots_per_section=(execution_plan.screenshot_budget_per_section),
                     report_spec=report_spec,
                     verification_passes=execution_plan.verification_passes,
                     max_model_concurrency=execution_plan.remote_model_concurrency,
@@ -1411,15 +1397,14 @@ def _fixed_interval_events(
             sample_period_us=interval_us,
             start_us=segment.start_us,
             end_us=segment.end_us,
-        target_size=None,
-        decode_threads=decode_threads,
+            target_size=None,
+            decode_threads=decode_threads,
         )
     ):
         cancel.raise_if_cancelled()
         if index >= max_fixed_samples:
             raise ValueError(
-                "fixed_interval sampling exceeded runtime maximum "
-                f"of {max_fixed_samples} frames"
+                f"fixed_interval sampling exceeded runtime maximum of {max_fixed_samples} frames"
             )
         requested_time_us = (
             decoded.requested_time_us
@@ -1427,8 +1412,7 @@ def _fixed_interval_events(
             else decoded.timestamp.time_us
         )
         preview_path = preview_dir / (
-            f"{index:05d}_{requested_time_us:015d}req_"
-            f"{decoded.timestamp.time_us:015d}us_fixed.jpg"
+            f"{index:05d}_{requested_time_us:015d}req_{decoded.timestamp.time_us:015d}us_fixed.jpg"
         )
         decoded.image.save(
             preview_path,
@@ -1470,9 +1454,7 @@ def _events_to_visual_states(
     states: list[VisualState] = []
     for index, event in enumerate(events):
         segment_start_us = event.segment_start_us if event.segment_start_us is not None else 0
-        segment_end_us = (
-            event.segment_end_us if event.segment_end_us is not None else duration_us
-        )
+        segment_end_us = event.segment_end_us if event.segment_end_us is not None else duration_us
         next_transition = (
             min(events[index + 1].transition_us, segment_end_us)
             if index + 1 < len(events)
@@ -1827,7 +1809,10 @@ def _screenshots_for_windows(
 
     if ocr is not None:
         for selected in ocr.scroll_selection.selected_frames:
-            visible_text = " / ".join(text_by_state.get(selected.visual_state_id, [])[:3])
+            state_text = text_by_state.get(selected.visual_state_id, [])
+            if any(contains_sensitive_note_text(item) for item in state_text):
+                continue
+            visible_text = " / ".join(state_text[:3])
             caption = (
                 f"关键画面文字：{visible_text}" if visible_text else "覆盖独特屏幕文字的关键画面"
             )
@@ -1848,6 +1833,9 @@ def _screenshots_for_windows(
             state
             for state in fusion.visual_states
             if state.id not in selected_states
+            and not any(
+                contains_sensitive_note_text(item) for item in text_by_state.get(state.id, [])
+            )
             and state.keyframe_artifact is not None
             and window.start_us <= state.stable_keyframe_us <= window.end_us
         ]
