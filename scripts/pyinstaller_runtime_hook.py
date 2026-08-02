@@ -8,6 +8,8 @@ do not contain any video, cookies, or model weights.
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -24,8 +26,14 @@ def _prepend_bundled_tools() -> None:
     candidates = [
         executable_directory / "tools",
         internal_directory / "nvidia" / "cublas" / "bin",
-        internal_directory / "nvidia" / "cudnn" / "bin",
         internal_directory / "nvidia" / "cuda_nvrtc" / "bin",
+        internal_directory / "nvidia" / "cuda_runtime" / "bin",
+        internal_directory / "nvidia" / "cudnn" / "bin",
+        internal_directory / "nvidia" / "cufft" / "bin",
+        internal_directory / "nvidia" / "curand" / "bin",
+        internal_directory / "nvidia" / "cusolver" / "bin",
+        internal_directory / "nvidia" / "cusparse" / "bin",
+        internal_directory / "nvidia" / "nvjitlink" / "bin",
     ]
     directories = [item for item in candidates if item.is_dir()]
     if not directories:
@@ -45,4 +53,19 @@ def _prepend_bundled_tools() -> None:
                 continue
 
 
+def _preload_ctranslate2_before_paddle() -> None:
+    """Claim CTranslate2's cuDNN basename before Paddle imports on Windows."""
+
+    try:
+        spec = importlib.util.find_spec("ctranslate2")
+    except (ImportError, ModuleNotFoundError, ValueError):
+        spec = None
+    if spec is not None:
+        # Do not suppress native loader failures in a full build. Starting a
+        # frozen process with Paddle first would make the ASR failure
+        # unrecoverable until process restart and would misreport capability.
+        importlib.import_module("ctranslate2")
+
+
 _prepend_bundled_tools()
+_preload_ctranslate2_before_paddle()

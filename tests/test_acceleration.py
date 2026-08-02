@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -40,6 +41,21 @@ class _CpuPaddleDevice:
 
 class _CpuPaddle:
     device = _CpuPaddleDevice()
+
+
+class _GpuPaddleDevice:
+    class cuda:
+        @staticmethod
+        def device_count() -> int:
+            return 1
+
+    @staticmethod
+    def is_compiled_with_cuda() -> bool:
+        return True
+
+
+class _GpuPaddle:
+    device = _GpuPaddleDevice()
 
 
 def _gpu_hardware() -> HardwareSnapshot:
@@ -85,7 +101,10 @@ class AccelerationCapabilityTests(unittest.TestCase):
         detect_acceleration_capabilities.cache_clear()
 
     def test_engine_probes_are_independent_for_cuda_asr_and_cpu_ocr(self) -> None:
+        import_order: list[str] = []
+
         def import_module(name: str) -> object:
+            import_order.append(name)
             if name == "ctranslate2":
                 return _FakeCTranslate2()
             if name == "paddle":
@@ -116,6 +135,7 @@ class AccelerationCapabilityTests(unittest.TestCase):
         )
         self.assertFalse(result.ocr.cuda_available)
         self.assertIn("CPU build", result.ocr.reason)
+        self.assertEqual(import_order, ["ctranslate2", "paddle"])
 
     def test_missing_nvidia_namespace_does_not_break_runtime_discovery(self) -> None:
         with (
@@ -133,7 +153,89 @@ class AccelerationCapabilityTests(unittest.TestCase):
             directories = acceleration_module._nvidia_runtime_directories()
 
         self.assertEqual(directories, ())
-        self.assertEqual(find_spec.call_count, 3)
+        self.assertEqual(
+            find_spec.call_count,
+            len(acceleration_module._NVIDIA_RUNTIME_PACKAGES),
+        )
+
+    def test_complete_explicit_nvidia_runtime_tree_is_discovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = []
+            for package in acceleration_module._NVIDIA_RUNTIME_PACKAGES:
+                directory = root / package / "bin"
+                directory.mkdir(parents=True)
+                expected.append(directory.resolve())
+
+            with (
+                patch.dict(
+                    acceleration_module.os.environ,
+                    {"VIDEO2NOTES_NVIDIA_RUNTIME_ROOT": str(root)},
+                ),
+                patch.object(
+                    acceleration_module.importlib.util,
+                    "find_spec",
+                    return_value=None,
+                ),
+            ):
+                directories = acceleration_module._nvidia_runtime_directories()
+
+        self.assertEqual(directories[: len(expected)], tuple(expected))
+
+    def test_gpu_paddle_reports_actual_runtime_directories(self) -> None:
+        runtime_directories = (Path("C:/bundled/nvidia/cublas/bin"),)
+
+        def import_module(name: str) -> object:
+            if name == "ctranslate2":
+                return _FakeCTranslate2()
+            if name == "paddle":
+                return _GpuPaddle()
+            raise AssertionError(f"unexpected import: {name}")
+
+        with (
+            patch.object(
+                acceleration_module,
+                "prepare_nvidia_cuda_runtime",
+                return_value=runtime_directories,
+            ),
+            patch.object(
+                acceleration_module.importlib,
+                "import_module",
+                side_effect=import_module,
+            ),
+            patch.object(acceleration_module, "_load_required_windows_dlls"),
+        ):
+            result = detect_acceleration_capabilities()
+
+        self.assertTrue(result.ocr.cuda_available)
+        self.assertEqual(
+            result.ocr.runtime_directories,
+            (str(runtime_directories[0]),),
+        )
+
+    def test_ctranslate2_preload_happens_after_runtime_prep(self) -> None:
+        calls: list[str] = []
+
+        with (
+            patch.object(
+                acceleration_module,
+                "prepare_nvidia_cuda_runtime",
+                side_effect=lambda: calls.append("runtime") or (),
+            ),
+            patch.object(
+                acceleration_module.importlib.util,
+                "find_spec",
+                return_value=object(),
+            ),
+            patch.object(
+                acceleration_module.importlib,
+                "import_module",
+                side_effect=lambda name: calls.append(name) or _FakeCTranslate2(),
+            ),
+        ):
+            acceleration_module.preload_ctranslate2_before_paddle()
+
+        self.assertEqual(calls, ["runtime", "ctranslate2"])
 
     def test_mixed_plan_keeps_cuda_asr_and_falls_back_only_ocr(self) -> None:
         preferred = build_execution_plan(_gpu_hardware(), QualityMode.ACCURATE)

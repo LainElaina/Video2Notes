@@ -22,7 +22,10 @@ $ReleaseExecutable = Join-Path $TauriRoot "target\release\video2notes-desktop.ex
 $PortableParent = Join-Path $RepoRoot "artifacts\portable"
 $PortableCurrent = Join-Path $PortableParent "current"
 $PortableStaging = Join-Path $PortableParent (".staging-" + [guid]::NewGuid().ToString("N"))
-$PortableOld = Join-Path $PortableParent (".old-" + [guid]::NewGuid().ToString("N"))
+$PortableBackup = Join-Path $PortableParent (
+    ".backup-" + [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" +
+        [guid]::NewGuid().ToString("N")
+)
 $PortableMarkerName = ".video2notes-portable.json"
 $RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }
 
@@ -54,7 +57,11 @@ function Assert-ManagedPortablePath {
     }
 
     $leaf = [IO.Path]::GetFileName($resolvedTarget)
-    if ($leaf -ne "current" -and -not $leaf.StartsWith(".staging-") -and -not $leaf.StartsWith(".old-")) {
+    if (
+        $leaf -ne "current" -and
+        -not $leaf.StartsWith(".staging-") -and
+        -not $leaf.StartsWith(".backup-")
+    ) {
         throw "Refusing to manage an unexpected portable output directory: '$resolvedTarget'."
     }
     return $resolvedTarget
@@ -109,7 +116,8 @@ function Assert-BackendManifest {
         [string]$BackendRoot,
         [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
         [AllowEmptyString()][string]$ExpectedSourceFingerprint = "",
-        [switch]$AllowLegacy
+        [switch]$AllowLegacy,
+        [switch]$AllowPreNvidiaFullRuntime
     )
 
     $manifestPath = Join-Path $BackendRoot "manifest.json"
@@ -141,14 +149,73 @@ function Assert-BackendManifest {
         if ($manifest.user_model_weights_included -ne $false) {
             throw "The frozen backend manifest does not explicitly exclude user model weights."
         }
-        $fullInferenceIds = @(
-            "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
-            "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12"
+        $baseFullInferenceIds = @(
+            "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle"
+        )
+        $ctranslateNvidiaInferenceIds = @(
+            "nvidia-cublas-cu12",
+            "nvidia-cuda-nvrtc-cu12",
+            "nvidia-cudnn-cu12",
+            "nvidia-nvjitlink-cu12"
+        )
+        $paddleGpuNvidiaInferenceIds = @(
+            "nvidia-cuda-runtime-cu12",
+            "nvidia-cufft-cu12",
+            "nvidia-curand-cu12",
+            "nvidia-cusolver-cu12",
+            "nvidia-cusparse-cu12"
+        )
+        $nvidiaInferenceIds = @(
+            $ctranslateNvidiaInferenceIds + $paddleGpuNvidiaInferenceIds
+        )
+        $fullInferenceIds = @($baseFullInferenceIds + $nvidiaInferenceIds)
+        $paddleMatches = @($manifest.components | Where-Object { $_.id -eq "paddlepaddle" })
+        $paddleDistribution = if ($paddleMatches.Count -eq 1) {
+            [string]$paddleMatches[0].distribution
+        }
+        else {
+            ""
+        }
+        if (
+            $manifest.runtime_flavor -eq "full" -and
+            $paddleMatches.Count -eq 1 -and
+            $paddleDistribution -notin @("paddlepaddle", "paddlepaddle-gpu")
+        ) {
+            throw "The frozen backend manifest has an unsupported PaddlePaddle distribution."
+        }
+        $requiredNvidiaInferenceIds = @($ctranslateNvidiaInferenceIds)
+        if (
+            $manifest.runtime_flavor -eq "full" -and
+            $paddleDistribution -eq "paddlepaddle-gpu"
+        ) {
+            $requiredNvidiaInferenceIds += $paddleGpuNvidiaInferenceIds
+        }
+        $hasNoNvidiaComponentContract = (
+            $AllowPreNvidiaFullRuntime -and
+            $manifest.runtime_flavor -eq "full" -and
+            @(
+                $manifest.components |
+                    Where-Object { $_.id -in $nvidiaInferenceIds }
+            ).Count -eq 0
         )
         $requiredIds = @("yt-dlp", "psutil", "ffmpeg", "ffprobe")
-        if ($manifest.runtime_flavor -eq "full") { $requiredIds += $fullInferenceIds }
+        if ($manifest.runtime_flavor -eq "full") {
+            $requiredIds += $baseFullInferenceIds
+            $requiredIds += $requiredNvidiaInferenceIds
+        }
         foreach ($componentId in $requiredIds) {
             $matches = @($manifest.components | Where-Object { $_.id -eq $componentId })
+            # Migration-only compatibility for full packages built before the
+            # NVIDIA component contract existed. A present but invalid entry
+            # still fails, and newly staged packages never enable this switch.
+            $isMissingPreNvidiaComponent = (
+                $hasNoNvidiaComponentContract -and
+                $componentId -in $requiredNvidiaInferenceIds -and
+                $matches.Count -eq 0
+            )
+            if ($isMissingPreNvidiaComponent) {
+                continue
+            }
             if (
                 $matches.Count -ne 1 -or
                 $matches[0].included -ne $true -or
@@ -168,6 +235,22 @@ function Assert-BackendManifest {
                 $matches[0].executable_verified -ne $true
             ) {
                 throw "The frozen backend manifest does not verify executing '$componentId'."
+            }
+        }
+        if (
+            $manifest.runtime_flavor -eq "full" -and
+            $paddleDistribution -eq "paddlepaddle" -and
+            -not $hasNoNvidiaComponentContract
+        ) {
+            foreach ($componentId in $paddleGpuNvidiaInferenceIds) {
+                $matches = @($manifest.components | Where-Object { $_.id -eq $componentId })
+                if (
+                    $matches.Count -ne 1 -or
+                    $matches[0].included -ne $false -or
+                    $matches[0].status -ne "excluded-core-only"
+                ) {
+                    throw "CPU full component '$componentId' is not explicitly marked excluded."
+                }
             }
         }
         if ($manifest.runtime_flavor -eq "core-only") {
@@ -261,7 +344,8 @@ function Assert-PortableLayout {
     param(
         [string]$PortableRoot,
         [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
-        [switch]$AllowLegacyBackend
+        [switch]$AllowLegacyBackend,
+        [switch]$AllowPreNvidiaFullRuntimeBackend
     )
 
     $allowedTopLevel = @(
@@ -314,7 +398,8 @@ function Assert-PortableLayout {
     $null = Assert-BackendManifest `
         (Join-Path $PortableRoot "backend") `
         $ExpectedRuntimeFlavor `
-        -AllowLegacy:$AllowLegacyBackend
+        -AllowLegacy:$AllowLegacyBackend `
+        -AllowPreNvidiaFullRuntime:$AllowPreNvidiaFullRuntimeBackend
 }
 
 function Write-Sha256Sums {
@@ -473,11 +558,23 @@ try {
         runtime_flavor = $RuntimeFlavor
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safeStaging $PortableMarkerName) -Encoding utf8
 
+    $StagedPaddleDistribution = if ($CoreOnly) {
+        ""
+    }
+    else {
+        [string]@(
+            $StagedBackendManifest.components |
+                Where-Object { $_.id -eq "paddlepaddle" }
+        )[0].distribution
+    }
     $PortableRuntimeNote = if ($CoreOnly) {
         "这是仅供开发快速迭代的 core-only 构建，不包含本地 faster-whisper/PaddleOCR 推理运行时。"
     }
+    elseif ($StagedPaddleDistribution -eq "paddlepaddle-gpu") {
+        "这是默认 full GPU 构建，已经包含本地 faster-whisper、CTranslate2、PaddleOCR、PaddlePaddle GPU 与完整 NVIDIA CUDA 12.9 推理运行库。"
+    }
     else {
-        "这是默认 full 构建，已经包含本地 faster-whisper、CTranslate2、NVIDIA CUDA 12 ASR 运行库、PaddleOCR 与 PaddlePaddle CPU 运行时。"
+        "这是默认 full CPU OCR 构建，已经包含本地 faster-whisper、CTranslate2、PaddleOCR、PaddlePaddle CPU 与 ASR 所需的 NVIDIA CUDA 12.9 运行库。"
     }
     @"
 Video2Notes 免安装版（runtime=$RuntimeFlavor）
@@ -499,28 +596,40 @@ $PortableRuntimeNote
 
     Assert-PortableNotRunning $PortableCurrent
     $safeCurrent = Assert-ManagedPortablePath $PortableCurrent
-    $safeOld = Assert-ManagedPortablePath $PortableOld
+    $safeBackup = Assert-ManagedPortablePath $PortableBackup
     if (Test-Path -LiteralPath $safeCurrent -PathType Container) {
         Assert-ExistingPortableMarker $safeCurrent
-        Assert-PortableLayout $safeCurrent -AllowLegacyBackend
+        Assert-PortableLayout `
+            $safeCurrent `
+            -AllowLegacyBackend `
+            -AllowPreNvidiaFullRuntimeBackend
         Assert-PortableChecksums $safeCurrent
         Assert-NoPrivatePayload $safeCurrent
-        Move-Item -LiteralPath $safeCurrent -Destination $safeOld
+        Move-Item -LiteralPath $safeCurrent -Destination $safeBackup
     }
     try {
+        if (Test-Path -LiteralPath $safeBackup -PathType Container) {
+            Assert-ExistingPortableMarker $safeBackup
+            Assert-PortableLayout `
+                $safeBackup `
+                -AllowLegacyBackend `
+                -AllowPreNvidiaFullRuntimeBackend
+            Assert-PortableChecksums $safeBackup
+            Assert-NoPrivatePayload $safeBackup
+        }
         Move-Item -LiteralPath $safeStaging -Destination $safeCurrent
     }
     catch {
-        if (Test-Path -LiteralPath $safeOld -PathType Container) {
-            Move-Item -LiteralPath $safeOld -Destination $safeCurrent
+        if (
+            -not (Test-Path -LiteralPath $safeCurrent) -and
+            (Test-Path -LiteralPath $safeBackup -PathType Container)
+        ) {
+            Move-Item -LiteralPath $safeBackup -Destination $safeCurrent
         }
         throw
     }
-    if (Test-Path -LiteralPath $safeOld -PathType Container) {
-        Assert-ExistingPortableMarker $safeOld
-        Assert-PortableLayout $safeOld -AllowLegacyBackend
-        Assert-PortableChecksums $safeOld
-        Remove-Item -LiteralPath $safeOld -Recurse -Force
+    if (Test-Path -LiteralPath $safeBackup -PathType Container) {
+        Write-Host "Previous portable app retained as a recoverable backup: $safeBackup"
     }
 
     if ($Zip) {

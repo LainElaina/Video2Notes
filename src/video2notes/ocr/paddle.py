@@ -16,7 +16,10 @@ from typing import Literal, cast
 from PIL import Image
 from pydantic import Field
 
-from video2notes.system.acceleration import detect_acceleration_capabilities
+from video2notes.system.acceleration import (
+    detect_acceleration_capabilities,
+    preload_ctranslate2_before_paddle,
+)
 
 from .models import (
     BackendOcrLine,
@@ -143,11 +146,17 @@ class PaddleOcrBackend:
             )
 
         try:
+            # Windows loads the first cudnn64_9.dll basename process-wide.
+            # CTranslate2 must claim its compatible copy before PaddleOCR
+            # imports PaddlePaddle; otherwise later CUDA ASR can fail even
+            # though both engines are independently installed correctly.
+            preload_ctranslate2_before_paddle()
             paddleocr = importlib.import_module("paddleocr")
-        except ImportError as error:
+        except (ImportError, RuntimeError) as error:
             raise OcrDependencyError(
-                "The bundled PaddleOCR runtime is unavailable. Use the full Video2Notes "
-                "portable build or repair the packaged runtime."
+                "The bundled PaddleOCR runtime or its required CTranslate2-first "
+                "Windows preload is unavailable. Use the full Video2Notes portable "
+                "build or repair the packaged runtime."
             ) from error
         raw_version = getattr(paddleocr, "__version__", "unknown")
         self._version = str(raw_version)

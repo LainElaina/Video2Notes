@@ -23,9 +23,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .profiles import ExecutionPlan
 
-_NVIDIA_RUNTIME_PACKAGES = ("cublas", "cudnn", "cuda_nvrtc")
+_NVIDIA_RUNTIME_PACKAGES = (
+    "cublas",
+    "cuda_nvrtc",
+    "cuda_runtime",
+    "cudnn",
+    "cufft",
+    "curand",
+    "cusolver",
+    "cusparse",
+    "nvjitlink",
+)
 _WINDOWS_REQUIRED_ASR_DLLS = ("cublas64_12.dll", "cudnn64_9.dll")
 _DLL_DIRECTORY_HANDLES: list[object] = []
+_DLL_DIRECTORY_KEYS: set[str] = set()
 
 
 class AccelerationModel(BaseModel):
@@ -92,12 +103,43 @@ def prepare_nvidia_cuda_runtime() -> tuple[Path, ...]:
             additions.append(value)
             existing_keys.add(key)
         add_directory = getattr(os, "add_dll_directory", None)
-        if callable(add_directory):
+        if callable(add_directory) and key not in _DLL_DIRECTORY_KEYS:
             with contextlib.suppress(OSError):
                 _DLL_DIRECTORY_HANDLES.append(add_directory(value))
+                _DLL_DIRECTORY_KEYS.add(key)
     if additions:
         os.environ["PATH"] = os.pathsep.join([*additions, *existing])
     return directories
+
+
+def preload_ctranslate2_before_paddle() -> None:
+    """Load CTranslate2 before Paddle can claim duplicate Windows DLL names.
+
+    PaddlePaddle GPU and CTranslate2 both ship a ``cudnn64_9.dll``.  Windows
+    reuses the first module loaded under that basename, so importing Paddle
+    first can make a later CTranslate2 import fail with loader error 127.  The
+    verified CUDA 12.9 stack is safe when CTranslate2 is loaded first.
+
+    CPU-only OCR installations do not require CTranslate2.  In that case the
+    optional module is simply absent and this function remains a no-op.  When
+    it is installed but cannot load, callers must not continue into Paddle and
+    poison the process for ASR.
+    """
+
+    prepare_nvidia_cuda_runtime()
+    try:
+        spec = importlib.util.find_spec("ctranslate2")
+    except (ImportError, ModuleNotFoundError, ValueError):
+        spec = None
+    if spec is None:
+        return
+    try:
+        importlib.import_module("ctranslate2")
+    except (ImportError, OSError, RuntimeError, ValueError) as error:
+        raise RuntimeError(
+            "CTranslate2 must load before PaddlePaddle on Windows, but its "
+            f"runtime preload failed: {_failure_reason(error)}"
+        ) from error
 
 
 @lru_cache(maxsize=1)
@@ -107,7 +149,9 @@ def detect_acceleration_capabilities() -> AccelerationCapabilities:
     runtime_directories = prepare_nvidia_cuda_runtime()
     return AccelerationCapabilities(
         asr=_detect_ctranslate2_cuda(runtime_directories),
-        ocr=_detect_paddle_cuda(),
+        # Keep this probe after CTranslate2.  This order is a correctness
+        # requirement for the shared Windows cuDNN DLL basename.
+        ocr=_detect_paddle_cuda(runtime_directories),
     )
 
 
@@ -205,13 +249,17 @@ def _detect_ctranslate2_cuda(
         )
 
 
-def _detect_paddle_cuda() -> EngineAcceleration:
+def _detect_paddle_cuda(
+    runtime_directories: tuple[Path, ...],
+) -> EngineAcceleration:
+    paths = tuple(str(item) for item in runtime_directories)
     try:
         paddle = cast(_PaddleModule, importlib.import_module("paddle"))
         if not bool(paddle.device.is_compiled_with_cuda()):
             return EngineAcceleration(
                 engine="PaddleOCR/PaddlePaddle",
                 cuda_available=False,
+                runtime_directories=paths,
                 reason="The installed PaddlePaddle runtime is a CPU build.",
             )
         count = max(0, int(paddle.device.cuda.device_count()))
@@ -219,18 +267,21 @@ def _detect_paddle_cuda() -> EngineAcceleration:
             return EngineAcceleration(
                 engine="PaddleOCR/PaddlePaddle",
                 cuda_available=False,
+                runtime_directories=paths,
                 reason="CUDA-enabled PaddlePaddle did not find a GPU.",
             )
         return EngineAcceleration(
             engine="PaddleOCR/PaddlePaddle",
             cuda_available=True,
             device_count=count,
+            runtime_directories=paths,
             reason="CUDA-enabled PaddlePaddle found at least one GPU.",
         )
     except (ImportError, OSError, RuntimeError, ValueError) as error:
         return EngineAcceleration(
             engine="PaddleOCR/PaddlePaddle",
             cuda_available=False,
+            runtime_directories=paths,
             reason=_failure_reason(error),
         )
 

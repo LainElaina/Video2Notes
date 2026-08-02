@@ -90,9 +90,25 @@ if ($Manifest.user_model_weights_included -ne $false) {
     throw "The backend manifest does not explicitly exclude user model weights."
 }
 
+$NvidiaRuntimeSpecs = @(
+    [ordered]@{ id = "nvidia-cublas-cu12"; directory = "cublas"; dll = "cublas64_12.dll" },
+    [ordered]@{ id = "nvidia-cuda-nvrtc-cu12"; directory = "cuda_nvrtc"; dll = "nvrtc64_120_0.dll" },
+    [ordered]@{ id = "nvidia-cudnn-cu12"; directory = "cudnn"; dll = "cudnn64_9.dll" },
+    [ordered]@{ id = "nvidia-nvjitlink-cu12"; directory = "nvjitlink"; dll = "nvJitLink_120_0.dll" }
+)
+$PaddleComponent = Get-ManifestComponent $Manifest "paddlepaddle"
+if (-not $CoreOnly -and $PaddleComponent.distribution -eq "paddlepaddle-gpu") {
+    $NvidiaRuntimeSpecs += @(
+        [ordered]@{ id = "nvidia-cuda-runtime-cu12"; directory = "cuda_runtime"; dll = "cudart64_12.dll" },
+        [ordered]@{ id = "nvidia-cufft-cu12"; directory = "cufft"; dll = "cufft64_11.dll" },
+        [ordered]@{ id = "nvidia-curand-cu12"; directory = "curand"; dll = "curand64_10.dll" },
+        [ordered]@{ id = "nvidia-cusolver-cu12"; directory = "cusolver"; dll = "cusolver64_11.dll" },
+        [ordered]@{ id = "nvidia-cusparse-cu12"; directory = "cusparse"; dll = "cusparse64_12.dll" }
+    )
+}
 $FullInferenceIds = @(
-    "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
-    "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12"
+    "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle"
+    $NvidiaRuntimeSpecs | ForEach-Object { [string]$_.id }
 )
 $RequiredPythonIds = @("yt-dlp", "psutil")
 if (-not $CoreOnly) { $RequiredPythonIds += $FullInferenceIds }
@@ -117,17 +133,10 @@ if ($CoreOnly) {
     }
 }
 else {
-    foreach ($cudaRuntimeFile in @(
-        "_internal\nvidia\cublas\bin\cublas64_12.dll",
-        "_internal\nvidia\cublas\bin\cublasLt64_12.dll",
-        "_internal\nvidia\cudnn\bin\cudnn64_9.dll",
-        "_internal\nvidia\cuda_nvrtc\bin\nvrtc64_120_0.dll"
-    )) {
+    foreach ($runtime in $NvidiaRuntimeSpecs) {
+        $cudaRuntimeFile = "_internal\nvidia\$([string]$runtime.directory)\bin\$([string]$runtime.dll)"
         Require-File (Join-Path $BackendRoot $cudaRuntimeFile) "Bundled NVIDIA CUDA runtime DLL"
-    }
-    foreach ($metadataPrefix in @(
-        "nvidia_cublas_cu12", "nvidia_cuda_nvrtc_cu12", "nvidia_cudnn_cu12"
-    )) {
+        $metadataPrefix = ([string]$runtime.id) -replace "-", "_"
         $metadataDirectories = @(
             Get-ChildItem -LiteralPath (Join-Path $BackendRoot "_internal") -Directory |
                 Where-Object { $_.Name -like "$metadataPrefix-*.dist-info" }
@@ -135,10 +144,17 @@ else {
         if ($metadataDirectories.Count -ne 1) {
             throw "Expected exactly one bundled '$metadataPrefix' metadata directory, found $($metadataDirectories.Count)."
         }
-        Require-File `
-            (Join-Path $metadataDirectories[0].FullName "licenses\License.txt") `
-            "Bundled NVIDIA runtime license"
+        $licenseFiles = @(
+            Get-ChildItem -LiteralPath $metadataDirectories[0].FullName -Recurse -File |
+                Where-Object { $_.Name -match "(?i)^licen[cs]e(?:\..*)?$" }
+        )
+        if ($licenseFiles.Count -lt 1) {
+            throw "Bundled NVIDIA runtime '$metadataPrefix' is missing its retained wheel license."
+        }
     }
+    Require-File `
+        (Join-Path $BackendRoot "_internal\nvidia\cublas\bin\cublasLt64_12.dll") `
+        "Bundled NVIDIA cuBLAS LT runtime DLL"
 }
 
 foreach ($toolName in @("ffmpeg", "ffprobe")) {

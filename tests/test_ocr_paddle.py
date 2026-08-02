@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
@@ -89,6 +90,46 @@ class PaddleOcrBackendTests(unittest.TestCase):
                 ),
             ):
                 backend.recognize(Image.new("RGB", (20, 20)))
+
+    def test_real_engine_preloads_ctranslate2_before_importing_paddleocr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            detector, recognizer = _model_dirs(Path(temporary))
+            calls: list[str] = []
+
+            def constructor(**_arguments: object) -> object:
+                return _FakeV3Engine()
+
+            module = SimpleNamespace(__version__="3.7.0", PaddleOCR=constructor)
+            backend = PaddleOcrBackend(
+                PaddleOcrConfig(
+                    detection_model_dir=str(detector),
+                    recognition_model_dir=str(recognizer),
+                    device="gpu:0",
+                    api_family="v3",
+                )
+            )
+            capability = SimpleNamespace(
+                ocr=SimpleNamespace(cuda_available=True, reason="ready")
+            )
+            with (
+                patch(
+                    "video2notes.ocr.paddle.detect_acceleration_capabilities",
+                    return_value=capability,
+                ),
+                patch(
+                    "video2notes.ocr.paddle.preload_ctranslate2_before_paddle",
+                    side_effect=lambda: calls.append("ctranslate2"),
+                ),
+                patch(
+                    "video2notes.ocr.paddle.importlib.import_module",
+                    side_effect=lambda name: calls.append(name) or module,
+                ),
+                patch.object(PaddleOcrBackend, "_image_array", return_value=object()),
+            ):
+                output = backend.recognize(Image.new("RGB", (160, 80)))
+
+        self.assertEqual(calls, ["ctranslate2", "paddleocr"])
+        self.assertEqual(output.lines[0].raw_text, "本地模型")
 
     def test_auto_api_falls_back_to_v2_with_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

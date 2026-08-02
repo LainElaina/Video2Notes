@@ -30,16 +30,25 @@ $PythonComponentSpecs = @(
     [ordered]@{ id = "ctranslate2"; distribution = "ctranslate2"; module = "ctranslate2" },
     [ordered]@{ id = "huggingface-hub"; distribution = "huggingface-hub"; module = "huggingface_hub" },
     [ordered]@{ id = "paddleocr"; distribution = "paddleocr"; module = "paddleocr" },
-    [ordered]@{ id = "paddlepaddle"; distribution = "paddlepaddle"; module = "paddle" },
-    [ordered]@{ id = "nvidia-cublas-cu12"; distribution = "nvidia-cublas-cu12"; module = "nvidia.cublas" },
-    [ordered]@{ id = "nvidia-cuda-nvrtc-cu12"; distribution = "nvidia-cuda-nvrtc-cu12"; module = "nvidia.cuda_nvrtc" },
-    [ordered]@{ id = "nvidia-cudnn-cu12"; distribution = "nvidia-cudnn-cu12"; module = "nvidia.cudnn" }
+    # CPU and GPU Paddle own the same import tree. Inventory selects exactly
+    # one installed distribution and refuses an ambiguous environment.
+    [ordered]@{ id = "paddlepaddle"; distributions = @("paddlepaddle-gpu", "paddlepaddle"); module = "paddle" },
+    [ordered]@{ id = "nvidia-cublas-cu12"; distribution = "nvidia-cublas-cu12"; module = "nvidia.cublas"; runtime_directory = "cublas"; sentinel_dll = "cublas64_12.dll" },
+    [ordered]@{ id = "nvidia-cuda-nvrtc-cu12"; distribution = "nvidia-cuda-nvrtc-cu12"; module = "nvidia.cuda_nvrtc"; runtime_directory = "cuda_nvrtc"; sentinel_dll = "nvrtc64_120_0.dll" },
+    [ordered]@{ id = "nvidia-cuda-runtime-cu12"; distribution = "nvidia-cuda-runtime-cu12"; module = "nvidia.cuda_runtime"; runtime_directory = "cuda_runtime"; sentinel_dll = "cudart64_12.dll" },
+    [ordered]@{ id = "nvidia-cudnn-cu12"; distribution = "nvidia-cudnn-cu12"; module = "nvidia.cudnn"; runtime_directory = "cudnn"; sentinel_dll = "cudnn64_9.dll" },
+    [ordered]@{ id = "nvidia-cufft-cu12"; distribution = "nvidia-cufft-cu12"; module = "nvidia.cufft"; runtime_directory = "cufft"; sentinel_dll = "cufft64_11.dll" },
+    [ordered]@{ id = "nvidia-curand-cu12"; distribution = "nvidia-curand-cu12"; module = "nvidia.curand"; runtime_directory = "curand"; sentinel_dll = "curand64_10.dll" },
+    [ordered]@{ id = "nvidia-cusolver-cu12"; distribution = "nvidia-cusolver-cu12"; module = "nvidia.cusolver"; runtime_directory = "cusolver"; sentinel_dll = "cusolver64_11.dll" },
+    [ordered]@{ id = "nvidia-cusparse-cu12"; distribution = "nvidia-cusparse-cu12"; module = "nvidia.cusparse"; runtime_directory = "cusparse"; sentinel_dll = "cusparse64_12.dll" },
+    [ordered]@{ id = "nvidia-nvjitlink-cu12"; distribution = "nvidia-nvjitlink-cu12"; module = "nvidia.nvjitlink"; runtime_directory = "nvjitlink"; sentinel_dll = "nvJitLink_120_0.dll" }
 )
 $IncludedPythonComponentIds = @("yt-dlp", "psutil")
 if (-not $CoreOnly) {
     $IncludedPythonComponentIds += @(
         "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
-        "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12"
+        "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12",
+        "nvidia-nvjitlink-cu12"
     )
 }
 
@@ -97,20 +106,32 @@ import os
 specs = json.loads(os.environ["VIDEO2NOTES_BUILD_COMPONENT_SPECS"])
 inventory = []
 for spec in specs:
-    try:
-        package_version = importlib.metadata.version(spec["distribution"])
-        installed = True
-    except importlib.metadata.PackageNotFoundError:
-        package_version = None
-        installed = False
+    candidate_distributions = spec.get("distributions") or [spec["distribution"]]
+    installed_distributions = []
+    for distribution in candidate_distributions:
+        try:
+            version = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        installed_distributions.append({"name": distribution, "version": version})
+    selection_error = None
+    if len(installed_distributions) > 1:
+        selection_error = "mutually exclusive distributions are installed together"
+    selected = installed_distributions[0] if len(installed_distributions) == 1 else None
+    distribution = selected["name"] if selected else candidate_distributions[0]
+    package_version = selected["version"] if selected else None
+    installed = selected is not None
     try:
         module_available = importlib.util.find_spec(spec["module"]) is not None
     except (ImportError, ModuleNotFoundError, ValueError):
         module_available = False
     inventory.append({
         **spec,
+        "distribution": distribution,
         "version": package_version,
         "installed": installed,
+        "installed_distributions": installed_distributions,
+        "selection_error": selection_error,
         "module_available": module_available,
     })
 print(json.dumps(inventory, separators=(",", ":")))
@@ -136,12 +157,15 @@ print(json.dumps(inventory, separators=(",", ":")))
     $missing = @(
         $inventory | Where-Object {
             $_.id -in $RequiredComponentIds -and
-            (-not [bool]$_.installed -or -not [bool]$_.module_available)
+            (-not [bool]$_.installed -or -not [bool]$_.module_available -or $_.selection_error)
         }
     )
     if ($missing.Count -gt 0) {
-        $details = $missing | ForEach-Object { "$($_.id) ($($_.module))" }
-        throw "Runtime flavor '$RuntimeFlavor' requires installed packages missing from .venv: $($details -join ', '). Run .\scripts\bootstrap.ps1 -WithAsr -WithOcr before a full release build, or pass -CoreOnly only for fast development iteration."
+        $details = $missing | ForEach-Object {
+            if ($_.selection_error) { "$($_.id): $($_.selection_error)" }
+            else { "$($_.id) ($($_.module))" }
+        }
+        throw "Runtime flavor '$RuntimeFlavor' requires one coherent set of installed packages in .venv: $($details -join ', '). Run .\scripts\bootstrap.ps1 -WithAsr with either -WithOcr or -WithOcrGpu before a full release build, or pass -CoreOnly only for fast development iteration."
     }
     return $inventory
 }
@@ -280,6 +304,27 @@ Assert-LastExitCode "Checking the pinned PyInstaller build dependency"
 $PythonInventory = @(
     Get-PythonRuntimeInventory $VenvPython $PythonComponentSpecs $IncludedPythonComponentIds
 )
+$PaddleInventory = @($PythonInventory | Where-Object { $_.id -eq "paddlepaddle" })
+if (-not $CoreOnly -and $PaddleInventory.Count -ne 1) {
+    throw "The full runtime inventory did not resolve exactly one PaddlePaddle component."
+}
+$PaddleDistribution = if ($CoreOnly) { "paddlepaddle" } else { [string]$PaddleInventory[0].distribution }
+if (-not $CoreOnly -and $PaddleDistribution -eq "paddlepaddle-gpu") {
+    $IncludedPythonComponentIds += @(
+        "nvidia-cuda-runtime-cu12", "nvidia-cufft-cu12", "nvidia-curand-cu12",
+        "nvidia-cusolver-cu12", "nvidia-cusparse-cu12"
+    )
+    # Re-run validation now that the GPU Paddle distribution has selected its
+    # complete native dependency set.
+    $PythonInventory = @(
+        Get-PythonRuntimeInventory $VenvPython $PythonComponentSpecs $IncludedPythonComponentIds
+    )
+}
+$IncludedNvidiaRuntimeComponents = @(
+    $PythonInventory | Where-Object {
+        $_.id -in $IncludedPythonComponentIds -and $_.id -like "nvidia-*"
+    }
+)
 $PaddleMetadataDistributions = @()
 if (-not $CoreOnly) {
     $PaddleMetadataDistributions = @(Get-PaddleMetadataDistributions $VenvPython)
@@ -291,7 +336,15 @@ $FfmpegLicenseSource = Get-FfmpegLicenseFile $FfmpegSource $FfmpegLicensePath
 # videos, and user data are never copied into it or passed to PyInstaller.
 New-Item -ItemType Directory -Force -Path $BuildRoot | Out-Null
 $ProbeComponentSpecsJson = ConvertTo-Json @(
-    $PythonComponentSpecs | Where-Object { $_.id -in $IncludedPythonComponentIds }
+    $PythonInventory |
+        Where-Object { $_.id -in $IncludedPythonComponentIds } |
+        ForEach-Object {
+            [ordered]@{
+                id = [string]$_.id
+                distribution = [string]$_.distribution
+                module = [string]$_.module
+            }
+        }
 ) -Compress
 $RuntimeProbeHookPath = Join-Path $BuildRoot "pyinstaller_runtime_probe_hook.py"
 $RuntimeProbeHook = @"
@@ -385,12 +438,6 @@ else {
     $PyInstallerArguments += @(
         "--collect-all", "faster_whisper",
         "--collect-all", "ctranslate2",
-        "--hidden-import", "nvidia.cublas",
-        "--hidden-import", "nvidia.cuda_nvrtc",
-        "--hidden-import", "nvidia.cudnn",
-        "--collect-binaries", "nvidia.cublas",
-        "--collect-binaries", "nvidia.cuda_nvrtc",
-        "--collect-binaries", "nvidia.cudnn",
         "--collect-all", "huggingface_hub",
         "--collect-all", "paddleocr",
         "--hidden-import", "paddle",
@@ -400,12 +447,16 @@ else {
         "--copy-metadata", "paddlex",
         "--copy-metadata", "faster-whisper",
         "--copy-metadata", "ctranslate2",
-        "--copy-metadata", "nvidia-cublas-cu12",
-        "--copy-metadata", "nvidia-cuda-nvrtc-cu12",
-        "--copy-metadata", "nvidia-cudnn-cu12",
         "--copy-metadata", "huggingface-hub",
-        "--copy-metadata", "paddlepaddle"
+        "--copy-metadata", $PaddleDistribution
     )
+    foreach ($runtime in $IncludedNvidiaRuntimeComponents) {
+        $PyInstallerArguments += @(
+            "--hidden-import", [string]$runtime.module,
+            "--collect-binaries", [string]$runtime.module,
+            "--copy-metadata", [string]$runtime.distribution
+        )
+    }
     foreach ($distribution in $PaddleMetadataDistributions) {
         $PyInstallerArguments += @("--copy-metadata", $distribution)
     }
@@ -461,17 +512,14 @@ $PlaceholderPath = Join-Path $ResourceRoot ".gitkeep"
 )
 Get-ChildItem -LiteralPath $BuiltSidecarDirectory -Force | Copy-Item -Destination $ResourceRoot -Recurse -Force
 if (-not $CoreOnly) {
-    foreach ($cudaRuntimeFile in @(
-        "_internal\nvidia\cublas\bin\cublas64_12.dll",
-        "_internal\nvidia\cublas\bin\cublasLt64_12.dll",
-        "_internal\nvidia\cudnn\bin\cudnn64_9.dll",
-        "_internal\nvidia\cuda_nvrtc\bin\nvrtc64_120_0.dll"
-    )) {
-        Require-File (Join-Path $ResourceRoot $cudaRuntimeFile) "Bundled NVIDIA CUDA runtime DLL"
-    }
-    foreach ($metadataPrefix in @(
-        "nvidia_cublas_cu12", "nvidia_cuda_nvrtc_cu12", "nvidia_cudnn_cu12"
-    )) {
+    foreach ($runtime in $IncludedNvidiaRuntimeComponents) {
+        $cudaRuntimeFile = Join-Path `
+            "_internal\nvidia\$([string]$runtime.runtime_directory)\bin" `
+            ([string]$runtime.sentinel_dll)
+        Require-File `
+            (Join-Path $ResourceRoot $cudaRuntimeFile) `
+            "Bundled $([string]$runtime.distribution) CUDA runtime DLL"
+        $metadataPrefix = ([string]$runtime.distribution) -replace "-", "_"
         $metadataDirectories = @(
             Get-ChildItem -LiteralPath (Join-Path $ResourceRoot "_internal") -Directory |
                 Where-Object { $_.Name -like "$metadataPrefix-*.dist-info" }
@@ -479,10 +527,19 @@ if (-not $CoreOnly) {
         if ($metadataDirectories.Count -ne 1) {
             throw "Expected exactly one bundled '$metadataPrefix' metadata directory, found $($metadataDirectories.Count)."
         }
-        Require-File `
-            (Join-Path $metadataDirectories[0].FullName "licenses\License.txt") `
-            "Bundled NVIDIA runtime license"
+        $licenseFiles = @(
+            Get-ChildItem -LiteralPath $metadataDirectories[0].FullName -Recurse -File |
+                Where-Object { $_.Name -match "(?i)^licen[cs]e(?:\..*)?$" }
+        )
+        if ($licenseFiles.Count -lt 1) {
+            throw "Bundled NVIDIA runtime '$metadataPrefix' is missing its retained wheel license."
+        }
     }
+    # cuBLAS LT is a distinct native library used by CTranslate2 GEMM paths;
+    # keep an explicit second sentinel in addition to the per-package probe.
+    Require-File `
+        (Join-Path $ResourceRoot "_internal\nvidia\cublas\bin\cublasLt64_12.dll") `
+        "Bundled NVIDIA cuBLAS LT runtime DLL"
 }
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffmpeg.exe") -Destination (Join-Path $ToolRoot "ffmpeg.exe") -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffprobe.exe") -Destination (Join-Path $ToolRoot "ffprobe.exe") -Force
@@ -572,7 +629,15 @@ $RuntimeComponents = @(
             version = if ($included) { [string]$component.version } else { $null }
             included = $included
             import_verified = $included
-            status = if ($included) { "bundled" } else { "excluded-core-only" }
+            status = if ($included) {
+                "bundled"
+            }
+            elseif ($CoreOnly) {
+                "excluded-core-only"
+            }
+            else {
+                "excluded-runtime-variant"
+            }
         }
     }
     [ordered]@{
@@ -597,6 +662,12 @@ $SourceFingerprintAfterBuild = Get-Video2NotesSidecarSourceFingerprint $RepoRoot
 if ($SourceFingerprintAfterBuild -ne $SourceFingerprintBeforeBuild) {
     throw "Python or sidecar packaging sources changed while PyInstaller was running. Rebuild so the frozen backend has one coherent source fingerprint."
 }
+$NvidiaRuntimeAsset = if ($PaddleDistribution -eq "paddlepaddle-gpu") {
+    "nvidia/cuda12.9-complete-paddle-ocr-and-ctranslate2-runtime"
+}
+else {
+    "nvidia/cuda12.9-ctranslate2-runtime"
+}
 
 $Manifest = [ordered]@{
     schema = 2
@@ -610,7 +681,7 @@ $Manifest = [ordered]@{
         @()
     }
     else {
-        @("faster-whisper/silero-vad-v6", "nvidia/cuda12-cublas-cudnn-nvrtc")
+        @("faster-whisper/silero-vad-v6", $NvidiaRuntimeAsset)
     }
     components = $RuntimeComponents
     files = @(

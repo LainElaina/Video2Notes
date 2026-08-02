@@ -5,6 +5,7 @@ from .acceleration import (
     EngineAcceleration,
     align_execution_plan_with_acceleration,
     detect_acceleration_capabilities,
+    preload_ctranslate2_before_paddle,
     prepare_nvidia_cuda_runtime,
 )
 from .estimate import ProcessingEstimate, estimate_processing_time
@@ -52,6 +53,7 @@ __all__ = [
     "detect_acceleration_capabilities",
     "detect_hardware",
     "estimate_processing_time",
+    "preload_ctranslate2_before_paddle",
     "prepare_nvidia_cuda_runtime",
     "recommend_hardware_tier",
     "recommend_resources",

@@ -32,14 +32,36 @@ asr = [
   "ctranslate2>=4.4,<5",
   "faster-whisper>=1.1,<2",
   "huggingface-hub>=0.34,<2",
-  "nvidia-cublas-cu12==12.9.2.10; platform_system == 'Windows'",
+  # Keep the Windows CUDA stack identical to the Paddle GPU runtime verified
+  # by the same-process OCR -> ASR compatibility probe.  In particular, two
+  # different cuDNN builds with the same DLL basename are unsafe on Windows.
+  "nvidia-cublas-cu12==12.9.0.13; platform_system == 'Windows'",
   "nvidia-cuda-nvrtc-cu12==12.9.86; platform_system == 'Windows'",
-  "nvidia-cudnn-cu12==9.24.0.43; platform_system == 'Windows'",
+  "nvidia-cudnn-cu12==9.9.0.52; platform_system == 'Windows'",
+  "nvidia-nvjitlink-cu12==12.9.86; platform_system == 'Windows'",
 ]
 ocr = [
   "huggingface-hub>=0.34,<2",
   "paddlepaddle>=3.3,<4; platform_system == 'Windows'",
   "paddleocr>=3.1,<4",
+]
+# The official Paddle CUDA wheel is intentionally installed by
+# scripts/bootstrap.ps1 -WithOcrGpu from Paddle's cu129 index.  A portable
+# PEP 508 requirement cannot choose the correct CPython/Windows wheel from
+# that non-PyPI index, so this extra declares every other dependency exactly.
+# Do not combine this extra with ``ocr``; bootstrap enforces the exclusivity.
+ocr-gpu = [
+  "huggingface-hub>=0.34,<2",
+  "paddleocr==3.7.0",
+  "nvidia-cuda-runtime-cu12==12.9.37; platform_system == 'Windows'",
+  "nvidia-cublas-cu12==12.9.0.13; platform_system == 'Windows'",
+  "nvidia-cudnn-cu12==9.9.0.52; platform_system == 'Windows'",
+  "nvidia-cufft-cu12==11.4.0.6; platform_system == 'Windows'",
+  "nvidia-curand-cu12==10.3.10.19; platform_system == 'Windows'",
+  "nvidia-cusolver-cu12==11.7.4.40; platform_system == 'Windows'",
+  "nvidia-cusparse-cu12==12.5.9.5; platform_system == 'Windows'",
+  "nvidia-cuda-nvrtc-cu12==12.9.86; platform_system == 'Windows'",
+  "nvidia-nvjitlink-cu12==12.9.86; platform_system == 'Windows'",
 ]
 render = [
   "markdown-it-py>=3,<5",
