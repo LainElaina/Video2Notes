@@ -33,7 +33,7 @@ from video2notes.components import (
     PrepareResult,
     TierRecommendation,
 )
-from video2notes.domain import ArtifactManifest, SourceDescriptor
+from video2notes.domain import ArtifactManifest, ProcessingScope, SourceDescriptor
 from video2notes.jobs import (
     JobAlreadyRunningError,
     JobManager,
@@ -139,6 +139,7 @@ class SourceProbeRequest(ApiModel):
 class CreateRunRequest(ApiModel):
     source: SourceInput
     quality_mode: QualityMode = QualityMode.BALANCED
+    processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL
 
 
 class ProviderSecretRequest(ApiModel):
@@ -233,6 +234,7 @@ class ComponentPreparationResponse(ApiModel):
 class ProcessingEstimateRequest(ApiModel):
     duration_seconds: float = Field(ge=0)
     quality_mode: QualityMode = QualityMode.BALANCED
+    processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL
     source_height: int | None = Field(default=None, ge=1)
     source_fps: float | None = Field(default=None, gt=0)
 
@@ -359,9 +361,7 @@ class ApiContext:
             if not child.is_dir() or not manifest_path.is_file():
                 continue
             try:
-                manifest = ArtifactManifest.model_validate_json(
-                    manifest_path.read_text(encoding="utf-8")
-                )
+                manifest = RunWorkspace(child).manifest
             except (OSError, ValueError):
                 continue
             manifests.append(manifest)
@@ -474,8 +474,13 @@ def create_app(
     protected = [Depends(require_token)]
 
     @app.get("/api/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.1.0", "scope": "local-only"}
+    def health() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "version": "0.1.0",
+            "scope": "local-only",
+            "capabilities": ["processing_scope_audio_only"],
+        }
 
     @app.get(
         "/api/system",
@@ -551,6 +556,7 @@ def create_app(
             request.quality_mode,
             source_height=request.source_height,
             source_fps=request.source_fps,
+            processing_scope=request.processing_scope,
         )
 
     @app.get(
@@ -868,6 +874,7 @@ def create_app(
             context.runs_root,
             source=source,
             profile=request.quality_mode.value,
+            processing_scope=request.processing_scope,
         )
         return _safe_manifest(workspace.manifest)
 

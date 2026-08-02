@@ -19,6 +19,7 @@ from video2notes.domain import (
     ArtifactKind,
     ArtifactManifest,
     ArtifactRef,
+    ProcessingScope,
     RunStatus,
     SourceDescriptor,
     StageStatus,
@@ -81,6 +82,12 @@ class RunWorkspace:
         self.manifest = ArtifactManifest.model_validate_json(
             self.manifest_path.read_text(encoding="utf-8")
         )
+        if self.manifest.schema_version < 2:
+            # v1 predates processing_scope. Pydantic supplies the legacy
+            # audio-visual default; persist the explicit v2 contract so later
+            # readers never have to infer the run's modality boundary again.
+            self.manifest.schema_version = 2
+            self._save()
 
     @classmethod
     def create(
@@ -89,6 +96,7 @@ class RunWorkspace:
         *,
         source: SourceDescriptor,
         profile: str,
+        processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL,
         run_id: str | None = None,
     ) -> Self:
         resolved_id = _sanitize_id(run_id or new_run_id())
@@ -100,6 +108,7 @@ class RunWorkspace:
             run_id=resolved_id,
             source=source,
             profile=profile,
+            processing_scope=processing_scope,
         )
         workspace = cls.__new__(cls)
         workspace.root = root

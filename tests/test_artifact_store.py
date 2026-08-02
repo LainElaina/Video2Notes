@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from video2notes.artifacts import RunWorkspace
 from video2notes.domain import (
     ArtifactKind,
+    ProcessingScope,
     RunStatus,
     SourceDescriptor,
     StageStatus,
@@ -108,3 +110,23 @@ class RunWorkspaceTests(unittest.TestCase):
             first_file = first.artifact_path("media", "source.mp4")
             first_file.write_bytes(b"first")
             self.assertFalse(second.artifact_path("media", "source.mp4").exists())
+
+    def test_legacy_v1_manifest_without_scope_loads_as_audio_visual(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = self.create_workspace(Path(temporary))
+            manifest_path = workspace.root / "manifest.json"
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["schema_version"] = 1
+            payload.pop("processing_scope")
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            loaded = RunWorkspace(workspace.root)
+
+            self.assertEqual(loaded.manifest.schema_version, 2)
+            self.assertEqual(
+                loaded.manifest.processing_scope,
+                ProcessingScope.AUDIO_VISUAL,
+            )
+            migrated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated["schema_version"], 2)
+            self.assertEqual(migrated["processing_scope"], "audio_visual")

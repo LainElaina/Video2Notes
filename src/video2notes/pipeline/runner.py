@@ -36,6 +36,7 @@ from video2notes.domain import (
     EvidenceModality,
     EvidenceSpan,
     MediaManifest,
+    ProcessingScope,
     RunStatus,
     SourceDescriptor,
     VisualState,
@@ -109,6 +110,7 @@ class PipelineRequest(PipelineModel):
     auth: AuthSpec = Field(default_factory=AuthSpec)
     acquisition: AcquisitionPolicy = Field(default_factory=AcquisitionPolicy)
     quality_mode: QualityMode = QualityMode.BALANCED
+    processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL
     title_override: str | None = None
     language_hints: list[str] = Field(default_factory=list)
     sampling_plan: SamplingPlan = Field(default_factory=SamplingPlan)
@@ -119,24 +121,31 @@ class PipelineRequest(PipelineModel):
     def effective_report_spec(self) -> ReportSpec:
         """Resolve legacy booleans into the new report contract.
 
-        Explicit report_spec values take precedence. This preserves existing
-        CLI/API requests while allowing the desktop UI to select an audience,
-        detail budget, screenshots, and output formats as one coherent policy.
+        Explicit report_spec values take precedence except that audio-only
+        processing always disables screenshots because no visual analysis is
+        permitted. This preserves existing CLI/API requests while allowing the
+        desktop UI to select an audience, detail budget, screenshots, and
+        output formats as one coherent policy.
         """
 
         if self.report_spec is not None:
+            if self.processing_scope is ProcessingScope.AUDIO_ONLY:
+                return self.report_spec.model_copy(update={"include_screenshots": False})
             return self.report_spec
         output_formats = {OutputFormat.MARKDOWN, OutputFormat.HTML}
         if self.generate_pdf:
             output_formats.add(OutputFormat.PDF)
         return ReportSpec(
-            include_screenshots=self.include_screenshots,
+            include_screenshots=(
+                self.include_screenshots and self.processing_scope is ProcessingScope.AUDIO_VISUAL
+            ),
             output_formats=output_formats,
         )
 
 
 class PipelineOutcome(PipelineModel):
     run_id: str
+    processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL
     markdown: ArtifactRef
     html: ArtifactRef
     pdf: ArtifactRef | None = None
@@ -202,15 +211,15 @@ class Video2NotesPipeline:
     STAGE_VERSIONS: Mapping[str, str] = {
         "source.acquire": "2",
         "media.probe": "2",
-        "system.plan": "3",
+        "system.plan": "4",
         "vision.scan": "5",
         "audio.extract": "2",
         "captions.parse": "2",
         "audio.asr": "5",
         "ocr.extract": "4",
         "evidence.fuse": "3",
-        "notes.compose": "10",
-        "render.outputs": "7",
+        "notes.compose": "11",
+        "render.outputs": "8",
     }
 
     def __init__(
@@ -237,6 +246,7 @@ class Video2NotesPipeline:
                 locator=request.source.value,
             ),
             profile=request.quality_mode.value,
+            processing_scope=request.processing_scope,
         )
 
     def run(
@@ -250,7 +260,17 @@ class Video2NotesPipeline:
         cancellation = cancel or CancellationToken()
         progress = emit or _noop_emit
         current_stage: str | None = None
+        if workspace.manifest.processing_scope is not request.processing_scope:
+            raise ValueError(
+                "processing scope is immutable for an existing run; "
+                "create a new run to change between audio-visual and audio-only"
+            )
         workspace.set_status(RunStatus.RUNNING)
+        if request.processing_scope is ProcessingScope.AUDIO_ONLY:
+            workspace.add_warning(
+                "Audio-only processing scope: visual scanning, OCR, and screenshots "
+                "were intentionally skipped."
+            )
         try:
             current_stage = "source.acquire"
             source_manifest, acquisition, media_ref, subtitle_refs = self._acquire(
@@ -324,15 +344,23 @@ class Video2NotesPipeline:
                 progress,
             )
             current_stage = "vision.scan"
-            visual_states, visual_ref = self._scan_visual_states(
-                workspace,
-                media,
-                media_ref,
-                execution_plan.model_dump(mode="json"),
-                request.sampling_plan,
-                cancellation,
-                progress,
-            )
+            if request.processing_scope is ProcessingScope.AUDIO_ONLY:
+                visual_states, visual_ref = self._skip_visual_states(
+                    workspace,
+                    media,
+                    media_ref,
+                    progress,
+                )
+            else:
+                visual_states, visual_ref = self._scan_visual_states(
+                    workspace,
+                    media,
+                    media_ref,
+                    execution_plan.model_dump(mode="json"),
+                    request.sampling_plan,
+                    cancellation,
+                    progress,
+                )
             current_stage = "audio.extract"
             extraction, extraction_ref = self._extract_audio(
                 workspace,
@@ -363,16 +391,23 @@ class Video2NotesPipeline:
                 progress,
             )
             current_stage = "ocr.extract"
-            ocr_bundle, ocr_evidence, ocr_ref = self._extract_ocr(
-                workspace,
-                visual_states,
-                visual_ref,
-                request,
-                ocr_backend,
-                execution_plan,
-                cancellation,
-                progress,
-            )
+            if request.processing_scope is ProcessingScope.AUDIO_ONLY:
+                ocr_bundle, ocr_evidence, ocr_ref = self._skip_ocr(
+                    workspace,
+                    visual_ref,
+                    progress,
+                )
+            else:
+                ocr_bundle, ocr_evidence, ocr_ref = self._extract_ocr(
+                    workspace,
+                    visual_states,
+                    visual_ref,
+                    request,
+                    ocr_backend,
+                    execution_plan,
+                    cancellation,
+                    progress,
+                )
             current_stage = "evidence.fuse"
             fusion, fusion_ref = self._fuse(
                 workspace,
@@ -381,6 +416,7 @@ class Video2NotesPipeline:
                 visual_states,
                 [*captions, *asr_evidence, *ocr_evidence],
                 [captions_ref, asr_ref, ocr_ref, visual_ref],
+                request.processing_scope,
                 cancellation,
                 progress,
             )
@@ -434,10 +470,12 @@ class Video2NotesPipeline:
     ) -> ArtifactRef:
         output = workspace.artifact_path("system", "execution-plan.json")
         composer = _composer_identity(self.runtime.note_composer)
+        audio_only = request.processing_scope is ProcessingScope.AUDIO_ONLY
+        screenshot_export_enabled = request.effective_report_spec().resolve().include_screenshots
         degraded: list[str] = []
         if primary_asr_backend is None:
             degraded.append("primary_asr_unavailable")
-        if ocr_backend is None:
+        if not audio_only and ocr_backend is None:
             degraded.append("ocr_unavailable")
         if (
             execution_plan.secondary_asr is not SecondaryAsrPolicy.OFF
@@ -446,19 +484,63 @@ class Video2NotesPipeline:
             degraded.append("secondary_asr_unavailable")
         if execution_plan.verification_passes > 0 and composer["verifier"] is None:
             degraded.append("note_verifier_unavailable")
+        skipped_features = ["vision_scan", "ocr", "screenshots"] if audio_only else []
+        effective_plan = execution_plan.model_dump(mode="json")
+        effective_plan.update(
+            {
+                "processing_scope": request.processing_scope.value,
+                "modality_controls": {
+                    "source_acquisition_enabled": True,
+                    "media_probe_enabled": True,
+                    "audio_extraction_enabled": True,
+                    "platform_captions_enabled": True,
+                    "audio_analysis_enabled": True,
+                    "visual_analysis_enabled": not audio_only,
+                    "ocr_enabled": not audio_only,
+                    "screenshot_export_enabled": screenshot_export_enabled,
+                    "evidence_fusion_enabled": True,
+                    "note_outputs_enabled": True,
+                },
+                "stage_execution": {
+                    "source.acquire": {"status": "enabled", "reason": None},
+                    "media.probe": {"status": "enabled", "reason": None},
+                    "vision.scan": (
+                        {"status": "skipped", "reason": "audio_only_scope"}
+                        if audio_only
+                        else {"status": "enabled", "reason": None}
+                    ),
+                    "audio.extract": {"status": "enabled", "reason": None},
+                    "captions.parse": {"status": "enabled", "reason": None},
+                    "audio.asr": {"status": "enabled", "reason": None},
+                    "ocr.extract": (
+                        {"status": "skipped", "reason": "audio_only_scope"}
+                        if audio_only
+                        else {"status": "enabled", "reason": None}
+                    ),
+                    "evidence.fuse": {"status": "enabled", "reason": None},
+                    "notes.compose": {"status": "enabled", "reason": None},
+                    "render.outputs": {"status": "enabled", "reason": None},
+                },
+            }
+        )
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "quality_mode": request.quality_mode.value,
+            "processing_scope": request.processing_scope.value,
             "hardware": hardware.model_dump(mode="json"),
             "acceleration": acceleration.model_dump(mode="json"),
-            "effective_plan": execution_plan.model_dump(mode="json"),
+            "effective_plan": effective_plan,
             "actual_backends": {
                 "asr_primary": _backend_identity(primary_asr_backend),
                 "asr_secondary": _backend_identity(secondary_asr_backend),
-                "ocr": _backend_identity(ocr_backend),
+                "ocr": None if audio_only else _backend_identity(ocr_backend),
+                "ocr_configured_but_not_executed": (
+                    _backend_identity(ocr_backend) if audio_only else None
+                ),
                 "notes": composer,
             },
             "degraded_features": degraded,
+            "skipped_features": skipped_features,
         }
         with workspace.stage(
             "system.plan",
@@ -471,7 +553,19 @@ class Video2NotesPipeline:
                 _write_json(output, payload)
                 stage.add_output(output, kind=ArtifactKind.SYSTEM)
                 stage.add_metric("degraded_feature_count", len(degraded))
-                emit("system.plan", progress=1.0, message="有效执行计划已固定")
+                stage.add_metric("skipped_feature_count", len(skipped_features))
+                stage.add_metric("processing_scope", request.processing_scope.value)
+                emit(
+                    "system.plan",
+                    progress=1.0,
+                    message="有效执行计划已固定",
+                    metrics={
+                        "processing_scope": request.processing_scope.value,
+                        "visual_analysis_enabled": not audio_only,
+                        "ocr_enabled": not audio_only,
+                        "screenshot_export_enabled": screenshot_export_enabled,
+                    },
+                )
         return workspace.ref_for(output, kind=ArtifactKind.SYSTEM)
 
     def _acquire(
@@ -763,6 +857,66 @@ class Video2NotesPipeline:
                     "vision.scan",
                     progress=1.0,
                     message=f"发现 {len(states)} 个持久画面状态",
+                )
+        return states, workspace.ref_for(states_path, kind=ArtifactKind.VISUAL)
+
+    def _skip_visual_states(
+        self,
+        workspace: RunWorkspace,
+        media: MediaManifest,
+        media_ref: ArtifactRef,
+        emit: PipelineEmitter,
+    ) -> tuple[list[VisualState], ArtifactRef]:
+        """Persist an explicit, cacheable visual-stage abstention for audio-only runs."""
+
+        states_path = workspace.artifact_path("vision", "visual-states.json")
+        events_path = workspace.artifact_path("vision", "scan-events.json")
+        skip_reason = "audio_only_scope"
+        config = {
+            "processing_scope": ProcessingScope.AUDIO_ONLY.value,
+            "skipped": True,
+            "skip_reason": skip_reason,
+        }
+        with workspace.stage(
+            "vision.scan",
+            stage_version=self.STAGE_VERSIONS["vision.scan"],
+            config=config,
+            inputs=[media_ref],
+        ) as stage:
+            if stage.cached:
+                states = _read_model_list(states_path, VisualState)
+            else:
+                states = []
+                _write_json(
+                    events_path,
+                    {
+                        "schema_version": 3,
+                        "source": media.source_path,
+                        "duration_us": media.duration_us,
+                        "processing_scope": ProcessingScope.AUDIO_ONLY.value,
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                        "events": [],
+                    },
+                )
+                _write_json(states_path, [])
+                stage.add_output(events_path, kind=ArtifactKind.VISUAL)
+                stage.add_output(states_path, kind=ArtifactKind.VISUAL)
+                stage.add_warning(
+                    "Visual scanning was intentionally skipped by the audio-only scope."
+                )
+                stage.add_metric("skipped", True)
+                stage.add_metric("skip_reason", skip_reason)
+                stage.add_metric("visual_state_count", 0)
+                emit(
+                    "vision.scan",
+                    progress=1.0,
+                    message="仅音频模式：已跳过画面扫描",
+                    metrics={
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                        "processing_scope": ProcessingScope.AUDIO_ONLY.value,
+                    },
                 )
         return states, workspace.ref_for(states_path, kind=ArtifactKind.VISUAL)
 
@@ -1087,6 +1241,54 @@ class Video2NotesPipeline:
                 emit("ocr.extract", progress=1.0, message="画面文字证据已生成")
         return bundle, evidence, workspace.ref_for(output, kind=ArtifactKind.EVIDENCE)
 
+    def _skip_ocr(
+        self,
+        workspace: RunWorkspace,
+        visual_ref: ArtifactRef,
+        emit: PipelineEmitter,
+    ) -> tuple[None, list[EvidenceSpan], ArtifactRef]:
+        """Persist an explicit OCR abstention while preserving downstream inputs."""
+
+        output = workspace.artifact_path("ocr", "ocr-evidence.json")
+        skip_reason = "audio_only_scope"
+        config = {
+            "processing_scope": ProcessingScope.AUDIO_ONLY.value,
+            "skipped": True,
+            "skip_reason": skip_reason,
+        }
+        with workspace.stage(
+            "ocr.extract",
+            stage_version=self.STAGE_VERSIONS["ocr.extract"],
+            config=config,
+            inputs=[visual_ref],
+        ) as stage:
+            if not stage.cached:
+                _write_json(
+                    output,
+                    {
+                        "bundle": None,
+                        "processing_scope": ProcessingScope.AUDIO_ONLY.value,
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                    },
+                )
+                stage.add_output(output, kind=ArtifactKind.EVIDENCE)
+                stage.add_warning("OCR was intentionally skipped by the audio-only scope.")
+                stage.add_metric("skipped", True)
+                stage.add_metric("skip_reason", skip_reason)
+                stage.add_metric("ocr_evidence_count", 0)
+                emit(
+                    "ocr.extract",
+                    progress=1.0,
+                    message="仅音频模式：已跳过画面文字识别",
+                    metrics={
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                        "processing_scope": ProcessingScope.AUDIO_ONLY.value,
+                    },
+                )
+        return None, [], workspace.ref_for(output, kind=ArtifactKind.EVIDENCE)
+
     def _fuse(
         self,
         workspace: RunWorkspace,
@@ -1095,25 +1297,37 @@ class Video2NotesPipeline:
         visual_states: list[VisualState],
         evidence: list[EvidenceSpan],
         input_refs: list[ArtifactRef],
+        processing_scope: ProcessingScope,
         cancel: CancellationToken,
         emit: PipelineEmitter,
     ) -> tuple[FusionResult, ArtifactRef]:
         output = workspace.artifact_path("evidence", "timeline.json")
+        config: dict[str, Any] = {
+            "association": "interval-overlap-v1",
+            "speech_gap_us": 1_200_000,
+            "maximum_window_us": 90_000_000,
+        }
+        if processing_scope is ProcessingScope.AUDIO_ONLY:
+            config["processing_scope"] = processing_scope.value
         with workspace.stage(
             "evidence.fuse",
             stage_version=self.STAGE_VERSIONS["evidence.fuse"],
-            config={
-                "association": "interval-overlap-v1",
-                "speech_gap_us": 1_200_000,
-                "maximum_window_us": 90_000_000,
-            },
+            config=config,
             inputs=input_refs,
         ) as stage:
             if stage.cached:
                 fusion = _read_model(output, FusionResult)
             else:
                 cancel.raise_if_cancelled()
-                emit("evidence.fuse", progress=0.0, message="按物理时间对齐音画证据")
+                emit(
+                    "evidence.fuse",
+                    progress=0.0,
+                    message=(
+                        "按物理时间对齐音频与字幕证据"
+                        if processing_scope is ProcessingScope.AUDIO_ONLY
+                        else "按物理时间对齐音画证据"
+                    ),
+                )
                 metadata_text = " · ".join(
                     item for item in (source.title, source.author, source.description) if item
                 )
@@ -1169,6 +1383,7 @@ class Video2NotesPipeline:
             stage_version=self.STAGE_VERSIONS["notes.compose"],
             config={
                 "composer": _composer_identity(self.runtime.note_composer),
+                "processing_scope": request.processing_scope.value,
                 "report_spec": resolved_report.model_dump(mode="json"),
                 "title_override": request.title_override,
                 "quality_mode": request.quality_mode.value,
@@ -1287,6 +1502,7 @@ class Video2NotesPipeline:
                 "markdown": True,
                 "html": True,
                 "pdf": generate_pdf,
+                "processing_scope": request.processing_scope.value,
                 "report_spec": resolved_report.model_dump(mode="json"),
                 "theme": "evidence-light-table-v1",
             },
@@ -1312,6 +1528,7 @@ class Video2NotesPipeline:
                     stage.add_output(pdf_path, kind=ArtifactKind.RENDER)
                 outcome = PipelineOutcome(
                     run_id=workspace.manifest.run_id,
+                    processing_scope=request.processing_scope,
                     markdown=workspace.ref_for(
                         markdown_path,
                         kind=ArtifactKind.NOTE,

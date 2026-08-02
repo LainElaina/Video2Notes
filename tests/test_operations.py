@@ -26,6 +26,7 @@ from video2notes.domain import (
     MediaManifest,
     MediaStream,
     MediaTimestamp,
+    ProcessingScope,
     Rational,
     RunStatus,
     SourceDescriptor,
@@ -275,6 +276,29 @@ class OperationTests(unittest.TestCase):
             {"outside"},
         )
 
+    def test_audio_only_scope_rejects_visual_rescan_with_or_without_ocr(self) -> None:
+        workspace = _completed_workspace(
+            self.runs_root,
+            evidence=[_evidence("audio", 0, 1_000_000, "audio")],
+            processing_scope=ProcessingScope.AUDIO_ONLY,
+        )
+        service = OperationService(workspace)
+
+        for run_ocr in (False, True):
+            with (
+                self.subTest(run_ocr=run_ocr),
+                self.assertRaisesRegex(OperationConflictError, "audio-only"),
+            ):
+                service.execute(
+                    OperationRequest(
+                        kind=OperationKind.VISION_RESCAN,
+                        range=TimeRange(start_us=1_000_000, end_us=2_000_000),
+                        run_ocr=run_ocr,
+                    )
+                )
+
+        self.assertEqual(list((workspace.root / "operations").iterdir()), [])
+
     def test_manual_correction_is_append_only_and_effective_view_uses_new_span(
         self,
     ) -> None:
@@ -457,16 +481,48 @@ class OperationTests(unittest.TestCase):
         )
         self.assertEqual(escaped.status_code, 404)
 
+    def test_operations_api_rejects_visual_work_for_audio_only_run(self) -> None:
+        context = ApiContext(
+            self.temporary.name,
+            token="test-token",
+            model_registry=ModelRegistry.with_local_defaults(),
+            secret_store=KeyringSecretStore(InMemoryKeyring()),
+        )
+        workspace = _completed_workspace(
+            context.runs_root,
+            evidence=[_evidence("audio", 1_000_000, 2_000_000, "audio")],
+            processing_scope=ProcessingScope.AUDIO_ONLY,
+        )
+        client = TestClient(create_app(context))
+        self.addCleanup(client.close)
+        path = f"/api/runs/{workspace.manifest.run_id}/operations"
+
+        for run_ocr in (False, True):
+            with self.subTest(run_ocr=run_ocr):
+                response = client.post(
+                    path,
+                    headers={"X-Video2Notes-Token": "test-token"},
+                    json={
+                        "kind": "vision_rescan",
+                        "range": {"start_us": 1_000_000, "end_us": 2_000_000},
+                        "run_ocr": run_ocr,
+                    },
+                )
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("audio-only", response.json()["detail"])
+
 
 def _completed_workspace(
     runs_root: Path,
     *,
     evidence: list[EvidenceSpan],
+    processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL,
 ) -> RunWorkspace:
     workspace = RunWorkspace.create(
         runs_root,
         source=SourceDescriptor(kind="local", locator="fixture.mp4"),
         profile="balanced",
+        processing_scope=processing_scope,
     )
     run_id = workspace.manifest.run_id
     evidence = [

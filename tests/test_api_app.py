@@ -138,7 +138,9 @@ class ApiAppTests(unittest.TestCase):
         self.headers = {"X-Video2Notes-Token": "test-token"}
 
     def test_health_is_public_but_machine_data_is_protected(self) -> None:
-        self.assertEqual(self.client.get("/api/health").status_code, 200)
+        health = self.client.get("/api/health")
+        self.assertEqual(health.status_code, 200)
+        self.assertIn("processing_scope_audio_only", health.json()["capabilities"])
         self.assertEqual(self.client.get("/api/system").status_code, 401)
         response = self.client.get("/api/system", headers=self.headers)
         self.assertEqual(response.status_code, 200)
@@ -282,6 +284,28 @@ class ApiAppTests(unittest.TestCase):
         self.assertGreater(
             estimate.json()["upper_seconds"],
             estimate.json()["lower_seconds"],
+        )
+        self.assertEqual(estimate.json()["processing_scope"], "audio_visual")
+        audio_only = self.client.post(
+            "/api/estimate",
+            headers=self.headers,
+            json={
+                "duration_seconds": 600,
+                "quality_mode": "balanced",
+                "processing_scope": "audio_only",
+                "source_height": 4320,
+                "source_fps": 120,
+            },
+        )
+        self.assertEqual(audio_only.status_code, 200)
+        self.assertEqual(audio_only.json()["processing_scope"], "audio_only")
+        self.assertEqual(
+            audio_only.json()["basis"],
+            "engineering_budget_audio_only_v1",
+        )
+        self.assertLess(
+            audio_only.json()["upper_seconds"],
+            estimate.json()["upper_seconds"],
         )
         runtime = self.client.get("/api/runtime", headers=self.headers)
         self.assertEqual(runtime.status_code, 200)
@@ -452,9 +476,11 @@ class ApiAppTests(unittest.TestCase):
             json={
                 "source": SourceInput.local("C:/video.mp4").model_dump(mode="json"),
                 "quality_mode": "balanced",
+                "processing_scope": "audio_only",
             },
         )
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["processing_scope"], "audio_only")
         run_id = response.json()["run_id"]
         workspace = self.context.get_workspace(run_id)
         note = workspace.artifact_path("notes", "note.md")

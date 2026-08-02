@@ -23,8 +23,10 @@ from video2notes.ocr import (
     OcrModelInvocation,
 )
 from video2notes.pipeline import (
+    PipelineOutcome,
     PipelineRequest,
     PipelineRuntime,
+    ProcessingScope,
     Video2NotesPipeline,
 )
 from video2notes.sources import AcquisitionPolicy, SourceInput, SourceRegistry
@@ -426,6 +428,197 @@ class PipelineEndToEndTests(unittest.TestCase):
             self.assertTrue(
                 all(record.attempt == 1 for record in reloaded.manifest.stages.values())
             )
+
+    def test_audio_only_runs_full_audio_flow_and_explicitly_skips_visual_work(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            primary = FakeAsr(
+                text="uncertain primary",
+                confidence=0.3,
+                provider="primary",
+            )
+            secondary = FakeAsr(
+                text="confirmed secondary",
+                confidence=0.98,
+                provider="secondary",
+            )
+            ocr = FakeOcr()
+            runtime = PipelineRuntime(
+                source_registry=SourceRegistry.default(),
+                note_composer=EvidenceNoteComposer(),
+                asr_backend=primary,
+                secondary_asr_backend=secondary,
+                ocr_backend=ocr,
+                hardware=fixture_hardware(),
+            )
+            pipeline = Video2NotesPipeline(root / "runs", runtime=runtime)
+            request = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.ACCURATE,
+                processing_scope=ProcessingScope.AUDIO_ONLY,
+                include_screenshots=True,
+                generate_pdf=False,
+            )
+            progress_events: list[dict[str, object]] = []
+
+            def capture_progress(
+                stage: str,
+                *,
+                progress: float | None = None,
+                message: str | None = None,
+                metrics: dict[str, float | int | str | bool | None] | None = None,
+            ) -> None:
+                progress_events.append(
+                    {
+                        "stage": stage,
+                        "progress": progress,
+                        "message": message,
+                        "metrics": metrics or {},
+                    }
+                )
+
+            workspace = pipeline.create_run(request, run_id="audio-only")
+            first = pipeline.run(workspace, request, emit=capture_progress)
+
+            self.assertEqual(first.processing_scope, ProcessingScope.AUDIO_ONLY)
+            self.assertEqual(first.visual_state_count, 0)
+            self.assertGreaterEqual(first.evidence_count, 3)
+            self.assertEqual(primary.calls, 1)
+            self.assertEqual(secondary.calls, 1)
+            self.assertEqual(ocr.calls, 0)
+            self.assertTrue((workspace.root / first.markdown.relative_path).is_file())
+            self.assertTrue((workspace.root / first.html.relative_path).is_file())
+            self.assertIsNone(first.pdf)
+
+            note = NoteDocument.model_validate_json(
+                (workspace.root / "notes" / "document.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                sum(len(section.screenshots) for section in note.sections),
+                0,
+            )
+            self.assertEqual(
+                json.loads(
+                    (workspace.root / "vision" / "visual-states.json").read_text(encoding="utf-8")
+                ),
+                [],
+            )
+            ocr_payload = json.loads(
+                (workspace.root / "ocr" / "ocr-evidence.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(ocr_payload["skipped"])
+            self.assertEqual(ocr_payload["skip_reason"], "audio_only_scope")
+
+            plan = json.loads(
+                (workspace.root / "system" / "execution-plan.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(plan["processing_scope"], "audio_only")
+            self.assertEqual(plan["effective_plan"]["asr_beam_size"], 5)
+            self.assertEqual(
+                plan["effective_plan"]["secondary_asr"],
+                "uncertain_and_conflicts",
+            )
+            self.assertEqual(
+                plan["effective_plan"]["stage_execution"]["vision.scan"],
+                {"status": "skipped", "reason": "audio_only_scope"},
+            )
+            self.assertFalse(
+                plan["effective_plan"]["modality_controls"]["screenshot_export_enabled"]
+            )
+            self.assertIsNone(plan["actual_backends"]["ocr"])
+            self.assertNotIn("ocr_unavailable", plan["degraded_features"])
+
+            manifest = RunWorkspace(workspace.root).manifest
+            self.assertEqual(manifest.processing_scope, ProcessingScope.AUDIO_ONLY)
+            for stage_name in ("vision.scan", "ocr.extract"):
+                record = manifest.stages[stage_name]
+                self.assertTrue(record.metrics["skipped"])
+                self.assertEqual(record.metrics["skip_reason"], "audio_only_scope")
+            skipped_progress = {
+                item["stage"]: item
+                for item in progress_events
+                if item["stage"]
+                in {
+                    "vision.scan",
+                    "ocr.extract",
+                }
+            }
+            self.assertEqual(
+                skipped_progress["vision.scan"]["metrics"]["skip_reason"],  # type: ignore[index]
+                "audio_only_scope",
+            )
+            self.assertEqual(
+                skipped_progress["ocr.extract"]["metrics"]["skip_reason"],  # type: ignore[index]
+                "audio_only_scope",
+            )
+
+            reloaded = RunWorkspace(workspace.root)
+            second = pipeline.run(reloaded, request)
+            self.assertEqual(second.markdown.sha256, first.markdown.sha256)
+            self.assertEqual(primary.calls, 1)
+            self.assertEqual(secondary.calls, 1)
+            self.assertEqual(ocr.calls, 0)
+            self.assertTrue(
+                all(record.attempt == 1 for record in reloaded.manifest.stages.values())
+            )
+
+    def test_switching_existing_workspace_to_audio_only_is_rejected_before_mutation(
+        self,
+    ) -> None:
+        """A run never silently changes its modality boundary while resuming."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "input.mp4"
+            make_media(source)
+            asr = FakeAsr()
+            ocr = FakeOcr()
+            pipeline = Video2NotesPipeline(
+                root / "runs",
+                runtime=PipelineRuntime(
+                    source_registry=SourceRegistry.default(),
+                    note_composer=EvidenceNoteComposer(),
+                    asr_backend=asr,
+                    ocr_backend=ocr,
+                    hardware=fixture_hardware(),
+                ),
+            )
+            audio_visual = PipelineRequest(
+                source=SourceInput.local(source),
+                acquisition=AcquisitionPolicy(prefer_hardlink=False),
+                quality_mode=QualityMode.BALANCED,
+                sampling_plan=SamplingPlan(
+                    default=SamplingSpec(mode=SamplingMode.SKIP)
+                ),
+                include_screenshots=False,
+                generate_pdf=False,
+            )
+            workspace = pipeline.create_run(audio_visual, run_id="scope-cache")
+
+            first = pipeline.run(workspace, audio_visual)
+            self.assertEqual(first.processing_scope, ProcessingScope.AUDIO_VISUAL)
+            self.assertEqual(first.visual_state_count, 0)
+
+            audio_only = audio_visual.model_copy(
+                update={"processing_scope": ProcessingScope.AUDIO_ONLY}
+            )
+            with self.assertRaisesRegex(ValueError, "processing scope is immutable"):
+                pipeline.run(RunWorkspace(workspace.root), audio_only)
+
+            self.assertEqual(ocr.calls, 0)
+            reloaded = RunWorkspace(workspace.root)
+            self.assertEqual(reloaded.manifest.processing_scope, ProcessingScope.AUDIO_VISUAL)
+            self.assertEqual(reloaded.manifest.stages["notes.compose"].attempt, 1)
+            self.assertEqual(reloaded.manifest.stages["render.outputs"].attempt, 1)
+            outcome = PipelineOutcome.model_validate_json(
+                (workspace.root / "render" / "outcome.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(outcome.processing_scope, ProcessingScope.AUDIO_VISUAL)
 
     def test_accurate_mode_only_reruns_low_confidence_audio_window(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

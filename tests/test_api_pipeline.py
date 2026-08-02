@@ -11,7 +11,11 @@ from fastapi.testclient import TestClient
 
 from video2notes.api import ApiContext, create_app
 from video2notes.artifacts import RunWorkspace
-from video2notes.domain import ArtifactKind, RunStatus, SourceDescriptor
+from video2notes.domain import (
+    ArtifactKind,
+    RunStatus,
+    SourceDescriptor,
+)
 from video2notes.pipeline import PipelineOutcome, PipelineRequest, Video2NotesPipeline
 from video2notes.pipeline.runner import PipelineEmitter
 from video2notes.providers import KeyringSecretStore, ModelRegistry
@@ -50,6 +54,7 @@ class FakePipeline(Video2NotesPipeline):
                 locator=request.source.value,
             ),
             profile=request.quality_mode.value,
+            processing_scope=request.processing_scope,
         )
 
     def run(
@@ -90,6 +95,7 @@ class FakePipeline(Video2NotesPipeline):
         workspace.set_status(RunStatus.COMPLETED)
         return PipelineOutcome(
             run_id=workspace.manifest.run_id,
+            processing_scope=request.processing_scope,
             markdown=markdown_ref,
             html=html_ref,
             note_document=document_ref,
@@ -166,6 +172,22 @@ class ApiPipelineTests(unittest.TestCase):
             params={"path": "notes/note.md"},
         )
         self.assertEqual(note.text, "# Fake note")
+
+    def test_submit_accepts_and_persists_audio_only_scope(self) -> None:
+        payload = self._payload()
+        payload["processing_scope"] = "audio_only"
+
+        submitted = self.client.post(
+            "/api/jobs",
+            headers=self.headers,
+            json=payload,
+        )
+
+        self.assertEqual(submitted.status_code, 202)
+        run_id = submitted.json()["run"]["run_id"]
+        self.assertEqual(submitted.json()["run"]["processing_scope"], "audio_only")
+        result = self._wait_for_terminal(run_id)
+        self.assertEqual(result["result"]["processing_scope"], "audio_only")
 
     def test_failed_worker_exposes_type_not_exception_text(self) -> None:
         payload = self._payload(title_override="fail")

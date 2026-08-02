@@ -21,6 +21,7 @@ from video2notes.pipeline import (
     PipelineOutcome,
     PipelineRequest,
     PipelineRuntime,
+    ProcessingScope,
     Video2NotesPipeline,
 )
 from video2notes.providers import KeyringSecretStore, ModelRegistry
@@ -206,6 +207,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="include selected evidence screenshots (default: enabled)",
+    )
+    process.add_argument(
+        "--audio-only",
+        action="store_true",
+        help=(
+            "transcribe audio and platform captions without visual scanning, OCR, or screenshots"
+        ),
     )
     process.add_argument(
         "--pdf",
@@ -451,6 +459,7 @@ def _outcome_event(
         "event": "completed",
         "ok": True,
         "run_id": outcome.run_id,
+        "processing_scope": outcome.processing_scope.value,
         "run_root": str(run_root),
         "outputs": {
             "markdown": absolute(outcome.markdown.relative_path),
@@ -459,6 +468,7 @@ def _outcome_event(
             "note_document": absolute(outcome.note_document.relative_path),
         },
         "metrics": {
+            "processing_scope": outcome.processing_scope.value,
             "evidence_count": outcome.evidence_count,
             "visual_state_count": outcome.visual_state_count,
             "used_deterministic_note_fallback": (outcome.used_deterministic_note_fallback),
@@ -483,6 +493,9 @@ def _run_process(
         auth=_auth_spec(args),
         acquisition=_acquisition_policy(mode),
         quality_mode=mode,
+        processing_scope=(
+            ProcessingScope.AUDIO_ONLY if args.audio_only else ProcessingScope.AUDIO_VISUAL
+        ),
         title_override=args.title,
         language_hints=_language_hints(args.language),
         include_screenshots=args.screenshots,
@@ -507,6 +520,7 @@ def _run_process(
             "event": "started",
             "run_id": workspace.manifest.run_id,
             "quality_mode": mode.value,
+            "processing_scope": request.processing_scope.value,
             "hardware_tier": tier.value,
         },
     )

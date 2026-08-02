@@ -95,6 +95,13 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ProcessingScope(StrEnum):
+    """The media modalities that a pipeline run is allowed to analyze."""
+
+    AUDIO_VISUAL = "audio_visual"
+    AUDIO_ONLY = "audio_only"
+
+
 class EvidenceModality(StrEnum):
     METADATA = "metadata"
     PLATFORM_CAPTION = "platform_caption"
@@ -201,10 +208,11 @@ class StageRecord(StrictModel):
 
 
 class ArtifactManifest(StrictModel):
-    schema_version: int = 1
+    schema_version: int = 2
     run_id: str
     source: SourceDescriptor
     profile: str
+    processing_scope: ProcessingScope = ProcessingScope.AUDIO_VISUAL
     status: RunStatus = RunStatus.CREATED
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

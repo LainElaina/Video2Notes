@@ -5,7 +5,7 @@ import unittest
 from pydantic import ValidationError
 
 from video2notes.notes import OutputFormat, ReportPreset, ReportSpec
-from video2notes.pipeline import PipelineRequest
+from video2notes.pipeline import PipelineRequest, ProcessingScope
 from video2notes.sources import SourceInput
 
 
@@ -68,3 +68,19 @@ class ReportSpecTests(unittest.TestCase):
         self.assertEqual(resolved.preset, ReportPreset.EXECUTIVE)
         self.assertFalse(resolved.include_screenshots)
         self.assertNotIn(OutputFormat.PDF, resolved.output_formats)
+
+    def test_audio_only_scope_overrides_any_screenshot_request(self) -> None:
+        request = PipelineRequest(
+            source=SourceInput.local("C:/video.mp4"),
+            processing_scope=ProcessingScope.AUDIO_ONLY,
+            include_screenshots=True,
+            report_spec=ReportSpec(include_screenshots=True),
+        )
+
+        resolved = request.effective_report_spec().resolve()
+        self.assertFalse(resolved.include_screenshots)
+        self.assertIn(OutputFormat.PDF, resolved.output_formats)
+        self.assertEqual(
+            PipelineRequest(source=SourceInput.local("C:/video.mp4")).processing_scope,
+            ProcessingScope.AUDIO_VISUAL,
+        )

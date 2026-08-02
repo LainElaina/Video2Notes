@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from pydantic import ValidationError
 
+from video2notes.domain import ProcessingScope
 from video2notes.system import (
     ExperienceMode,
     GpuDevice,
@@ -258,6 +259,62 @@ class ExecutionProfileTests(unittest.TestCase):
         self.assertGreater(difficult.upper_seconds, baseline.upper_seconds)
         self.assertTrue(any("4K" in note for note in difficult.notes))
         self.assertTrue(any("高帧率" in note for note in difficult.notes))
+
+    def test_audio_visual_estimate_contains_the_complete_calibration_run(self) -> None:
+        machine = snapshot(vram_gib=24)
+        duration_seconds = 452.278912
+        measured_seconds = {
+            QualityMode.FAST: 526.9938756000483,
+            QualityMode.BALANCED: 1662.2865098000038,
+            QualityMode.ACCURATE: 3013.91910119995,
+        }
+
+        for quality_mode, measured in measured_seconds.items():
+            estimate = estimate_processing_time(
+                duration_seconds,
+                machine,
+                quality_mode,
+                source_height=1080,
+                source_fps=30,
+            )
+            self.assertLessEqual(estimate.lower_seconds, measured)
+            self.assertGreaterEqual(estimate.upper_seconds, measured)
+            self.assertEqual(
+                estimate.basis,
+                "bv12hsEz3ELL_cpu_ocr_calibrated_v1",
+            )
+
+    def test_audio_only_estimate_has_independent_budget_and_ignores_video_geometry(
+        self,
+    ) -> None:
+        machine = snapshot(vram_gib=24)
+        baseline = estimate_processing_time(
+            600,
+            machine,
+            QualityMode.BALANCED,
+            processing_scope=ProcessingScope.AUDIO_ONLY,
+        )
+        high_resolution = estimate_processing_time(
+            600,
+            machine,
+            QualityMode.BALANCED,
+            source_height=4320,
+            source_fps=120,
+            processing_scope=ProcessingScope.AUDIO_ONLY,
+        )
+        audio_visual = estimate_processing_time(
+            600,
+            machine,
+            QualityMode.BALANCED,
+        )
+
+        self.assertEqual(baseline.processing_scope, ProcessingScope.AUDIO_ONLY)
+        self.assertEqual(baseline.basis, "engineering_budget_audio_only_v1")
+        self.assertEqual(high_resolution.upper_seconds, baseline.upper_seconds)
+        self.assertEqual(high_resolution.lower_seconds, baseline.lower_seconds)
+        self.assertLess(baseline.upper_seconds, audio_visual.upper_seconds)
+        self.assertTrue(any("ASR-only 工程估算" in note for note in baseline.notes))
+        self.assertTrue(any("画面扫描" in note for note in baseline.notes))
 
     def test_same_machine_with_low_live_headroom_reduces_concurrency(self) -> None:
         idle = snapshot(

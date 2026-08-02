@@ -16,7 +16,7 @@ from video2notes.cli import (
     _prepare_server,
     main,
 )
-from video2notes.domain import ArtifactKind, ArtifactRef
+from video2notes.domain import ArtifactKind, ArtifactRef, ProcessingScope
 from video2notes.pipeline import PipelineOutcome, PipelineRequest
 from video2notes.sources import AuthKind, BrowserKind
 from video2notes.sources import QualityMode as AcquisitionQualityMode
@@ -89,6 +89,7 @@ class _FakePipeline:
         )
         return PipelineOutcome(
             run_id=workspace.manifest.run_id,
+            processing_scope=request.processing_scope,
             markdown=_artifact(ArtifactKind.NOTE, "notes/note.md"),
             html=_artifact(ArtifactKind.RENDER, "render/note.html"),
             pdf=(
@@ -165,6 +166,7 @@ class CliProcessTests(unittest.TestCase):
                 "--language",
                 "ja",
                 "--no-screenshots",
+                "--audio-only",
                 "--no-pdf",
                 "--data-root",
                 str(data_root),
@@ -207,6 +209,10 @@ class CliProcessTests(unittest.TestCase):
         self.assertEqual(request.language_hints, ["zh-Hans", "en", "ja"])
         self.assertFalse(request.include_screenshots)
         self.assertFalse(request.generate_pdf)
+        self.assertEqual(request.processing_scope, ProcessingScope.AUDIO_ONLY)
+        self.assertEqual(events[1]["processing_scope"], "audio_only")
+        self.assertEqual(events[-1]["processing_scope"], "audio_only")
+        self.assertEqual(events[-1]["metrics"]["processing_scope"], "audio_only")  # type: ignore[index]
 
     def test_process_url_uses_browser_profile_and_accurate_acquisition(self) -> None:
         stdout = io.StringIO()

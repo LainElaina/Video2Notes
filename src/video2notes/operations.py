@@ -36,6 +36,7 @@ from video2notes.domain import (
     EvidenceModality,
     EvidenceSpan,
     MediaManifest,
+    ProcessingScope,
     RunStatus,
     VisualState,
 )
@@ -387,6 +388,11 @@ class OperationService:
 
         media: MediaManifest | None = None
         if request.kind is OperationKind.VISION_RESCAN:
+            if self.workspace.manifest.processing_scope is ProcessingScope.AUDIO_ONLY:
+                raise OperationConflictError(
+                    "audio-only runs do not permit visual rescan or OCR; "
+                    "create a new audio-visual task to analyze the picture track"
+                )
             media, _ = self._load_verified_media()
             if media.video_stream is None:
                 raise OperationConflictError("completed run has no video stream")
