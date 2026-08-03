@@ -229,7 +229,7 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('Get-Video2NotesFileSha256', script)
         self.assertNotIn('Get-FileHash', script)
 
-    def test_portable_replacement_keeps_a_narrowly_compatible_backup(self) -> None:
+    def test_portable_replacement_uses_a_validated_temporary_backup(self) -> None:
         script = self.read("scripts/build_portable.ps1")
 
         self.assertIn('$PortableBackup = Join-Path $PortableParent (', script)
@@ -286,8 +286,18 @@ class PackagingScriptContractTests(unittest.TestCase):
                 "Move-Item -LiteralPath $safeStaging -Destination $safeCurrent"
             ),
         )
-        self.assertIn("recoverable backup: $safeBackup", script)
-        self.assertNotIn("Remove-Item -LiteralPath $safeBackup", script)
+        self.assertIn("[switch]$KeepPreviousPortable", script)
+        self.assertIn("Assert-PortableChecksums $safeCurrent", script)
+        self.assertIn("$safeFailedCurrent = Assert-ManagedPortablePath $safeCurrent", script)
+        self.assertIn("Remove-Item -LiteralPath $safeFailedCurrent", script)
+        self.assertIn("Move-Item -LiteralPath $safeBackup -Destination $safeCurrent", script)
+        self.assertIn("if ($KeepPreviousPortable)", script)
+        self.assertIn("Previous portable app retained as requested", script)
+        self.assertIn("Remove-Item -LiteralPath $safeBackup", script)
+        self.assertLess(
+            script.index("Assert-PortableChecksums $safeCurrent"),
+            script.index("Remove-Item -LiteralPath $safeBackup"),
+        )
 
     def test_portable_cuda_acceptance_is_isolated_and_token_safe(self) -> None:
         script = self.read("scripts/test_portable_cuda.ps1")
@@ -376,6 +386,32 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('@("ffmpeg", "ffprobe")', script)
         self.assertIn('VIDEO2NOTES_RUNTIME_PROBE', script)
         self.assertIn('importable -ne $true', script)
+
+    def test_generated_data_cleanup_is_dry_run_first_and_protects_deliverables(self) -> None:
+        script = self.read("scripts/cleanup_generated.ps1")
+
+        self.assertIn("[switch]$Execute", script)
+        self.assertIn('Mode: {0}', script)
+        self.assertIn("if (-not $Execute)", script)
+        self.assertIn("Dry run only", script)
+        self.assertIn("Assert-ReparsePointsAreInternal", script)
+        self.assertIn("Get-TreeInventory", script)
+        self.assertIn("Remove-Item -LiteralPath $link.FullName", script)
+        self.assertIn("Remove-Item -LiteralPath $target.Path", script)
+        for protected in (
+            "root .venv",
+            "node_modules",
+            "artifacts/models",
+            "canonical benchmarks",
+            "portable/current",
+        ):
+            self.assertIn(protected, script)
+        self.assertIn("[switch]$IncludePortableZip", script)
+        self.assertIn("Portable ZIP is protected", script)
+        self.assertIn("if ($IncludePortableZip)", script)
+        self.assertNotIn('Relative = ".venv"', script)
+        self.assertNotIn('Relative = "apps\\desktop\\node_modules"', script)
+        self.assertNotIn('Relative = "artifacts\\portable\\current"', script)
 
 
 if __name__ == "__main__":

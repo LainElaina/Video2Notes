@@ -8,6 +8,10 @@ param(
     [switch]$CoreOnly,
     [switch]$SkipSidecarSmoke,
     [switch]$Zip,
+    # Keep the immediately previous portable directory after a successful
+    # replacement. By default it is only used for rollback during the build
+    # and is deleted once the new current directory passes verification.
+    [switch]$KeepPreviousPortable,
     [string]$FfmpegDirectory = "",
     [string]$FfmpegLicensePath = ""
 )
@@ -584,7 +588,7 @@ Video2Notes 免安装版（runtime=$RuntimeFlavor）
 因此覆盖 current 程序目录不会删除既有任务。API 密钥仍保存在 Windows Credential Manager。
 $PortableRuntimeNote
 用户无需安装 Python、FFmpeg、yt-dlp 或推理 Python 包。ASR/OCR 的具体模型权重不随程序分发，
-后续由应用内模型管理器负责下载、校验、选择和清理。
+后续由应用内模型管理器负责下载、校验、选择和复用。
 
 完整构建：.\scripts\build_portable.ps1
 快速复用后端：.\scripts\build_portable.ps1 -ReuseSidecar（仅当前 Python/打包源码指纹一致时允许）
@@ -618,18 +622,28 @@ $PortableRuntimeNote
             Assert-NoPrivatePayload $safeBackup
         }
         Move-Item -LiteralPath $safeStaging -Destination $safeCurrent
+        Assert-PortableLayout $safeCurrent $RuntimeFlavor
+        Assert-PortableChecksums $safeCurrent
+        Assert-NoPrivatePayload $safeCurrent
     }
     catch {
-        if (
-            -not (Test-Path -LiteralPath $safeCurrent) -and
-            (Test-Path -LiteralPath $safeBackup -PathType Container)
-        ) {
+        if (Test-Path -LiteralPath $safeCurrent -PathType Container) {
+            $safeFailedCurrent = Assert-ManagedPortablePath $safeCurrent
+            Remove-Item -LiteralPath $safeFailedCurrent -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $safeBackup -PathType Container) {
             Move-Item -LiteralPath $safeBackup -Destination $safeCurrent
         }
         throw
     }
     if (Test-Path -LiteralPath $safeBackup -PathType Container) {
-        Write-Host "Previous portable app retained as a recoverable backup: $safeBackup"
+        if ($KeepPreviousPortable) {
+            Write-Host "Previous portable app retained as requested: $safeBackup"
+        }
+        else {
+            Remove-Item -LiteralPath $safeBackup -Recurse -Force
+            Write-Host "Verified the new portable app and removed the temporary rollback backup."
+        }
     }
 
     if ($Zip) {
