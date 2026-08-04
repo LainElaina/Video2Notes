@@ -168,6 +168,18 @@ fn pick_video() -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Opens the native directory picker for a self-describing runtime package.
+/// The Python backend still validates `runtime-package.json`, hashes, platform
+/// compatibility, and ownership before the directory can be registered.
+#[tauri::command]
+fn pick_runtime_directory() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("Select a Video2Notes runtime package directory")
+        .pick_folder()
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 /// Returns the self-authored, redistributable sample bundled with release
 /// builds.  It exercises visual changes and OCR without any account or key.
 #[tauri::command]
@@ -379,6 +391,7 @@ pub fn run() {
             runtime_label,
             backend_connection,
             pick_video,
+            pick_runtime_directory,
             demo_video_path,
             artifact_file_path
         ])
