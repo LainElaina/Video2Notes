@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from video2notes import __version__
 from video2notes.artifacts import RunWorkspace
 from video2notes.components import (
     ComponentInventory,
@@ -270,6 +271,7 @@ class RuntimeReleaseView(ApiModel):
     archive_file_name: str
     source_url: str | None
     download_size_bytes: int
+    download_part_count: int
     installed_size_bytes: int
     offline_only: bool
     upstream_sources: list[str]
@@ -598,7 +600,7 @@ def create_app(
 
     app = FastAPI(
         title="Video2Notes Local API",
-        version="0.1.0",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
         openapi_url="/api/openapi.json",
@@ -634,7 +636,7 @@ def create_app(
     def health() -> dict[str, object]:
         return {
             "status": "ok",
-            "version": "0.1.0",
+            "version": __version__,
             "scope": "local-only",
             "capabilities": ["processing_scope_audio_only"],
         }
@@ -1624,6 +1626,7 @@ def _runtime_release_view(
         archive_file_name=release.archive.file_name,
         source_url=release.archive_url,
         download_size_bytes=release.archive_size_bytes,
+        download_part_count=release.archive_part_count,
         installed_size_bytes=release.installed_size_bytes,
         offline_only=release.archive.offline_only,
         upstream_sources=list(release.upstream_sources),

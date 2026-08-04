@@ -105,7 +105,11 @@ def _catalog_release(*, version: str, target_triple: str) -> RuntimePackageRelea
     )
 
 
-def _bundled_candidate(root: Path) -> RuntimePackageCandidate:
+def _bundled_candidate(
+    root: Path,
+    *,
+    include_asr: bool = True,
+) -> RuntimePackageCandidate:
     marker = root / "NOTICE.txt"
     marker.write_text("test runtime\n", encoding="utf-8")
     manifest = RuntimePackageManifest.model_validate(
@@ -128,7 +132,7 @@ def _bundled_candidate(root: Path) -> RuntimePackageCandidate:
                 for capability in (
                     "tool.ffmpeg",
                     "tool.ffprobe",
-                    "asr.faster_whisper",
+                    *(() if not include_asr else ("asr.faster_whisper",)),
                 )
             ],
             "licenses": [
@@ -228,6 +232,55 @@ class RuntimePreflightTests(unittest.TestCase):
         self.assertEqual(visual_result.missing_optional, ("ocr.paddleocr",))
         self.assertEqual(pdf_result.state, FeatureAvailabilityState.BLOCKED)
         self.assertIn("render.chromium_pdf", pdf_result.missing_required)
+
+    def test_visual_mode_can_degrade_without_asr_but_audio_only_blocks(self) -> None:
+        root = Path(self.temporary.name)
+        bundled_root = root / "tools-only"
+        bundled_root.mkdir()
+        manager = RuntimePackageManager(
+            root / "tools-only-data",
+            catalog=RuntimePackageCatalog(),
+            bundled_packages=(
+                _bundled_candidate(bundled_root, include_asr=False),
+            ),
+        )
+        self.addCleanup(manager.close)
+        runtime = PipelineRuntime(
+            source_registry=SourceRegistry.default(),
+            note_composer=EvidenceNoteComposer(),
+            ffmpeg_path="missing-ffmpeg-is-covered-by-candidate",
+            ffprobe_path="missing-ffprobe-is-covered-by-candidate",
+        )
+        visual = PipelineRequest(
+            source=SourceInput.local("sample.mp4"),
+            processing_scope=ProcessingScope.AUDIO_VISUAL,
+            generate_pdf=False,
+        )
+        audio_only = visual.model_copy(
+            update={"processing_scope": ProcessingScope.AUDIO_ONLY}
+        )
+
+        visual_result = asyncio.run(
+            build_runtime_preflight(
+                manager,
+                visual,
+                source_registry=SourceRegistry.default(),
+                fallback_runtime=runtime,
+            )
+        )
+        audio_result = asyncio.run(
+            build_runtime_preflight(
+                manager,
+                audio_only,
+                source_registry=SourceRegistry.default(),
+                fallback_runtime=runtime,
+            )
+        )
+
+        self.assertEqual(visual_result.state, FeatureAvailabilityState.DEGRADED)
+        self.assertIn("asr.faster_whisper", visual_result.missing_optional)
+        self.assertEqual(audio_result.state, FeatureAvailabilityState.BLOCKED)
+        self.assertIn("asr.faster_whisper", audio_result.missing_required)
 
     def test_recommendation_selects_latest_compatible_release_from_unsorted_catalog(
         self,

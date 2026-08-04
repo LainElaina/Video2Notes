@@ -3,7 +3,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ArchivePath,
     [Parameter(Mandatory = $true)]
-    [string]$CatalogEntryPath
+    [string]$CatalogEntryPath,
+    # Structural packaging tests can use a placeholder entrypoint. Production
+    # builds never pass this switch and must start the frozen worker.
+    [switch]$SkipWorkerProbe
 )
 
 $ErrorActionPreference = "Stop"
@@ -187,6 +190,43 @@ try {
         Require-File (Join-Path $resolvedTemporary ($entrypoint -replace "/", "\")) "Runtime capability entrypoint"
         if ([int]$capability.protocol_version -ne [int]$catalogEntry.runtime_protocol_version) {
             throw "Runtime capability '$($capability.capability_id)' has an incompatible protocol version."
+        }
+    }
+
+    if (-not $SkipWorkerProbe) {
+        $workerEntrypoints = @(
+            $catalogEntry.capabilities |
+                Where-Object { $_.transport -eq "worker" } |
+                ForEach-Object { [string]$_.entrypoint } |
+                Select-Object -Unique
+        )
+        foreach ($entrypoint in $workerEntrypoints) {
+            $workerPath = Join-Path $resolvedTemporary ($entrypoint -replace "/", "\")
+            $probeOutput = (& $workerPath probe --package-root $resolvedTemporary 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) {
+                throw "Runtime worker probe failed for '$entrypoint' with exit code $LASTEXITCODE."
+            }
+            try {
+                $probe = $probeOutput | ConvertFrom-Json
+            }
+            catch {
+                throw "Runtime worker probe for '$entrypoint' did not return valid JSON."
+            }
+            if (
+                [string]$probe.package_id -ne [string]$catalogEntry.package_id -or
+                [string]$probe.package_version -ne [string]$catalogEntry.version
+            ) {
+                throw "Runtime worker probe identity differs from its trusted catalog entry."
+            }
+            $expectedCapabilities = @(
+                $catalogEntry.capabilities | ForEach-Object { [string]$_.capability_id } | Sort-Object
+            )
+            $actualCapabilities = @(
+                $probe.capabilities | ForEach-Object { [string]$_ } | Sort-Object
+            )
+            if (($expectedCapabilities -join "`n") -ne ($actualCapabilities -join "`n")) {
+                throw "Runtime worker probe capabilities differ from its trusted catalog entry."
+            }
         }
     }
 

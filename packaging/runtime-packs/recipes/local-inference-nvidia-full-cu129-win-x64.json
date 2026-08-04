@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "package_id": "local-inference-nvidia-full-cu129-win-x64",
-  "version": "0.1.0-dev",
+  "version": "0.2.0",
   "display_name": "Local Inference NVIDIA Full",
   "target_triple": "x86_64-pc-windows-msvc",
   "runtime_protocol_version": 1,

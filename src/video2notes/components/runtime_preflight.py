@@ -150,7 +150,10 @@ async def build_runtime_preflight(
         captions_available = await _source_has_captions(request, source_registry)
     add(
         ASR_FASTER_WHISPER,
-        required=not captions_available,
+        required=(
+            request.processing_scope is ProcessingScope.AUDIO_ONLY
+            and not captions_available
+        ),
         configured=asr_configured,
     )
 
@@ -320,6 +323,7 @@ def _recommend_installations(
                 archive_file_name=release.archive.file_name,
                 source_url=release.archive_url,
                 download_size_bytes=release.archive_size_bytes,
+                download_part_count=release.archive_part_count,
                 installed_size_bytes=release.installed_size_bytes,
                 install_root=str(
                     manager.managed_root / release.package_id / release.version

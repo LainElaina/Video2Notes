@@ -15,6 +15,7 @@ from video2notes.components.runtime_catalog import (
 )
 from video2notes.components.runtime_models import (
     RUNTIME_PACKAGE_MANIFEST,
+    RuntimeArchivePartSpec,
     RuntimeArchiveSpec,
     RuntimePackageManifest,
     RuntimePackageRelease,
@@ -154,6 +155,111 @@ class RuntimePackageModelTests(unittest.TestCase):
         )
 
         self.assertTrue(archive.source_url and archive.source_url.startswith("file://"))
+
+    def test_catalog_accepts_pinned_multipart_archives(self) -> None:
+        manifest = RuntimePackageManifest.model_validate(manifest_payload())
+        payload = release_payload(manifest)
+        payload["archive"] = {
+            "file_name": "local-inference-nvidia-full.zip",
+            "source_url": None,
+            "size_bytes": 123,
+            "sha256": "a" * 64,
+            "offline_only": False,
+            "parts": [
+                {
+                    "file_name": "local-inference-nvidia-full.zip.001",
+                    "source_url": "https://example.invalid/full.zip.001",
+                    "size_bytes": 60,
+                    "sha256": "b" * 64,
+                },
+                {
+                    "file_name": "local-inference-nvidia-full.zip.002",
+                    "source_url": "https://example.invalid/full.zip.002",
+                    "size_bytes": 63,
+                    "sha256": "c" * 64,
+                },
+            ],
+        }
+
+        release = RuntimePackageRelease.model_validate(payload)
+
+        self.assertIsNone(release.archive_url)
+        self.assertEqual(release.archive_part_count, 2)
+        self.assertEqual(
+            release.archive.parts[0].file_name,
+            "local-inference-nvidia-full.zip.001",
+        )
+        self.assertIsInstance(release.archive.parts[0], RuntimeArchivePartSpec)
+
+    def test_multipart_archive_rejects_ambiguous_or_untrusted_parts(self) -> None:
+        manifest = RuntimePackageManifest.model_validate(manifest_payload())
+
+        def multipart_archive() -> dict[str, object]:
+            return {
+                "file_name": "local-inference-nvidia-full.zip",
+                "source_url": None,
+                "size_bytes": 123,
+                "sha256": "a" * 64,
+                "offline_only": False,
+                "parts": [
+                    {
+                        "file_name": "full.zip.001",
+                        "source_url": "https://example.invalid/full.zip.001",
+                        "size_bytes": 60,
+                        "sha256": "b" * 64,
+                    },
+                    {
+                        "file_name": "full.zip.002",
+                        "source_url": "https://example.invalid/full.zip.002",
+                        "size_bytes": 63,
+                        "sha256": "c" * 64,
+                    },
+                ],
+            }
+
+        duplicate_name = release_payload(manifest)
+        duplicate_name["archive"] = multipart_archive()
+        duplicate_name["archive"]["parts"][1]["file_name"] = "FULL.ZIP.001"  # type: ignore[index]
+        with self.assertRaises(ValidationError):
+            RuntimePackageRelease.model_validate(duplicate_name)
+
+        duplicate_url = release_payload(manifest)
+        duplicate_url["archive"] = multipart_archive()
+        duplicate_url["archive"]["parts"][1]["source_url"] = (  # type: ignore[index]
+            "https://example.invalid/full.zip.001"
+        )
+        with self.assertRaises(ValidationError):
+            RuntimePackageRelease.model_validate(duplicate_url)
+
+        wrong_total = release_payload(manifest)
+        wrong_total["archive"] = multipart_archive()
+        wrong_total["archive"]["parts"][1]["size_bytes"] = 62  # type: ignore[index]
+        with self.assertRaises(ValidationError):
+            RuntimePackageRelease.model_validate(wrong_total)
+
+        insecure_url = release_payload(manifest)
+        insecure_url["archive"] = multipart_archive()
+        insecure_url["archive"]["parts"][0]["source_url"] = (  # type: ignore[index]
+            "http://example.invalid/full.zip.001"
+        )
+        with self.assertRaises(ValidationError):
+            RuntimePackageRelease.model_validate(insecure_url)
+
+        wrong_publication_mode = release_payload(manifest)
+        wrong_publication_mode["archive"] = multipart_archive()
+        wrong_publication_mode["archive"]["parts"][0]["source_url"] = (  # type: ignore[index]
+            "file:///D:/runtime-packs/full.zip.001"
+        )
+        with self.assertRaises(ValidationError):
+            RuntimePackageRelease.model_validate(wrong_publication_mode)
+
+        ambiguous_source = release_payload(manifest)
+        ambiguous_source["archive"] = multipart_archive()
+        ambiguous_source["archive"]["source_url"] = (  # type: ignore[index]
+            "https://example.invalid/full.zip"
+        )
+        with self.assertRaises(ValidationError):
+            RuntimePackageRelease.model_validate(ambiguous_source)
 
     def test_catalog_rejects_unpinned_or_in_process_managed_release(self) -> None:
         manifest = RuntimePackageManifest.model_validate(manifest_payload())

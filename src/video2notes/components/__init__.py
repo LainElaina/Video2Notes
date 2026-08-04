@@ -53,6 +53,7 @@ from .runtime_manager import (
 from .runtime_models import (
     FeatureAvailability,
     FeatureAvailabilityState,
+    RuntimeArchivePartSpec,
     RuntimeArchiveSpec,
     RuntimeBinding,
     RuntimeBindingSnapshot,
@@ -111,6 +112,7 @@ __all__ = [
     "PrepareStatus",
     "FeatureAvailability",
     "FeatureAvailabilityState",
+    "RuntimeArchivePartSpec",
     "RuntimeArchiveSpec",
     "RuntimeBinding",
     "RuntimeBindingSnapshot",

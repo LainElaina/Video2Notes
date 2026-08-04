@@ -6,6 +6,7 @@ import re
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Self
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -234,12 +235,36 @@ class RuntimePackageManifest(RuntimeModel):
         return self.files
 
 
+class RuntimeArchivePartSpec(RuntimeModel):
+    file_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$")
+    source_url: str = Field(min_length=1, max_length=2048)
+    size_bytes: int = Field(gt=0)
+    sha256: str
+
+    @field_validator("source_url", mode="before")
+    @classmethod
+    def validate_source_url(cls, value: object) -> str:
+        normalized = str(value).strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme == "https" and parsed.netloc:
+            return normalized
+        if parsed.scheme == "file" and (parsed.netloc or parsed.path):
+            return normalized
+        raise ValueError("runtime archive part URLs must use HTTPS or file")
+
+    @field_validator("sha256", mode="before")
+    @classmethod
+    def validate_hash(cls, value: object) -> str:
+        return validate_sha256(str(value))
+
+
 class RuntimeArchiveSpec(RuntimeModel):
     file_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}\.zip$")
     source_url: str | None = Field(default=None, max_length=2048)
     size_bytes: int = Field(gt=0)
     sha256: str
     offline_only: bool
+    parts: tuple[RuntimeArchivePartSpec, ...] = ()
 
     @field_validator("sha256", mode="before")
     @classmethod
@@ -248,6 +273,27 @@ class RuntimeArchiveSpec(RuntimeModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> Self:
+        if self.parts:
+            if self.source_url is not None:
+                raise ValueError(
+                    "multipart runtime archives cannot also declare a whole-archive URL"
+                )
+            part_names = [item.file_name.casefold() for item in self.parts]
+            if len(part_names) != len(set(part_names)):
+                raise ValueError("runtime archive part file names must be unique")
+            part_urls = [item.source_url for item in self.parts]
+            if len(part_urls) != len(set(part_urls)):
+                raise ValueError("runtime archive part source URLs must be unique")
+            if sum(item.size_bytes for item in self.parts) != self.size_bytes:
+                raise ValueError(
+                    "runtime archive part sizes must equal the complete archive size"
+                )
+            expected_scheme = "file" if self.offline_only else "https"
+            if any(urlparse(item.source_url).scheme != expected_scheme for item in self.parts):
+                raise ValueError(
+                    "runtime archive part URLs must match the archive publication mode"
+                )
+            return self
         if self.source_url is None:
             if not self.offline_only:
                 raise ValueError("published runtime archives require an HTTPS source URL")
@@ -313,6 +359,10 @@ class RuntimePackageRelease(RuntimeModel):
     @property
     def archive_size_bytes(self) -> int:
         return self.archive.size_bytes
+
+    @property
+    def archive_part_count(self) -> int:
+        return len(self.archive.parts) or 1
 
     @property
     def manifest(self) -> RuntimePackageManifest:
@@ -511,6 +561,7 @@ class RuntimeInstallRecommendation(RuntimeModel):
     archive_file_name: str
     source_url: str | None = None
     download_size_bytes: int = Field(gt=0)
+    download_part_count: int = Field(default=1, ge=1)
     installed_size_bytes: int = Field(gt=0)
     install_root: str
     supported_devices: tuple[str, ...] = ()

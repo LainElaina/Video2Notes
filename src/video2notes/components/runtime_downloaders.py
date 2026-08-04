@@ -12,12 +12,14 @@ import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from .runtime_models import (
     RUNTIME_PACKAGE_MANIFEST,
+    RuntimeArchivePartSpec,
     RuntimePackageManifest,
     RuntimePackageRelease,
     normalize_runtime_relative_path,
@@ -57,6 +59,14 @@ class RuntimePackageValidation:
     payload_size_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class _PinnedDownload:
+    source_url: str | None
+    size_bytes: int
+    sha256: str
+    label: str
+
+
 class RuntimePackageDownloader(Protocol):
     def download(
         self,
@@ -86,8 +96,46 @@ class UrlRuntimePackageDownloader:
         progress: RuntimeDownloadProgress,
     ) -> RuntimeDownloadResult:
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if release.archive.parts:
+            return self._download_multipart(
+                release,
+                destination,
+                cancel_event=cancel_event,
+                progress=progress,
+            )
+
+        pinned = _PinnedDownload(
+            source_url=release.archive_url,
+            size_bytes=release.archive_size_bytes,
+            sha256=release.archive_sha256,
+            label="runtime archive",
+        )
+        resumed, reused = self._download_pinned(
+            pinned,
+            destination,
+            cancel_event=cancel_event,
+            progress=progress,
+        )
+        return RuntimeDownloadResult(
+            archive_path=destination,
+            downloaded_bytes=release.archive_size_bytes,
+            resumed=resumed,
+            reused=reused,
+        )
+
+    def _download_multipart(
+        self,
+        release: RuntimePackageRelease,
+        destination: Path,
+        *,
+        cancel_event: threading.Event,
+        progress: RuntimeDownloadProgress,
+    ) -> RuntimeDownloadResult:
+        part_root = destination.with_name(f"{destination.name}.parts")
         if destination.is_file():
             if _archive_matches(destination, release):
+                if not _is_link(part_root) and part_root.is_dir():
+                    self._cleanup_part_cache(part_root, release.archive.parts)
                 progress(release.archive_size_bytes, release.archive_size_bytes)
                 return RuntimeDownloadResult(
                     archive_path=destination,
@@ -97,9 +145,11 @@ class UrlRuntimePackageDownloader:
                 )
             destination.unlink()
 
-        partial = destination.with_name(f"{destination.name}.part")
-        if partial.is_file() and _archive_matches(partial, release):
-            os.replace(partial, destination)
+        combined_partial = destination.with_name(f"{destination.name}.part")
+        if combined_partial.is_file() and _archive_matches(combined_partial, release):
+            os.replace(combined_partial, destination)
+            if not _is_link(part_root) and part_root.is_dir():
+                self._cleanup_part_cache(part_root, release.archive.parts)
             progress(release.archive_size_bytes, release.archive_size_bytes)
             return RuntimeDownloadResult(
                 archive_path=destination,
@@ -107,17 +157,86 @@ class UrlRuntimePackageDownloader:
                 resumed=True,
                 reused=True,
             )
-        if partial.is_file() and partial.stat().st_size > release.archive_size_bytes:
+        combined_partial.unlink(missing_ok=True)
+
+        if part_root.exists():
+            if _is_link(part_root) or not part_root.is_dir():
+                raise RuntimePackageDownloadError(
+                    "runtime archive part cache is not a regular directory"
+                )
+        else:
+            part_root.mkdir()
+
+        completed_bytes = 0
+        resumed = False
+        part_paths: list[Path] = []
+        for part in release.archive.parts:
+            part_path = part_root / part.file_name
+
+            def part_progress(
+                downloaded: int,
+                _total: int | None,
+                completed: int = completed_bytes,
+            ) -> None:
+                progress(completed + downloaded, release.archive_size_bytes)
+
+            part_resumed, part_reused = self._download_pinned(
+                _part_download(part),
+                part_path,
+                cancel_event=cancel_event,
+                progress=part_progress,
+            )
+            resumed = resumed or part_resumed or part_reused
+            completed_bytes += part.size_bytes
+            part_paths.append(part_path)
+            progress(completed_bytes, release.archive_size_bytes)
+
+        self._assemble_parts(
+            release,
+            tuple(part_paths),
+            combined_partial,
+            cancel_event=cancel_event,
+        )
+        os.replace(combined_partial, destination)
+        self._cleanup_part_cache(part_root, release.archive.parts)
+        progress(release.archive_size_bytes, release.archive_size_bytes)
+        return RuntimeDownloadResult(
+            archive_path=destination,
+            downloaded_bytes=release.archive_size_bytes,
+            resumed=resumed,
+            reused=False,
+        )
+
+    def _download_pinned(
+        self,
+        pinned: _PinnedDownload,
+        destination: Path,
+        *,
+        cancel_event: threading.Event,
+        progress: RuntimeDownloadProgress,
+    ) -> tuple[bool, bool]:
+        if destination.is_file():
+            if _download_matches(destination, pinned):
+                progress(pinned.size_bytes, pinned.size_bytes)
+                return False, True
+            destination.unlink()
+
+        partial = destination.with_name(f"{destination.name}.part")
+        if partial.is_file() and _download_matches(partial, pinned):
+            os.replace(partial, destination)
+            progress(pinned.size_bytes, pinned.size_bytes)
+            return True, True
+        if partial.is_file() and partial.stat().st_size > pinned.size_bytes:
             partial.unlink()
-        if release.archive_url is None:
+        if pinned.source_url is None:
             raise RuntimePackageDownloadError(
                 "offline-only runtime archive is not present in the managed download cache"
             )
-        parsed = urllib.parse.urlparse(release.archive_url)
+        parsed = urllib.parse.urlparse(pinned.source_url)
         try:
             if parsed.scheme == "file":
                 resumed = self._copy_local(
-                    release,
+                    pinned,
                     parsed,
                     partial,
                     cancel_event=cancel_event,
@@ -125,7 +244,7 @@ class UrlRuntimePackageDownloader:
                 )
             elif parsed.scheme in {"https", "http"}:
                 resumed = self._download_http(
-                    release,
+                    pinned,
                     partial,
                     cancel_event=cancel_event,
                     progress=progress,
@@ -143,22 +262,17 @@ class UrlRuntimePackageDownloader:
 
         if cancel_event.is_set():
             raise RuntimePackageDownloadCancelled("runtime archive download was cancelled")
-        if not _archive_matches(partial, release):
+        if not _download_matches(partial, pinned):
             partial.unlink(missing_ok=True)
             raise RuntimePackageIntegrityError(
-                "runtime archive size or SHA-256 does not match the trusted release"
+                f"{pinned.label} size or SHA-256 does not match the trusted release"
             )
         os.replace(partial, destination)
-        return RuntimeDownloadResult(
-            archive_path=destination,
-            downloaded_bytes=release.archive_size_bytes,
-            resumed=resumed,
-            reused=False,
-        )
+        return resumed, False
 
     def _copy_local(
         self,
-        release: RuntimePackageRelease,
+        pinned: _PinnedDownload,
         parsed: urllib.parse.ParseResult,
         partial: Path,
         *,
@@ -180,7 +294,7 @@ class UrlRuntimePackageDownloader:
         with source.open("rb") as input_stream, partial.open("ab" if resumed else "wb") as output:
             input_stream.seek(offset)
             transferred = offset
-            progress(transferred, release.archive_size_bytes)
+            progress(transferred, pinned.size_bytes)
             while True:
                 if cancel_event.is_set():
                     raise RuntimePackageDownloadCancelled(
@@ -191,12 +305,12 @@ class UrlRuntimePackageDownloader:
                     break
                 output.write(chunk)
                 transferred += len(chunk)
-                progress(transferred, release.archive_size_bytes)
+                progress(transferred, pinned.size_bytes)
         return resumed
 
     def _download_http(
         self,
-        release: RuntimePackageRelease,
+        pinned: _PinnedDownload,
         partial: Path,
         *,
         cancel_event: threading.Event,
@@ -206,9 +320,9 @@ class UrlRuntimePackageDownloader:
         headers = {"Accept-Encoding": "identity", "User-Agent": "Video2Notes/runtime-packager"}
         if offset:
             headers["Range"] = f"bytes={offset}-"
-        if release.archive_url is None:  # pragma: no cover - guarded by download()
+        if pinned.source_url is None:  # pragma: no cover - guarded by _download_pinned()
             raise RuntimePackageDownloadError("runtime archive has no source URL")
-        request = urllib.request.Request(release.archive_url, headers=headers)
+        request = urllib.request.Request(pinned.source_url, headers=headers)
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             status = getattr(response, "status", response.getcode())
             resumed = offset > 0 and status == 206
@@ -216,7 +330,7 @@ class UrlRuntimePackageDownloader:
                 offset = 0
             mode = "ab" if resumed else "wb"
             transferred = offset
-            progress(transferred, release.archive_size_bytes)
+            progress(transferred, pinned.size_bytes)
             with partial.open(mode) as output:
                 while True:
                     if cancel_event.is_set():
@@ -228,8 +342,77 @@ class UrlRuntimePackageDownloader:
                         break
                     output.write(chunk)
                     transferred += len(chunk)
-                    progress(transferred, release.archive_size_bytes)
+                    progress(transferred, pinned.size_bytes)
         return resumed
+
+    def _assemble_parts(
+        self,
+        release: RuntimePackageRelease,
+        part_paths: tuple[Path, ...],
+        destination: Path,
+        *,
+        cancel_event: threading.Event,
+    ) -> None:
+        digest = hashlib.sha256()
+        assembled_size = 0
+        try:
+            with destination.open("wb") as output:
+                for part, part_path in zip(release.archive.parts, part_paths, strict=True):
+                    if (
+                        not part_path.is_file()
+                        or _is_link(part_path)
+                        or part_path.stat().st_size != part.size_bytes
+                    ):
+                        raise RuntimePackageIntegrityError(
+                            f"runtime archive part changed before assembly: {part.file_name}"
+                        )
+                    part_digest = hashlib.sha256()
+                    with part_path.open("rb") as input_stream:
+                        while True:
+                            if cancel_event.is_set():
+                                raise RuntimePackageDownloadCancelled(
+                                    "runtime archive download was cancelled"
+                                )
+                            chunk = input_stream.read(self.chunk_size)
+                            if not chunk:
+                                break
+                            output.write(chunk)
+                            part_digest.update(chunk)
+                            digest.update(chunk)
+                            assembled_size += len(chunk)
+                    if part_digest.hexdigest() != part.sha256:
+                        raise RuntimePackageIntegrityError(
+                            f"runtime archive part changed before assembly: {part.file_name}"
+                        )
+            if (
+                assembled_size != release.archive_size_bytes
+                or digest.hexdigest() != release.archive_sha256
+            ):
+                raise RuntimePackageIntegrityError(
+                    "reassembled runtime archive does not match the trusted release"
+                )
+        except RuntimePackageDownloadError:
+            destination.unlink(missing_ok=True)
+            raise
+        except OSError as error:
+            destination.unlink(missing_ok=True)
+            raise RuntimePackageDownloadError(
+                f"runtime archive reassembly failed: {type(error).__name__}"
+            ) from None
+
+    @staticmethod
+    def _cleanup_part_cache(
+        part_root: Path,
+        parts: tuple[RuntimeArchivePartSpec, ...],
+    ) -> None:
+        for part in parts:
+            part_path = part_root / part.file_name
+            with suppress(OSError):
+                part_path.unlink(missing_ok=True)
+            with suppress(OSError):
+                part_path.with_name(f"{part_path.name}.part").unlink(missing_ok=True)
+        with suppress(OSError):
+            part_root.rmdir()
 
 
 def safe_extract_runtime_archive(
@@ -433,10 +616,32 @@ def runtime_manifest_sha256(manifest: RuntimePackageManifest) -> str:
 
 
 def _archive_matches(path: Path, release: RuntimePackageRelease) -> bool:
+    return _download_matches(
+        path,
+        _PinnedDownload(
+            source_url=release.archive_url,
+            size_bytes=release.archive_size_bytes,
+            sha256=release.archive_sha256,
+            label="runtime archive",
+        ),
+    )
+
+
+def _part_download(part: RuntimeArchivePartSpec) -> _PinnedDownload:
+    return _PinnedDownload(
+        source_url=part.source_url,
+        size_bytes=part.size_bytes,
+        sha256=part.sha256,
+        label=f"runtime archive part {part.file_name}",
+    )
+
+
+def _download_matches(path: Path, pinned: _PinnedDownload) -> bool:
     return (
         path.is_file()
-        and path.stat().st_size == release.archive_size_bytes
-        and _sha256_file(path) == release.archive_sha256
+        and not _is_link(path)
+        and path.stat().st_size == pinned.size_bytes
+        and _sha256_file(path) == pinned.sha256
     )
 
 

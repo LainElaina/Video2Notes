@@ -17,6 +17,8 @@ from video2notes.components.runtime_downloaders import (
     RuntimeDownloadResult,
     RuntimePackageArchiveError,
     RuntimePackageDownloadCancelled,
+    RuntimePackageIntegrityError,
+    UrlRuntimePackageDownloader,
     safe_extract_runtime_archive,
 )
 from video2notes.components.runtime_manager import (
@@ -28,6 +30,7 @@ from video2notes.components.runtime_manager import (
 )
 from video2notes.components.runtime_models import (
     RUNTIME_PACKAGE_MANIFEST,
+    RuntimeArchiveSpec,
     RuntimeBindingSnapshot,
     RuntimeOperationStatus,
     RuntimePackageCandidate,
@@ -168,6 +171,46 @@ def build_package(
     return PackageArtifact(root=package_root, archive=archive, release=release)
 
 
+def split_package_archive(
+    artifact: PackageArtifact,
+    source_root: Path,
+) -> tuple[PackageArtifact, tuple[Path, ...]]:
+    source_root.mkdir(parents=True)
+    payload = artifact.archive.read_bytes()
+    first_cut = max(1, len(payload) // 3)
+    second_cut = max(first_cut + 1, len(payload) * 2 // 3)
+    chunks = (payload[:first_cut], payload[first_cut:second_cut], payload[second_cut:])
+    parts: list[Path] = []
+    part_specs: list[dict[str, object]] = []
+    for suffix, chunk in zip(("003", "001", "002"), chunks, strict=True):
+        part = source_root / f"{artifact.archive.name}.{suffix}"
+        part.write_bytes(chunk)
+        parts.append(part)
+        part_specs.append(
+            {
+                "file_name": part.name,
+                "source_url": part.resolve().as_uri(),
+                "size_bytes": len(chunk),
+                "sha256": file_sha256(part),
+            }
+        )
+    archive = RuntimeArchiveSpec.model_validate(
+        {
+            "file_name": artifact.release.archive.file_name,
+            "source_url": None,
+            "size_bytes": artifact.archive.stat().st_size,
+            "sha256": file_sha256(artifact.archive),
+            "offline_only": True,
+            "parts": part_specs,
+        }
+    )
+    release = artifact.release.model_copy(update={"archive": archive})
+    return (
+        PackageArtifact(root=artifact.root, archive=artifact.archive, release=release),
+        tuple(parts),
+    )
+
+
 class ArchiveDownloader:
     def __init__(self, artifacts: tuple[PackageArtifact, ...]) -> None:
         self.archives = {
@@ -264,6 +307,98 @@ class RuntimePackageManagerTests(unittest.TestCase):
         )
         self.managers.append(manager)
         return manager
+
+    def test_url_downloader_keeps_single_archive_compatibility(self) -> None:
+        artifact = build_package(self.artifacts_root)
+        archive = artifact.release.archive.model_copy(
+            update={"source_url": artifact.archive.resolve().as_uri()}
+        )
+        release = artifact.release.model_copy(update={"archive": archive})
+        destination = self.root / "downloads" / artifact.archive.name
+        progress: list[tuple[int, int | None]] = []
+
+        result = UrlRuntimePackageDownloader(chunk_size=64 * 1024).download(
+            release,
+            destination,
+            cancel_event=threading.Event(),
+            progress=lambda downloaded, total: progress.append((downloaded, total)),
+        )
+
+        self.assertEqual(destination.read_bytes(), artifact.archive.read_bytes())
+        self.assertFalse(result.resumed)
+        self.assertFalse(result.reused)
+        self.assertEqual(progress[-1], (artifact.archive.stat().st_size,) * 2)
+
+    def test_multipart_downloader_resumes_and_reassembles_in_catalog_order(self) -> None:
+        artifact, parts = split_package_archive(
+            build_package(self.artifacts_root),
+            self.root / "multipart-source",
+        )
+        destination = self.root / "downloads" / artifact.archive.name
+        part_root = destination.with_name(f"{destination.name}.parts")
+        part_root.mkdir(parents=True)
+        first_partial = part_root / f"{parts[0].name}.part"
+        first_payload = parts[0].read_bytes()
+        first_partial.write_bytes(first_payload[: max(1, len(first_payload) // 2)])
+        progress: list[tuple[int, int | None]] = []
+
+        result = UrlRuntimePackageDownloader(chunk_size=64 * 1024).download(
+            artifact.release,
+            destination,
+            cancel_event=threading.Event(),
+            progress=lambda downloaded, total: progress.append((downloaded, total)),
+        )
+
+        self.assertEqual(destination.read_bytes(), artifact.archive.read_bytes())
+        self.assertTrue(result.resumed)
+        self.assertFalse(result.reused)
+        self.assertEqual(progress[-1], (artifact.archive.stat().st_size,) * 2)
+        self.assertFalse(part_root.exists())
+
+    def test_multipart_downloader_rejects_a_tampered_part(self) -> None:
+        artifact, parts = split_package_archive(
+            build_package(self.artifacts_root),
+            self.root / "tampered-source",
+        )
+        parts[1].write_bytes(parts[1].read_bytes() + b"tampered")
+        destination = self.root / "downloads" / artifact.archive.name
+
+        with self.assertRaises(RuntimePackageIntegrityError):
+            UrlRuntimePackageDownloader(chunk_size=64 * 1024).download(
+                artifact.release,
+                destination,
+                cancel_event=threading.Event(),
+                progress=lambda _downloaded, _total: None,
+            )
+
+        self.assertFalse(destination.exists())
+        self.assertFalse(destination.with_name(f"{destination.name}.part").exists())
+
+    def test_multipart_overall_hash_failure_never_publishes(self) -> None:
+        artifact, _parts = split_package_archive(
+            build_package(self.artifacts_root),
+            self.root / "overall-mismatch-source",
+        )
+        invalid_archive = artifact.release.archive.model_copy(update={"sha256": "0" * 64})
+        invalid_release = artifact.release.model_copy(update={"archive": invalid_archive})
+        invalid_artifact = PackageArtifact(
+            root=artifact.root,
+            archive=artifact.archive,
+            release=invalid_release,
+        )
+        manager = self.manager(
+            (invalid_artifact,),
+            downloader=UrlRuntimePackageDownloader(chunk_size=64 * 1024),
+        )
+
+        operation = manager.install_async(invalid_release.package_id)
+        finished = manager.wait(operation.operation_id, timeout=5)
+
+        self.assertEqual(finished.status, RuntimeOperationStatus.FAILED)
+        self.assertEqual(finished.error_code, "RuntimePackageIntegrityError")
+        self.assertFalse(any(manager.managed_root.rglob(RUNTIME_PACKAGE_MANIFEST)))
+        complete_archive = manager.download_root / f"{invalid_release.archive_sha256}.zip"
+        self.assertFalse(complete_archive.exists())
 
     def test_inventory_supports_all_sources_and_persists_custom_binding(self) -> None:
         artifact = build_package(self.artifacts_root)

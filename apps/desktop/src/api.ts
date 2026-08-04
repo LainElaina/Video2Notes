@@ -563,6 +563,12 @@ export interface ApiRuntimePackageRelease {
     size_bytes: number
     sha256: string
     offline_only: boolean
+    parts?: Array<{
+      file_name: string
+      source_url: string
+      size_bytes: number
+      sha256: string
+    }>
   }
   installed_size_bytes: number
   upstream_sources: string[]
@@ -655,6 +661,7 @@ export interface ApiRuntimeReleaseView {
   archive_file_name: string
   source_url?: string | null
   download_size_bytes: number
+  download_part_count: number
   installed_size_bytes: number
   offline_only: boolean
   upstream_sources: string[]
@@ -717,6 +724,7 @@ export interface ApiJobPreflightAction {
   archive_file_name: string
   source_url?: string | null
   download_size_bytes: number
+  download_part_count?: number
   installed_size_bytes: number
   install_root: string
   supported_devices: Array<'cpu' | 'cuda'>

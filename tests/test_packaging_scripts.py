@@ -419,7 +419,44 @@ class PackagingScriptContractTests(unittest.TestCase):
         )
 
         self.assertEqual(catalog["schema"], 1)
-        self.assertEqual(catalog["packages"], [])
+        packages = {item["package_id"]: item for item in catalog["packages"]}
+        self.assertEqual(
+            set(packages),
+            {
+                "local-inference-cpu-win-x64",
+                "local-inference-nvidia-asr-cu129-win-x64",
+                "local-inference-nvidia-full-cu129-win-x64",
+            },
+        )
+        release_base_url = (
+            "https://github.com/LainElaina/Video2Notes/releases/download/v0.2.0"
+        )
+        for package_id in (
+            "local-inference-cpu-win-x64",
+            "local-inference-nvidia-asr-cu129-win-x64",
+        ):
+            archive = packages[package_id]["archive"]
+            self.assertEqual(
+                archive["source_url"],
+                f"{release_base_url}/{archive['file_name']}",
+            )
+            self.assertFalse(archive["offline_only"])
+            self.assertNotIn("parts", archive)
+        full_archive = packages["local-inference-nvidia-full-cu129-win-x64"][
+            "archive"
+        ]
+        self.assertIsNone(full_archive["source_url"])
+        self.assertFalse(full_archive["offline_only"])
+        self.assertEqual(len(full_archive["parts"]), 2)
+        self.assertEqual(
+            sum(part["size_bytes"] for part in full_archive["parts"]),
+            full_archive["size_bytes"],
+        )
+        for part in full_archive["parts"]:
+            self.assertEqual(
+                part["source_url"],
+                f"{release_base_url}/{part['file_name']}",
+            )
         runtime_catalog_module = (
             REPOSITORY_ROOT
             / "src"
@@ -431,7 +468,7 @@ class PackagingScriptContractTests(unittest.TestCase):
             from video2notes.components.runtime_catalog import RuntimePackageCatalog
 
             parsed_catalog = RuntimePackageCatalog.model_validate(catalog)
-            self.assertEqual(parsed_catalog.releases, ())
+            self.assertEqual(len(parsed_catalog.releases), 3)
         self.assertEqual(profiles["default_profile"], "core")
         by_id = {profile["id"]: profile for profile in profiles["profiles"]}
         self.assertEqual(
@@ -470,6 +507,7 @@ class PackagingScriptContractTests(unittest.TestCase):
     def test_runtime_pack_scripts_never_install_python_packages_at_runtime(self) -> None:
         build = self.read("scripts/build_runtime_pack.ps1")
         verify = self.read("scripts/test_runtime_pack.ps1")
+        worker = self.read("scripts/build_runtime_worker.ps1")
 
         for forbidden in ("pip install", "--target", "PYTHONPATH", "site-packages"):
             self.assertNotIn(forbidden, build)
@@ -482,6 +520,13 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn("ReparsePoint", build)
         self.assertIn("ReparsePoint", verify)
         self.assertIn('user_model_weights_included = $false', build)
+        self.assertIn("runtime worker probe", verify.lower())
+        self.assertIn('ValidateSet("cpu", "nvidia_asr", "full_gpu")', worker)
+        self.assertIn('"--collect-all", "faster_whisper"', worker)
+        self.assertIn('"--collect-binaries", "paddle"', worker)
+        self.assertIn('"--exclude-module", "nvidia"', worker)
+        self.assertIn("RUNTIME_BUILD_INFO.json", worker)
+        self.assertIn("user_model_weights_included = $false", worker)
 
     @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
     def test_tiny_offline_runtime_pack_builds_and_verifies(self) -> None:
@@ -539,6 +584,7 @@ class PackagingScriptContractTests(unittest.TestCase):
                     str(payload),
                     "-OutputDirectory",
                     str(output),
+                    "-SkipValidation",
                 ],
                 capture_output=True,
                 text=True,
@@ -556,6 +602,28 @@ class PackagingScriptContractTests(unittest.TestCase):
             self.assertIsNone(entry["archive"]["source_url"])
             self.assertGreater(entry["archive"]["size_bytes"], 0)
             self.assertGreater(entry["installed_size_bytes"], 0)
+            verify = subprocess.run(
+                [
+                    "powershell",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(REPOSITORY_ROOT / "scripts" / "test_runtime_pack.ps1"),
+                    "-ArchivePath",
+                    str(archives[0]),
+                    "-CatalogEntryPath",
+                    str(entries[0]),
+                    "-SkipWorkerProbe",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
             runtime_models_module = (
                 REPOSITORY_ROOT
                 / "src"

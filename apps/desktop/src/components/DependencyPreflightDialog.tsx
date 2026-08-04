@@ -122,6 +122,7 @@ export function DependencyPreflightDialog() {
                   <div><dt>能力</dt><dd>{item.capabilityId}</dd></div>
                   {item.packageId && <div><dt>建议包</dt><dd>{item.packageId}{item.version ? ` @ ${item.version}` : ''}</dd></div>}
                   {item.downloadSizeBytes !== undefined && <div><dt>下载</dt><dd>{formatBytes(item.downloadSizeBytes)}</dd></div>}
+                  {item.downloadPartCount !== undefined && item.downloadPartCount > 1 && <div><dt>分片</dt><dd>{item.downloadPartCount} 个固定哈希文件</dd></div>}
                   {item.installedSizeBytes !== undefined && <div><dt>安装后</dt><dd>{formatBytes(item.installedSizeBytes)}</dd></div>}
                 </dl>
                 {item.officialUrl && (

@@ -642,7 +642,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
                       <div className="runtime-release-destination"><span>最终目录</span><code title={managedDestination(release)}>{managedDestination(release)}</code></div>
                       <div className="runtime-release-source">
                         {officialSource ? <a href={officialSource} target="_blank" rel="noreferrer"><ExternalLink size={11} aria-hidden="true" />{release.officialUrl ? '官方归档地址' : '上游项目来源'}</a> : <span>仅可从随包离线目录安装</span>}
-                        <span>{release.offlineOnly ? '离线归档' : 'HTTPS + SHA-256 固定'}</span>
+                        <span>{release.downloadPartCount > 1 ? `分 ${release.downloadPartCount} 个固定哈希文件下载` : release.offlineOnly ? '离线归档' : 'HTTPS + SHA-256 固定'}</span>
                       </div>
                       <button
                         className="button button-primary"

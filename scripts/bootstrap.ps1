@@ -6,12 +6,20 @@ param(
     [switch]$WithOcrGpu,
     [switch]$WithPlaywright,
     [switch]$SkipDesktop,
-    [switch]$Offline
+    [switch]$Offline,
+    # Release workers need mutually incompatible CPU/GPU Paddle environments.
+    # Keep the developer default while allowing isolated build environments.
+    [string]$VenvRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$VenvRoot = Join-Path $RepoRoot ".venv"
+if (-not $VenvRoot) {
+    $VenvRoot = Join-Path $RepoRoot ".venv"
+}
+else {
+    $VenvRoot = [IO.Path]::GetFullPath($VenvRoot)
+}
 $VenvPython = Join-Path $VenvRoot "Scripts\python.exe"
 $DesktopRoot = Join-Path $RepoRoot "apps\desktop"
 $PublicPypiIndex = "https://pypi.org/simple"

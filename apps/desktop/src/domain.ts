@@ -604,6 +604,7 @@ export interface RuntimePackageReleaseDefinition {
   archiveFileName: string
   officialUrl?: string
   downloadSizeBytes: number
+  downloadPartCount: number
   installedSizeBytes: number
   installRoot?: string
   offlineOnly: boolean
@@ -688,6 +689,7 @@ export interface MissingRuntimeRequirementDefinition {
   version?: string
   officialUrl?: string
   downloadSizeBytes?: number
+  downloadPartCount?: number
   installedSizeBytes?: number
 }
 
@@ -702,6 +704,7 @@ export interface JobPreflightActionDefinition {
   instanceId?: string
   bindRequirements: string[]
   downloadSizeBytes?: number
+  downloadPartCount?: number
   installedSizeBytes?: number
   targetRoot?: string
   officialUrl?: string
