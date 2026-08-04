@@ -64,7 +64,9 @@ class WindowsReleaseScriptContractTests(unittest.TestCase):
     def test_builds_only_nsis_and_msi_from_a_verified_core_resource_tree(self) -> None:
         self.assertIn('$BundleIds = @("nsis", "msi")', self.script)
         self.assertIn('"build_sidecar.ps1"', self.script)
-        self.assertIn('@("-ReleaseProfile", $ReleaseProfile)', self.script)
+        self.assertIn('$sidecarArguments = @{', self.script)
+        self.assertIn('ReleaseProfile = $ReleaseProfile', self.script)
+        self.assertNotIn('@("-ReleaseProfile", $ReleaseProfile)', self.script)
         self.assertIn('"test_sidecar.ps1"', self.script)
         self.assertIn("-CoreOnly", self.script)
         self.assertIn("pnpm tauri build --bundles $bundleArgument --ci", self.script)

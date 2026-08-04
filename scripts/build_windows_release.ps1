@@ -198,13 +198,15 @@ New-Item -ItemType Directory -Force -Path $buildRoot, $cargoTargetRoot, $release
 Push-Location $RepoRoot
 try {
     if (-not $ReuseSidecar) {
-        $sidecarArguments = @("-ReleaseProfile", $ReleaseProfile)
-        if ($SkipSidecarSmoke) { $sidecarArguments += "-SkipSmoke" }
+        $sidecarArguments = @{
+            ReleaseProfile = $ReleaseProfile
+        }
+        if ($SkipSidecarSmoke) { $sidecarArguments["SkipSmoke"] = $true }
         if ($FfmpegDirectory) {
-            $sidecarArguments += @("-FfmpegDirectory", $FfmpegDirectory)
+            $sidecarArguments["FfmpegDirectory"] = $FfmpegDirectory
         }
         if ($FfmpegLicensePath) {
-            $sidecarArguments += @("-FfmpegLicensePath", $FfmpegLicensePath)
+            $sidecarArguments["FfmpegLicensePath"] = $FfmpegLicensePath
         }
         & (Join-Path $PSScriptRoot "build_sidecar.ps1") @sidecarArguments
         Assert-LastExitCode "Building the Core backend sidecar"

@@ -604,10 +604,12 @@ function Assert-PortableChecksums {
 Push-Location $RepoRoot
 try {
     if (-not $ReuseSidecar) {
-        $sidecarArguments = @("-ReleaseProfile", $EffectiveReleaseProfile)
-        if ($SkipSidecarSmoke) { $sidecarArguments += "-SkipSmoke" }
-        if ($FfmpegDirectory) { $sidecarArguments += @("-FfmpegDirectory", $FfmpegDirectory) }
-        if ($FfmpegLicensePath) { $sidecarArguments += @("-FfmpegLicensePath", $FfmpegLicensePath) }
+        $sidecarArguments = @{
+            ReleaseProfile = $EffectiveReleaseProfile
+        }
+        if ($SkipSidecarSmoke) { $sidecarArguments["SkipSmoke"] = $true }
+        if ($FfmpegDirectory) { $sidecarArguments["FfmpegDirectory"] = $FfmpegDirectory }
+        if ($FfmpegLicensePath) { $sidecarArguments["FfmpegLicensePath"] = $FfmpegLicensePath }
         & (Join-Path $PSScriptRoot "build_sidecar.ps1") @sidecarArguments
         Assert-LastExitCode "Building and smoke-testing the self-contained backend sidecar"
     }
