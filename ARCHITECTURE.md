@@ -731,6 +731,8 @@ stage_name
 
 仓库的 [`scripts/cleanup_generated.ps1`](scripts/cleanup_generated.ps1) 会校验路径边界和 reparse point，默认 dry-run，并保护 `.venv`、模型、正式 benchmark 和 `portable/current`。
 
+2026-08-04 按不跟随 reparse point/junction 的口径，仓库逻辑大小是 `13.163 GiB`。`apps/desktop/node_modules` 内有 684 个指向仓库内部 pnpm store 的 junction；会递归跟随并对每个链接重复统计的工具可能显示 `50 GB+`，但那不是 684 份物理副本。当前主要占用是 `artifacts 7.530 GiB`、`.venv 5.410 GiB`、`apps 0.150 GiB`。`portable/current`、开发 `.venv`、正式 benchmark 和模型都有明确用途，清理器必须继续保护它们，除非用户显式选择舍弃对应能力或证据。
+
 当前产品没有 run 删除 API、保留期限或自动垃圾回收。这是已知产品闭环缺口，不是存储层已经解决的功能。
 
 ## 12. 安全与隐私架构
@@ -771,36 +773,207 @@ artifact 请求经过：
 
 ## 13. 打包架构
 
-### 13.1 Python 后端
+### 13.1 为什么把主程序与推理运行时分开
 
-[`scripts/build_sidecar.ps1`](scripts/build_sidecar.ps1) 使用 PyInstaller `--onedir` 冻结后端。
+旧的 `legacy_full` 使用 [`scripts/build_sidecar.ps1`](scripts/build_sidecar.ps1) 把以下内容冻结进同一个 PyInstaller `--onedir` 后端：
 
-full 包包含：
-
-- Python 业务代码；
-- yt-dlp；
-- FFmpeg/FFprobe；
+- Python 业务代码、yt-dlp、FFmpeg/FFprobe；
 - faster-whisper / CTranslate2；
-- PaddleOCR；
-- 一种 PaddlePaddle runtime；
-- NVIDIA 构建需要的 CUDA 用户态库；
+- PaddleOCR 与一种 PaddlePaddle runtime；
+- NVIDIA 构建需要的 CUDA、cuDNN、cuBLAS 等用户态库；
 - 许可证和构建 manifest。
 
-用户选择的 ASR/OCR 模型权重不放进便携包，而是下载到 `DATA_ROOT/components`。唯一例外是上游 faster-whisper 默认 VAD 路径需要的小型 Silero VAD 资产。
+这种形态已经通过现有 GPU 工作流，迁移期必须保留。但它约 5.165 GiB，其中 NVIDIA 与 Paddle GPU 占大约 87%；每次发版、回滚和复制都会重复这部分数据。
 
-### 13.2 Tauri 与 React
+新版边界把系统拆成：
 
-Vite 构建 React 静态文件，Tauri 把以下内容封装为 Windows 程序：
+```text
+Core 主程序
+  ├─ UI、API、流水线、yt-dlp、FFmpeg/FFprobe
+  ├─ 硬件探测与 huggingface-hub 模型下载能力
+  └─ 可信 runtime catalog
+          |
+          v
+独立 runtime worker ZIP
+  ├─ 固定 worker 可执行文件
+  ├─ faster-whisper / PaddleOCR / CUDA 等依赖
+  ├─ 自描述 manifest
+  └─ 完整展开文件哈希和许可证
+```
 
-- React 前端；
-- Rust 桌面壳；
-- 冻结后端；
-- 内置样例；
-- 许可证。
+Core 保留 `huggingface-hub`，所以“没有预装推理库”不等于“不能下载模型”。用户选择的 ASR/OCR 权重仍不放进主程序或通用运行时包，而是由现有模型组件管理器下载到 `DATA_ROOT/components/<model-id>`。允许保留的少量引擎资产必须在配方中显式列出，例如 faster-whisper 默认 VAD 的 Silero ONNX。
 
-### 13.3 Portable
+### 13.2 为什么运行时必须使用独立 worker
 
-[`scripts/build_portable.ps1`](scripts/build_portable.ps1) 生成：
+Windows 进程按 DLL basename 解析已经加载的原生库。CTranslate2 与 Paddle 可能携带名称相同、构建不同的 `cudnn64_9.dll`；把任意外部 `site-packages` 塞进正在运行的 FastAPI/PyInstaller 进程，会造成版本污染、加载顺序依赖和无法卸载的 `.pyd`/DLL。
+
+因此 managed/system/custom 运行时都通过固定 worker 进程隔离：
+
+```text
+任务 role / requirement
+        |
+        v
+runtime binding
+        |
+        v
+固定 executable + 参数数组（shell=False）
+        |
+        v
+worker hello/probe -> ASR/OCR request -> 现有 JSON 领域契约
+```
+
+OCR worker应常驻并复用，不为每一帧启动新进程。协议要有 request ID、超时、取消、一次受控重启和版本握手。manifest 只能声明受支持的固定相对入口，不能提供任意 shell 命令。worker/manifest 指纹必须进入 stage fingerprint，避免运行时升级后错误复用旧缓存。
+
+### 13.3 可信目录与运行时包格式
+
+仓库中的 [`packaging/runtime-packs/catalog.json`](packaging/runtime-packs/catalog.json) 是随应用发布的可信目录。当前仓库不提交真实数 GiB 归档，因此 `packages` 为空；发布流水线只有在生成并验证真实 ZIP 后才加入条目，不允许用占位 URL 或未知 SHA-256 冒充可下载版本。
+
+每个 catalog package/release 至少记录：
+
+```text
+package_id / version / display_name
+target_triple / runtime_protocol_version
+capabilities[]:
+  capability_id / engine_id / protocol_version
+  transport / entrypoint / supported_devices
+archive:
+  file_name / source_url / size_bytes / sha256 / offline_only
+installed_size_bytes
+files[]:
+  relative_path / size_bytes / sha256
+licenses[] / upstream_sources[]
+```
+
+ZIP 根目录必须含 `runtime-package.json`。它重复身份、协议、capability、许可证和 payload 文件哈希，便于 system/custom 目录自描述；真正决定“官方归档可安装”的 archive URL、ZIP SHA-256 和展开文件清单仍来自 Core 携带的可信 catalog，不能信任刚下载 ZIP 自己提供的值。
+
+初始 capability/requirement 边界是：
+
+| requirement ID | capability / 实现 |
+| --- | --- |
+| `tool.ffmpeg` | Core/bundled 或兼容外部 FFmpeg |
+| `tool.ffprobe` | Core/bundled 或兼容外部 ffprobe |
+| `download.ytdlp` | Core/bundled yt-dlp |
+| `asr.faster_whisper` | faster-whisper worker |
+| `ocr.paddleocr` | PaddleOCR worker |
+| `render.chromium_pdf` | 系统 Edge/Chrome/Chromium |
+
+模型权重与 runtime package 使用不同 manager。模型是数据，可以由不同兼容 worker 读取；runtime 是可执行代码和原生库，必须采用更严格的来源、哈希、路径和进程边界。
+
+### 13.4 安装状态机与安全边界
+
+受管安装是持久化异步操作：
+
+```text
+queued
+ -> downloading
+ -> verifying_archive
+ -> extracting
+ -> probing
+ -> publishing
+ -> completed
+
+或 failed / cancelled
+```
+
+每个 operation 记录已下载字节、总字节、速度、ETA、阶段、是否可续传和结构化错误。安装前 UI 直接使用可信 catalog 展示官方来源、归档大小、安装后大小、目标目录、能力和硬件要求，不等下载后再猜。
+
+安装器必须执行：
+
+1. 在 `DATA_ROOT/components/runtime-packs/.staging-*` 下载和展开；
+2. 用可信目录校验 archive SHA-256；
+3. 在解压前拒绝绝对路径、空段、`.`、`..`、重复路径、符号链接和 junction；
+4. 解压后逐个校验大小/SHA-256，拒绝 catalog 外的额外文件；
+5. 以固定参数运行 worker probe，验证 package ID、协议、能力、设备和引擎版本；
+6. 探测成功后原子发布到版本目录并切换 binding。
+
+除了进程内 `RLock`，安装/升级/删除还需要跨进程文件锁。这样重复点击、两个桌面实例或残留操作不会同时发布同一路径。
+
+### 13.5 存储、绑定和所有权
+
+配置与受管目录：
+
+```text
+DATA_ROOT/
+├─ config/runtime-packages.json
+└─ components/runtime-packs/
+   ├─ .staging-*/
+   └─ <package-id>/<version>/
+```
+
+Provider/Model/Role 之下再增加 runtime requirement/binding：
+
+```text
+Provider / Model / Role
+        |
+        v
+Runtime requirement
+        |
+        v
+Runtime package binding
+        |
+        v
+bundled / managed / system / custom worker
+```
+
+| source | 文件所有者 | 允许操作 |
+| --- | --- | --- |
+| `bundled` | 当前应用发行物 | 探测/绑定；程序不删除自己的单体后端文件 |
+| `managed` | Video2Notes 的 `DATA_ROOT` | 安装、校验、升级、解绑、删除 |
+| `system` | 系统或其他软件 | 发现、绑定、解绑；绝不删除 |
+| `custom` | 用户 | 注册、绑定、忘记；绝不递归删除用户目录 |
+
+system/custom 不是任意 Python 目录；它们必须有受支持的自描述 manifest，并通过 worker probe。目录选择器只返回固定目录路径，不接收命令行。
+
+绑定精确到 requirement。音频-only 任务只要求 ASR，不因为 OCR 未安装而阻止；存在平台字幕但本地 ASR 缺失时可以返回 `degraded`；需要转码而 FFmpeg/ffprobe 缺失时才是 `blocked`。前端预检用于解释，`submit_job` 必须在后端再次预检，不能信任前端状态。
+
+### 13.6 升级、回滚和删除
+
+升级采用并列版本，而不是原地覆盖：
+
+```text
+<package-id>/1.0.0   <- 当前 binding、可能有 worker lease
+<package-id>/1.1.0   <- 下载、校验、probe
+                         |
+                         v
+                    原子切换 binding
+```
+
+新版本失败时旧 binding 不变。旧版本只有在没有 binding、没有活动 worker/job lease 时才可删除。`managed` 删除可以回收文件；`system/custom` 的“删除”实际是解绑或忘记注册，不能触碰外部目录。这一边界也使 CPU、NVIDIA ASR、Full GPU profile 之间能通过添加和切换 runtime package 升级，而不替换整个主程序。
+
+### 13.7 发行 profile 与离线包
+
+[`packaging/runtime-packs/release-profiles.json`](packaging/runtime-packs/release-profiles.json) 定义：
+
+| profile | sidecar | 预期 runtime package | 说明 |
+| --- | --- | --- | --- |
+| `core` | `core-only` | 无 | 最小主程序，运行时按需联网安装或绑定 |
+| `cpu` | `core-only` | CPU inference | 附带可移除 CPU ASR/OCR 离线 ZIP |
+| `nvidia_asr` | `core-only` | NVIDIA ASR + CPU OCR | 语音 CUDA、OCR CPU |
+| `full_gpu` | `core-only` | NVIDIA full | ASR/OCR 都支持 CUDA |
+| `legacy_full` | `full` | 无独立包 | 兼容当前单体 5.165 GiB 后端 |
+
+四个新 profile 使用同一 Core 和同一 runtime schema。离线发行版只是把发布流水线已经校验并写入可信目录的 managed ZIP 放进 `runtime-packs/offline/`，首次安装无需联网；之后仍可安装新版、切换绑定和删除 managed 版本。在线与离线不能维护两套包格式。当前契约有 SHA-256 信任链，但尚未把代码签名或 catalog 数字签名描述成已完成能力。
+
+迁移期 `build_sidecar.ps1` / `build_portable.ps1` 的命令默认仍为 `legacy_full`，防止 managed worker 全流程验收完成前破坏当前可运行成品；配置目录的目标默认 profile 是 `core`。`-CoreOnly` 只是旧命令兼容别名。
+
+### 13.8 构建与验证脚本
+
+[`scripts/build_runtime_pack.ps1`](scripts/build_runtime_pack.ps1) 只接受“已经构建好的 worker payload + 仓库配方”：
+
+```powershell
+.\scripts\build_runtime_pack.ps1 `
+  -RecipePath .\packaging\runtime-packs\recipes\local-inference-cpu-win-x64.json `
+  -PayloadRoot D:\Build\video2notes-runtime-worker-cpu `
+  -OutputDirectory .\artifacts\runtime-packs
+```
+
+它不会执行 `pip`，而是校验入口、许可证、reparse point 和私有数据边界，写入 `runtime-package.json`，生成 ZIP、计算 archive/展开文件 SHA-256 和精确体积，再调用 [`scripts/test_runtime_pack.ps1`](scripts/test_runtime_pack.ps1) 进行独立解压验证。未传 `-SourceUrl` 时生成 `offline_only=true` 条目；在线发布必须传项目控制的 HTTPS 地址，再把验证后的 entry 合入可信 catalog。
+
+[`scripts/build_portable.ps1`](scripts/build_portable.ps1) 通过 `-ReleaseProfile` 构建发行物。`cpu`、`nvidia_asr`、`full_gpu` 还必须传 `-OfflineRuntimePackDirectory`，且目录里的 package ID 必须与 profile 完全一致，多包、少包或哈希不符都会中止。
+
+### 13.9 Tauri 与 Portable
+
+Vite 构建 React 静态文件，Tauri 组合桌面壳、Core/兼容后端、内置样例、许可证和 runtime metadata。新版 portable 结构是：
 
 ```text
 artifacts/portable/current/
@@ -808,18 +981,21 @@ artifacts/portable/current/
 ├─ backend/
 ├─ demo/
 ├─ licenses/
+├─ runtime-packs/
+│  ├─ catalog.json
+│  ├─ release-profiles.json
+│  ├─ offline-catalog.json
+│  └─ offline/                 # Core/legacy 可为空
 ├─ BUILD_INFO.json
 ├─ SHA256SUMS.txt
 └─ PORTABLE_README.txt
 ```
 
-替换 `current` 时先把旧目录移动到临时 `.backup-*`，新目录验证失败则回滚。当前默认在新目录验证成功后删除临时备份；只有显式 `-KeepPreviousPortable` 才保留上一版，避免每次构建永久增加约 5 GiB。
+替换 `current` 时先把旧目录移动到临时 `.backup-*`，新目录验证失败则回滚。默认在新目录验证成功后删除临时备份；只有显式 `-KeepPreviousPortable` 才保留上一版。`-Zip` 会另外生成搬运副本，开发阶段不应长期同时保留 ZIP 和 `current`。
 
-`-Zip` 另外生成搬运用压缩包。ZIP 与 `current` 内容重复，开发阶段不需要同时长期保留。
+### 13.10 PDF 边界
 
-### 13.4 PDF 边界
-
-便携包没有携带完整 Chromium。PDF 调用系统已安装的 Edge、Chrome 或 Chromium。Markdown 和 HTML 不依赖这个外部浏览器。
+便携包默认不携带完整 Chromium。`render.chromium_pdf` 可以绑定系统已安装的 Edge、Chrome 或 Chromium。缺失时 PDF 降级，Markdown 和 HTML 不受影响。未来若提供 Chromium managed pack，也必须走同一来源/大小/哈希/所有权规则。
 
 ## 14. 前端数据流
 
@@ -924,6 +1100,8 @@ run 状态同步变为 failed。已经写出的 artifact 不会自动删除，�
 相关脚本：
 
 - `scripts/test_sidecar.ps1`；
+- `scripts/test_runtime_pack.ps1`；
+- `scripts/build_runtime_pack.ps1`；
 - `scripts/test_portable_cuda.ps1`；
 - `scripts/build_portable.ps1`。
 
@@ -940,7 +1118,7 @@ Video2Notes/
 │  ├─ api/                          FastAPI
 │  ├─ artifacts/                    run workspace、manifest、stage cache
 │  ├─ audio/                        字幕、音频提取、ASR、二次 ASR
-│  ├─ components/                   本地模型组件目录、下载和校验
+│  ├─ components/                   模型组件与 runtime catalog/安装/绑定
 │  ├─ domain/                       Pydantic 领域模型
 │  ├─ evaluation/                   benchmark 工具
 │  ├─ fusion/                       统一时间线和证据窗口
@@ -953,9 +1131,12 @@ Video2Notes/
 │  ├─ providers/                    Provider/Model/Role/Secret
 │  ├─ sources/                      本地与 yt-dlp 来源
 │  ├─ system/                       硬件、资源、性能档位和估算
-│  └─ vision/                       自适应扫描和采样计划
+│  ├─ vision/                       自适应扫描和采样计划
+│  ├─ workers/                      隔离 worker 客户端、host 与协议
+│  └─ runtime_worker.py             固定运行时 worker 入口
 ├─ tests/                           Python 测试
-├─ scripts/                         bootstrap、测试、打包、清理
+├─ scripts/                         bootstrap、测试、sidecar/runtime pack 打包、清理
+├─ packaging/runtime-packs/         可信目录、发行 profile 与 worker 配方
 ├─ docs/                            研究、路线图和 benchmark
 ├─ samples/                         可再分发样例
 ├─ artifacts/                       本机生成物，不进入 Git
@@ -1054,7 +1235,7 @@ Video2Notes/
 - SQLite/PostgreSQL 索引；
 - 浏览器扩展、官方 OAuth/API 连接器；
 - DOCX、tagged PDF、复杂数学排版；
-- 按需拆分 CUDA/OCR runtime 以缩小首次下载体积；
+- 在正式发布流水线生成、托管并签署 CPU/NVIDIA runtime 大归档；
 - 应用内磁盘统计、保留策略和一键清理。
 
 这些方向落地前，需要同时更新代码、测试、README 和本文档状态，不能只更新 UI 文案。
