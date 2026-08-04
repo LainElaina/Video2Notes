@@ -54,7 +54,14 @@ class WindowsReleaseScriptContractTests(unittest.TestCase):
         self.assertIn("Get-Video2NotesSidecarSourceFingerprint", self.script)
         self.assertIn("source_fingerprint_schema -ne 1", self.script)
         self.assertIn("user_model_weights_included -ne $false", self.script)
-        self.assertIn("packaged_runtime_assets", self.script)
+        self.assertIn(
+            "$null -ne $manifest.packaged_runtime_assets",
+            self.script,
+        )
+        self.assertIn(
+            "@($manifest.packaged_runtime_assets).Count -ne 0",
+            self.script,
+        )
         self.assertIn(
             '$tauriConfiguration.bundle.resources."resources/backend/"',
             self.script,

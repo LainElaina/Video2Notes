@@ -116,7 +116,10 @@ function Assert-CoreSidecar {
     if ($manifest.user_model_weights_included -ne $false) {
         throw "The Core sidecar manifest does not explicitly exclude user model weights."
     }
-    if (@($manifest.packaged_runtime_assets).Count -ne 0) {
+    if (
+        $null -ne $manifest.packaged_runtime_assets -and
+        @($manifest.packaged_runtime_assets).Count -ne 0
+    ) {
         throw "The Core sidecar unexpectedly declares packaged local-inference runtime assets."
     }
 
