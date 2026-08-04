@@ -1,6 +1,6 @@
 # Video2Notes 架构说明
 
-本文档描述 Video2Notes `0.1.0` 当前代码真实执行的架构。它不是愿景文档，也不会把路线图里的候选方案写成已经完成。
+本文档描述 Video2Notes `0.2.0` 当前代码真实执行的架构。它不是愿景文档，也不会把路线图里的候选方案写成已经完成。
 
 目标读者包括第一次接触本项目的程序员。阅读时不要求提前了解视频容器、PTS、ASR、OCR、Tauri 或 FastAPI；重要名词会先解释，再说明它们在代码里如何连接。
 
@@ -826,7 +826,7 @@ OCR worker应常驻并复用，不为每一帧启动新进程。协议要有 req
 
 ### 13.3 可信目录与运行时包格式
 
-仓库中的 [`packaging/runtime-packs/catalog.json`](packaging/runtime-packs/catalog.json) 是随应用发布的可信目录。当前仓库不提交真实数 GiB 归档，因此 `packages` 为空；发布流水线只有在生成并验证真实 ZIP 后才加入条目，不允许用占位 URL 或未知 SHA-256 冒充可下载版本。
+仓库中的 [`packaging/runtime-packs/catalog.json`](packaging/runtime-packs/catalog.json) 是随应用发布的可信目录。`v0.2.0` 已加入 CPU、NVIDIA ASR 和 Full GPU 三个真实 Windows x64 release；每个条目都来自已经构建、解压校验并通过 worker probe 的归档。Git 不提交数 GiB 的 ZIP 本体，catalog 只保存 GitHub Release URL、准确字节数、完整 SHA-256 和全部展开文件哈希，不允许用占位 URL 或未知 SHA-256 冒充可下载版本。
 
 每个 catalog package/release 至少记录：
 
@@ -838,6 +838,7 @@ capabilities[]:
   transport / entrypoint / supported_devices
 archive:
   file_name / source_url / size_bytes / sha256 / offline_only
+  parts[]: file_name / source_url / size_bytes / sha256（可选）
 installed_size_bytes
 files[]:
   relative_path / size_bytes / sha256
@@ -845,6 +846,8 @@ licenses[] / upstream_sources[]
 ```
 
 ZIP 根目录必须含 `runtime-package.json`。它重复身份、协议、capability、许可证和 payload 文件哈希，便于 system/custom 目录自描述；真正决定“官方归档可安装”的 archive URL、ZIP SHA-256 和展开文件清单仍来自 Core 携带的可信 catalog，不能信任刚下载 ZIP 自己提供的值。
+
+单个 GitHub Release asset 不能超过 2 GiB。Full GPU ZIP 的完整大小和 SHA-256 仍作为最终信任目标保留在 `archive`，同时使用有序 `parts[]` 描述两个小于限制的固定分片。下载器逐片断点续传和校验，严格按 catalog 顺序重组，再验证完整 ZIP 的总字节数和 SHA-256；只有整体校验通过后才进入解压和 worker probe。分片名、URL、大小或哈希重复/不匹配都会在 catalog 加载或下载阶段被拒绝。
 
 初始 capability/requirement 边界是：
 
@@ -954,20 +957,22 @@ system/custom 不是任意 Python 目录；它们必须有受支持的自描述 
 
 四个新 profile 使用同一 Core 和同一 runtime schema。离线发行版只是把发布流水线已经校验并写入可信目录的 managed ZIP 放进 `runtime-packs/offline/`，首次安装无需联网；之后仍可安装新版、切换绑定和删除 managed 版本。在线与离线不能维护两套包格式。当前契约有 SHA-256 信任链，但尚未把代码签名或 catalog 数字签名描述成已完成能力。
 
-迁移期 `build_sidecar.ps1` / `build_portable.ps1` 的命令默认仍为 `legacy_full`，防止 managed worker 全流程验收完成前破坏当前可运行成品；配置目录的目标默认 profile 是 `core`。`-CoreOnly` 只是旧命令兼容别名。
+`build_sidecar.ps1` / `build_portable.ps1` 的参数默认值仍保留 `legacy_full` 以兼容旧命令；正式 Windows 发行使用 [`scripts/build_windows_release.ps1`](scripts/build_windows_release.ps1)，该脚本只接受 `core`，并拒绝包含本地推理依赖的 sidecar。配置目录的目标默认 profile 也是 `core`。`-CoreOnly` 只是旧命令兼容别名。
 
 ### 13.8 构建与验证脚本
 
-[`scripts/build_runtime_pack.ps1`](scripts/build_runtime_pack.ps1) 只接受“已经构建好的 worker payload + 仓库配方”：
+[`scripts/build_runtime_worker.ps1`](scripts/build_runtime_worker.ps1) 在隔离的 CPU Paddle 或 Full GPU Python 环境中冻结固定 `runtime-worker.exe`，并检查所需 Paddle/CUDA 发行版、DLL 哨兵、许可证和私有数据边界。随后 [`scripts/build_runtime_pack.ps1`](scripts/build_runtime_pack.ps1) 只接受“已经构建好的 worker payload + 仓库配方”：
 
 ```powershell
 .\scripts\build_runtime_pack.ps1 `
   -RecipePath .\packaging\runtime-packs\recipes\local-inference-cpu-win-x64.json `
-  -PayloadRoot D:\Build\video2notes-runtime-worker-cpu `
-  -OutputDirectory .\artifacts\runtime-packs
+  -PayloadRoot .\artifacts\build\runtime-workers\cpu `
+  -OutputDirectory .\artifacts\runtime-packs\cpu
 ```
 
-它不会执行 `pip`，而是校验入口、许可证、reparse point 和私有数据边界，写入 `runtime-package.json`，生成 ZIP、计算 archive/展开文件 SHA-256 和精确体积，再调用 [`scripts/test_runtime_pack.ps1`](scripts/test_runtime_pack.ps1) 进行独立解压验证。未传 `-SourceUrl` 时生成 `offline_only=true` 条目；在线发布必须传项目控制的 HTTPS 地址，再把验证后的 entry 合入可信 catalog。
+它不会执行 `pip`，而是校验入口、许可证、reparse point 和私有数据边界，写入 `runtime-package.json`，生成 ZIP、计算 archive/展开文件 SHA-256 和精确体积，再调用 [`scripts/test_runtime_pack.ps1`](scripts/test_runtime_pack.ps1) 独立解压并实际运行 worker probe。未传 `-SourceUrl` 时生成 `offline_only=true` 条目；在线发布必须使用项目控制的 HTTPS 地址。
+
+超过单资产限制的归档由 [`scripts/split_release_archive.ps1`](scripts/split_release_archive.ps1) 流式拆分并复验重组哈希。最后 [`scripts/build_runtime_catalog.ps1`](scripts/build_runtime_catalog.ps1) 读取真实 entry 和分片 manifest，复核归档与分片，生成 GitHub Release URL，通过 Pydantic 契约验证后原子更新可信 catalog。Core 便携版由 `build_portable.ps1 -ReleaseProfile core -Zip` 生成；NSIS `.exe` 与 MSI 由 `build_windows_release.ps1` 在隔离 Cargo target 中构建，并输出统一 `SHA256SUMS.txt` 和机器可读发行 manifest。
 
 [`scripts/build_portable.ps1`](scripts/build_portable.ps1) 通过 `-ReleaseProfile` 构建发行物。`cpu`、`nvidia_asr`、`full_gpu` 还必须传 `-OfflineRuntimePackDirectory`，且目录里的 package ID 必须与 profile 完全一致，多包、少包或哈希不符都会中止。
 

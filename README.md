@@ -77,7 +77,7 @@ artifacts\portable\current\Video2Notes.exe
 4. 先在“新建任务”里运行内置 9 秒样例，确认下载器、视觉、OCR、导出和本地后端工作正常。
 5. 再粘贴视频链接或选择本地视频，选择处理范围与档位后开始任务。
 
-仓库当前保留的 `artifacts\portable\current` 是兼容旧工作流的 `legacy_full` 单体版，已经携带 Python 后端、FFmpeg/FFprobe、yt-dlp、faster-whisper、PaddleOCR 和 NVIDIA 运行库，所以约为 5.17 GiB。它不是项目长期要求的最小体积。新版发行契约以小体积 `core` 为基础，把本地推理库做成可检测、绑定、安装、升级和移除的独立运行时包。普通用户无论选哪种发行形态，都不需要手动配置 Python、CUDA Toolkit、FFmpeg 或命令行环境。
+`v0.2.0` 的正式发行以小体积 `core` 为基础，把本地推理库拆成可检测、绑定、安装、升级和移除的独立运行时包。GitHub Release 同时提供免安装 ZIP、Core NSIS `.exe`、Core MSI，以及 CPU、NVIDIA ASR、Full GPU 三档运行时资产。普通用户不需要手动配置 Python、CUDA Toolkit、FFmpeg 或命令行环境；仓库里的 `artifacts\portable\current` 只是本机最近一次构建结果，不应当作为固定下载地址。
 
 PDF 是唯一仍依赖系统浏览器的输出：程序会调用已安装的 Edge、Chrome 或 Chromium 打印同一份 HTML。没有可用浏览器时，Markdown 和 HTML 仍会正常生成。
 
@@ -93,15 +93,15 @@ PDF 是唯一仍依赖系统浏览器的输出：程序会调用已安装的 Edg
 
 CUDA 与 Paddle GPU 占当前 5.17 GiB 单体版的大部分空间。把它们永久塞进每个版本，会让只做云端总结、只用 CPU 或只识别音频的用户也承担相同体积。因此新版 profile 共用同一个 Core，差别只在是否附带可选运行时包：
 
-| 发行 profile | 内容 | 预计解压体积，不含模型权重 | 适合 |
-| --- | --- | ---: | --- |
-| `core` | 小体积主程序，不预置本地推理 worker | 0.40-0.60 GiB | 联网按需安装、云模型、本机已有兼容运行时 |
-| `cpu` | Core + 可移除 CPU ASR/OCR 离线包 | 1.80-2.30 GiB | 核显笔记本、无 NVIDIA 环境 |
-| `nvidia_asr` | Core + CUDA ASR、CPU OCR 离线包 | 3.80-4.30 GiB | 语音占主导，希望 N 卡加速 ASR |
-| `full_gpu` | Core + CUDA ASR/OCR 离线包 | 4.80-5.30 GiB | 高频本地精确识别、显存充足 |
-| `legacy_full` | 旧式单体后端，所有库冻结在主程序内 | 当前 5.165 GiB | 兼容当前已验证便携版和迁移期回归 |
+| 发行 profile | 内容 | 额外下载，不含 Core/模型 | 额外安装占用 | 适合 |
+| --- | --- | ---: | ---: | --- |
+| `core` | 小体积主程序，不预置本地推理 worker | 0 | 0 | 联网按需安装、云模型、本机已有兼容运行时 |
+| `cpu` | Core + 可移除 CPU ASR/OCR 运行时 | 288.6 MiB | 763.3 MiB | 核显笔记本、无 NVIDIA 环境 |
+| `nvidia_asr` | Core + CUDA ASR、CPU OCR 运行时 | 1662.8 MiB | 2816.9 MiB | 语音占主导，希望 N 卡加速 ASR |
+| `full_gpu` | Core + CUDA ASR/OCR 运行时 | 3254.1 MiB，2 个分片 | 5059.5 MiB | 高频本地精确识别、显存充足 |
+| `legacy_full` | 旧式单体后端，所有库冻结在主程序内 | 约 3.27 GiB | 约 5.17 GiB | 只用于兼容和迁移回归 |
 
-前三种离线版携带的 ZIP 与在线安装使用同一清单和校验规则，不是另一套永久写死的后端。`legacy_full` 仍可构建和运行，但它内嵌的推理库不能单独删除；这是兼容路径，不是未来默认形态。当前 Git 仓库只提交配方和空的可信目录，不提交数 GiB 的真实运行时 ZIP，也不会用虚假下载地址冒充已发布组件。
+三档运行时使用同一套在线安装、离线携带和校验规则，不是三套永久写死的后端。`legacy_full` 仍可构建和运行，但它内嵌的推理库不能单独删除；这是兼容路径，不是未来默认形态。Git 仓库提交配方、完整文件哈希和可信 catalog，不提交数 GiB 的 ZIP 本体；真实归档发布在项目的 `v0.2.0` GitHub Release。Full GPU 因超过 GitHub 单资产上限被拆成两个固定哈希文件，软件会自动下载、重组并再次验证完整 ZIP，用户无需手工合并。
 
 ### 缺少依赖时会发生什么
 
@@ -111,7 +111,7 @@ CUDA 与 Paddle GPU 占当前 5.17 GiB 单体版的大部分空间。把它们�
 | --- | --- | --- |
 | `tool.ffmpeg` / `tool.ffprobe` | 媒体转换与探测 | 需要处理媒体时阻止任务 |
 | `download.ytdlp` | Bilibili、YouTube、X/Twitter 获取 | 网络来源任务阻止，本地文件不受影响 |
-| `asr.faster_whisper` | 本地语音识别 | 无平台字幕或其他 ASR 时阻止；有字幕时可降级 |
+| `asr.faster_whisper` | 本地语音识别 | 仅音频且无平台字幕/其他 ASR 时阻止；完整音画可降级为视觉、字幕和元数据笔记 |
 | `ocr.paddleocr` | 画面文字识别 | 完整音画任务阻止或降级；仅音频任务不要求安装 |
 | `render.chromium_pdf` | PDF 输出 | 只影响 PDF，Markdown/HTML 继续生成 |
 
@@ -495,14 +495,28 @@ $env:VIDEO2NOTES_TOKEN = "至少16字符的随机本地令牌"
 # 构建小体积 Core；真实运行时由可信目录按需安装
 .\scripts\build_portable.ps1 -ReleaseProfile core
 
+# 构建 Core 的 NSIS EXE 和 MSI 安装包
+.\scripts\build_windows_release.ps1
+
 # 构建现有单体兼容版
 .\scripts\build_portable.ps1 -ReleaseProfile legacy_full
 
-# 从已经冻结好的 worker 目录构建可离线安装、带完整哈希的 CPU 运行时包
+# 在隔离的 CPU Paddle 环境中冻结 CPU worker
+.\scripts\build_runtime_worker.ps1 -Profile cpu
+
+# 从已经冻结好的 worker 目录构建可安装、带完整哈希的 CPU 运行时包
 .\scripts\build_runtime_pack.ps1 `
   -RecipePath .\packaging\runtime-packs\recipes\local-inference-cpu-win-x64.json `
-  -PayloadRoot D:\Build\video2notes-runtime-worker-cpu `
-  -OutputDirectory .\artifacts\runtime-packs
+  -PayloadRoot .\artifacts\build\runtime-workers\cpu `
+  -OutputDirectory .\artifacts\runtime-packs\cpu `
+  -SourceUrl https://github.com/LainElaina/Video2Notes/releases/download/v0.2.0/local-inference-cpu-win-x64-0.2.0-x86_64-pc-windows-msvc.zip
+
+# 为超过 GitHub 单资产上限的 Full GPU ZIP 生成并复验固定分片
+.\scripts\split_release_archive.ps1 `
+  -ArchivePath .\artifacts\runtime-packs\full_gpu\local-inference-nvidia-full-cu129-win-x64-0.2.0-x86_64-pc-windows-msvc.zip
+
+# 合并真实条目、分片 URL 和哈希，原子更新可信 catalog
+.\scripts\build_runtime_catalog.ps1 -ReleaseTag v0.2.0 -Overwrite
 
 # 把上一步的离线包放进 CPU 发行版
 .\scripts\build_portable.ps1 -ReleaseProfile cpu `
@@ -518,7 +532,7 @@ $env:VIDEO2NOTES_TOKEN = "至少16字符的随机本地令牌"
 .\scripts\test_portable_cuda.ps1
 ```
 
-`-CoreOnly` 保留为 `-ReleaseProfile core` 的旧命令别名。迁移期构建脚本仍默认 `legacy_full`，避免在受管运行时安装/回滚验收完成前破坏现有便携版；发行配置文件的目标默认值已经是 `core`。`-ReuseSidecar` 只有在 Python、可信运行时目录和打包源码指纹仍与冻结后端一致时才允许复用。在线发布时还必须给 `build_runtime_pack.ps1` 传入项目控制的 HTTPS `-SourceUrl`；不传时生成的是 `offline_only=true` 的离线目录条目。
+`-CoreOnly` 保留为 `-ReleaseProfile core` 的旧命令别名。兼容脚本的参数默认值仍是 `legacy_full`，正式 Windows 发行脚本则硬性限定为 `core`，避免把数 GiB 推理依赖再次塞进默认安装包。`-ReuseSidecar` 只有在 Python、可信运行时目录和打包源码指纹仍与冻结后端一致时才允许复用。在线发布时还必须给 `build_runtime_pack.ps1` 传入项目控制的 HTTPS `-SourceUrl`；不传时生成的是 `offline_only=true` 的离线目录条目。
 
 ## 已知限制
 
@@ -530,7 +544,7 @@ $env:VIDEO2NOTES_TOKEN = "至少16字符的随机本地令牌"
 - PDF 依赖系统 Edge/Chrome/Chromium；尚未输出 DOCX、tagged PDF 或其他办公格式。
 - 平台下载能力受站点变化、账号、地区、源清晰度和平台政策影响，不支持 DRM 绕过。
 - OCR/ASR 尚未用大规模人工 gold 数据集给出可信的通用准确率；现有 benchmark 是工程性能和证据覆盖参考。
-- 当前仓库保留的 `legacy_full` NVIDIA 便携版仍较大；新版运行时包配方、可信目录、离线 ZIP 校验和发行 profile 已拆分，但正式数 GiB 归档仍需在发布流水线构建并放到项目控制的下载地址。
+- `legacy_full` NVIDIA 兼容版仍较大；正常使用应选择 Core，再按需安装 CPU、NVIDIA ASR 或 Full GPU 运行时。Full GPU 总下载量不会因为分片而减少。
 - 安装包/便携版当前未做 Authenticode 签名，Windows SmartScreen 可能显示未知发布者。
 - 暗色切换已经存在，但当前视觉验收基线仍是亮色；暗色色板尚未达到同等完成度。
 
@@ -541,6 +555,7 @@ $env:VIDEO2NOTES_TOKEN = "至少16字符的随机本地令牌"
 - [docs/03-evaluation-and-hardware-profiles.md](docs/03-evaluation-and-hardware-profiles.md)：评测和硬件档位背景。
 - [docs/04-reference-benchmark-2026-08-01.md](docs/04-reference-benchmark-2026-08-01.md)：受限 CPU 片段实验。
 - [docs/05-full-bv12hsez3ell-gpu-benchmark-2026-08-02.md](docs/05-full-bv12hsez3ell-gpu-benchmark-2026-08-02.md)：完整三档 GPU/CPU OCR 基准。
+- [docs/RELEASE_NOTES_0.2.0.md](docs/RELEASE_NOTES_0.2.0.md)：`v0.2.0` 发行资产、体积和选择建议。
 - [docs/04-roadmap.md](docs/04-roadmap.md)：后续路线，不代表已经实现。
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)：第三方依赖与许可证。
 
