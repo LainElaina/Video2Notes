@@ -206,6 +206,39 @@ describe('studio store', () => {
     })
   })
 
+  it('enforces runtime ownership before destructive store actions', () => {
+    const inventory = useStudioStore.getState().runtimePackages!
+    const bundled = inventory.instances.find(instance => instance.source === 'bundled')!
+    const system = inventory.instances.find(instance => instance.source === 'system')!
+    const managed = inventory.instances.find(instance => instance.source === 'managed')!
+
+    useStudioStore.getState().upgradeRuntimePackage(bundled.instanceId)
+    expect(useStudioStore.getState().notice).toContain('只有应用受管')
+
+    useStudioStore.getState().removeRuntimePackage(system.instanceId)
+    expect(useStudioStore.getState().notice).toContain('只有应用受管')
+
+    useStudioStore.getState().forgetRuntimePackage(managed.instanceId)
+    expect(useStudioStore.getState().notice).toContain('只有自定义登记')
+  })
+
+  it('cancels automatic task retry when the dependency dialog is dismissed', () => {
+    useStudioStore.setState({
+      jobPreflightDialogOpen: true,
+      preflightRuntimeOperationIds: ['operation-runtime-install'],
+      preflightAutoRetryPending: true,
+    })
+
+    useStudioStore.getState().dismissJobPreflight()
+
+    expect(useStudioStore.getState()).toMatchObject({
+      jobPreflightDialogOpen: false,
+      preflightRuntimeOperationIds: [],
+      preflightAutoRetryPending: false,
+      notice: expect.stringContaining('自动重检与任务提交已取消'),
+    })
+  })
+
   it('keeps demo text and image materials honestly in memory', () => {
     const store = useStudioStore.getState()
     const taskId = 'task-complete'

@@ -4,6 +4,7 @@ import {
   Video2NotesApiError,
   bundledDemoVideoPath,
   localArtifactUrl,
+  pickRuntimeDirectoryWithNativeDialog,
   pickVideoWithNativeDialog,
   resolveBackendConnection,
 } from './api'
@@ -17,6 +18,7 @@ import type {
   ApiConfigurationCatalog,
   ApiExecutionPlan,
   ApiJobEvent,
+  ApiJobPreflight,
   ApiJobSnapshot,
   ApiModelRegistry,
   ApiPerformanceSettings,
@@ -28,6 +30,8 @@ import type {
   ApiRunManifest,
   ApiRunOperation,
   ApiRunOperationRequest,
+  ApiRuntimePackageOperation,
+  ApiRuntimePackageReport,
   ApiStageRecord,
   ApiSourceInput,
   ApiSourceManifest,
@@ -59,6 +63,7 @@ import type {
   DiscoveredModelDefinition,
   DraftState,
   EvidenceItem,
+  JobPreflightDefinition,
   MachineProfile,
   ModelDefinition,
   ModelCapability,
@@ -78,6 +83,8 @@ import type {
   ReportRevisionFormat,
   ReworkOperation,
   RoleBinding,
+  RuntimePackageInventoryDefinition,
+  RuntimePackageOperationDefinition,
   SamplingOverrideDraft,
   SourceManifest,
   StageOutputArtifact,
@@ -117,8 +124,19 @@ interface StudioData {
   componentPreparationStatus: 'idle' | 'preparing' | 'success' | 'error'
   componentPreparationResults: ComponentPrepareResultDefinition[]
   componentPreparationActivated: boolean
+  componentPreparationActivatedRoles: string[]
+  componentPreparationBlockedRoles: string[]
+  componentPreparationWarnings: string[]
   componentPreparationError?: string
   selectedComponentIds: string[]
+  runtimePackages?: RuntimePackageInventoryDefinition
+  runtimePackagesStatus: 'idle' | 'loading' | 'ready' | 'error'
+  runtimePackageError?: string
+  jobPreflight?: JobPreflightDefinition
+  jobPreflightStatus: 'idle' | 'loading' | 'ready' | 'error'
+  jobPreflightDialogOpen: boolean
+  preflightRuntimeOperationIds: string[]
+  preflightAutoRetryPending: boolean
   processingEstimates: Partial<Record<ProcessingMode, ProcessingEstimate>>
   processingEstimateStatus: ProcessingEstimateStatus
   processingEstimateError?: string
@@ -234,6 +252,26 @@ interface StudioActions {
   refreshComponents: () => void
   setComponentSelected: (componentId: string, selected: boolean) => void
   prepareLocalComponents: (componentIds?: string[]) => void
+  refreshRuntimePackages: () => void
+  discoverRuntimePackages: () => void
+  registerCustomRuntimeDirectory: () => void
+  installRuntimePackage: (
+    packageId: string,
+    version?: string,
+    bindRequirements?: string[],
+  ) => void
+  upgradeRuntimePackage: (instanceId: string) => void
+  cancelRuntimeOperation: (operationId: string) => void
+  bindRuntimeRequirement: (
+    requirementId: string,
+    instanceId: string,
+    capabilityId?: string,
+  ) => void
+  unbindRuntimeRequirement: (requirementId: string) => void
+  removeRuntimePackage: (instanceId: string) => void
+  forgetRuntimePackage: (instanceId: string) => void
+  installPreflightRequirements: () => void
+  dismissJobPreflight: () => void
   savePerformance: (settings: PerformanceSettings) => void
   saveProvider: (input: {
     id: string
@@ -281,6 +319,14 @@ let samplingOverrideSequence = 0
 let sourceProbeSequence = 0
 let processingEstimateSequence = 0
 let submissionSequence = 0
+let runtimeInventoryPollTimer: number | undefined
+
+const stopRuntimeInventoryPolling = (): void => {
+  if (runtimeInventoryPollTimer !== undefined && typeof window !== 'undefined') {
+    window.clearTimeout(runtimeInventoryPollTimer)
+  }
+  runtimeInventoryPollTimer = undefined
+}
 
 interface ProcessingEstimateContext {
   manifestId: string
@@ -299,6 +345,14 @@ const invalidateProcessingEstimateContext = (): void => {
   processingEstimateSequence += 1
   processingEstimateContext = undefined
 }
+
+const clearedJobPreflight = () => ({
+  jobPreflight: undefined,
+  jobPreflightStatus: 'idle' as const,
+  jobPreflightDialogOpen: false,
+  preflightRuntimeOperationIds: [],
+  preflightAutoRetryPending: false,
+})
 
 const MICROSECONDS_PER_SECOND = 1_000_000
 const MIN_OPERATION_INTERVAL_US = 100_000
@@ -599,6 +653,232 @@ const demoDraft = (): DraftState => ({
   mode: 'accurate',
 })
 
+const demoRuntimePackages = (): RuntimePackageInventoryDefinition => ({
+  managedRoot: 'D:\\Video2Notes\\runtime-packages\\managed',
+  instances: [
+    {
+      instanceId: 'bundled:core-tools:0.1.0',
+      packageId: 'core-tools-win-x64',
+      version: '0.1.0',
+      displayName: 'Core media tools',
+      source: 'bundled',
+      root: 'C:\\Program Files\\Video2Notes\\backend',
+      state: 'ready',
+      ready: true,
+      targetTriple: 'win-x64',
+      runtimeProtocolVersion: 1,
+      transport: 'executable',
+      capabilities: [
+        'tool.ffmpeg',
+        'tool.ffprobe',
+        'download.ytdlp',
+        'render.chromium_pdf',
+      ],
+      boundRequirements: [
+        'tool.ffmpeg',
+        'tool.ffprobe',
+        'download.ytdlp',
+        'render.chromium_pdf',
+      ],
+      leased: false,
+      removable: false,
+    },
+    {
+      instanceId: 'managed:local-inference-nvidia-asr:0.1.0',
+      packageId: 'local-inference-nvidia-asr-cu129-win-x64',
+      version: '0.1.0',
+      displayName: 'NVIDIA ASR worker',
+      source: 'managed',
+      root: 'D:\\Video2Notes\\runtime-packages\\managed\\local-inference-nvidia-asr-cu129-win-x64\\0.1.0',
+      state: 'ready',
+      ready: true,
+      targetTriple: 'win-x64',
+      runtimeProtocolVersion: 1,
+      transport: 'worker',
+      capabilities: ['asr.faster_whisper'],
+      boundRequirements: ['asr.faster_whisper'],
+      leased: false,
+      removable: true,
+      availableVersion: '0.2.0',
+    },
+    {
+      instanceId: 'system:ffmpeg:7.1',
+      packageId: 'system-ffmpeg',
+      version: '7.1',
+      displayName: 'System FFmpeg',
+      source: 'system',
+      root: 'C:\\Tools\\ffmpeg',
+      state: 'ready',
+      ready: true,
+      transport: 'executable',
+      capabilities: ['tool.ffmpeg', 'tool.ffprobe'],
+      boundRequirements: [],
+      leased: false,
+      removable: false,
+    },
+    {
+      instanceId: 'custom:paddleocr:3.0.0',
+      packageId: 'custom-paddleocr-worker',
+      version: '3.0.0',
+      displayName: 'Custom PaddleOCR worker',
+      source: 'custom',
+      root: 'D:\\AI-Runtimes\\paddleocr-worker',
+      state: 'ready',
+      ready: true,
+      targetTriple: 'win-x64',
+      runtimeProtocolVersion: 1,
+      transport: 'worker',
+      capabilities: ['ocr.paddleocr'],
+      boundRequirements: ['ocr.paddleocr'],
+      leased: false,
+      removable: false,
+    },
+  ],
+  bindings: {
+    'tool.ffmpeg': {
+      requirementId: 'tool.ffmpeg',
+      capabilityId: 'tool.ffmpeg',
+      instanceId: 'bundled:core-tools:0.1.0',
+      packageId: 'core-tools-win-x64',
+      packageVersion: '0.1.0',
+      source: 'bundled',
+      manifestSha256: 'demo-bundled',
+      boundAtUtc: '2026-08-04T12:00:00Z',
+    },
+    'tool.ffprobe': {
+      requirementId: 'tool.ffprobe',
+      capabilityId: 'tool.ffprobe',
+      instanceId: 'bundled:core-tools:0.1.0',
+      packageId: 'core-tools-win-x64',
+      packageVersion: '0.1.0',
+      source: 'bundled',
+      manifestSha256: 'demo-bundled',
+      boundAtUtc: '2026-08-04T12:00:00Z',
+    },
+    'download.ytdlp': {
+      requirementId: 'download.ytdlp',
+      capabilityId: 'download.ytdlp',
+      instanceId: 'bundled:core-tools:0.1.0',
+      packageId: 'core-tools-win-x64',
+      packageVersion: '0.1.0',
+      source: 'bundled',
+      manifestSha256: 'demo-bundled',
+      boundAtUtc: '2026-08-04T12:00:00Z',
+    },
+    'asr.faster_whisper': {
+      requirementId: 'asr.faster_whisper',
+      capabilityId: 'asr.faster_whisper',
+      instanceId: 'managed:local-inference-nvidia-asr:0.1.0',
+      packageId: 'local-inference-nvidia-asr-cu129-win-x64',
+      packageVersion: '0.1.0',
+      source: 'managed',
+      manifestSha256: 'demo-managed',
+      boundAtUtc: '2026-08-04T12:00:00Z',
+    },
+    'ocr.paddleocr': {
+      requirementId: 'ocr.paddleocr',
+      capabilityId: 'ocr.paddleocr',
+      instanceId: 'custom:paddleocr:3.0.0',
+      packageId: 'custom-paddleocr-worker',
+      packageVersion: '3.0.0',
+      source: 'custom',
+      manifestSha256: 'demo-custom',
+      boundAtUtc: '2026-08-04T12:00:00Z',
+    },
+    'render.chromium_pdf': {
+      requirementId: 'render.chromium_pdf',
+      capabilityId: 'render.chromium_pdf',
+      instanceId: 'bundled:core-tools:0.1.0',
+      packageId: 'core-tools-win-x64',
+      packageVersion: '0.1.0',
+      source: 'bundled',
+      manifestSha256: 'demo-bundled',
+      boundAtUtc: '2026-08-04T12:00:00Z',
+    },
+  },
+  operations: [
+    {
+      operationId: 'runtime-op-demo',
+      kind: 'install',
+      packageId: 'local-inference-nvidia-asr-cu129-win-x64',
+      targetVersion: '0.1.0',
+      status: 'succeeded',
+      phase: 'completed',
+      progress: 1,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      targetRoot: 'D:\\Video2Notes\\runtime-packages\\managed\\local-inference-nvidia-asr-cu129-win-x64\\0.1.0',
+      requestedBindings: ['asr.faster_whisper'],
+      resumable: true,
+      cancelRequested: false,
+      createdAtUtc: '2026-08-04T11:58:00Z',
+      startedAtUtc: '2026-08-04T11:58:01Z',
+      finishedAtUtc: '2026-08-04T12:00:00Z',
+      resultInstanceId: 'managed:local-inference-nvidia-asr:0.1.0',
+      detail: '演示记录：组件已安装并通过 worker 探测。',
+    },
+  ],
+  availableReleases: [
+    {
+      packageId: 'local-inference-cpu-win-x64',
+      version: '0.2.0',
+      displayName: 'CPU local inference worker',
+      targetTriple: 'win-x64',
+      runtimeProtocolVersion: 1,
+      capabilities: [
+        {
+          capabilityId: 'asr.faster_whisper',
+          engineId: 'faster-whisper',
+          protocolVersion: 1,
+          transport: 'worker',
+          supportedDevices: ['cpu'],
+        },
+        {
+          capabilityId: 'ocr.paddleocr',
+          engineId: 'paddleocr',
+          protocolVersion: 1,
+          transport: 'worker',
+          supportedDevices: ['cpu'],
+        },
+      ],
+      archiveFileName: 'local-inference-cpu-win-x64-0.2.0.zip',
+      downloadSizeBytes: 786 * 1024 ** 2,
+      installedSizeBytes: 1_462 * 1024 ** 2,
+      installRoot: 'D:\\Video2Notes\\runtime-packages\\managed\\local-inference-cpu-win-x64\\0.2.0',
+      offlineOnly: true,
+      upstreamSources: [
+        'https://github.com/SYSTRAN/faster-whisper',
+        'https://github.com/PaddlePaddle/PaddleOCR',
+      ],
+    },
+    {
+      packageId: 'local-inference-nvidia-asr-cu129-win-x64',
+      version: '0.2.0',
+      displayName: 'NVIDIA ASR worker',
+      targetTriple: 'win-x64',
+      runtimeProtocolVersion: 1,
+      capabilities: [
+        {
+          capabilityId: 'asr.faster_whisper',
+          engineId: 'faster-whisper',
+          protocolVersion: 1,
+          transport: 'worker',
+          supportedDevices: ['cpu', 'cuda'],
+        },
+      ],
+      archiveFileName: 'local-inference-nvidia-asr-cu129-win-x64-0.2.0.zip',
+      downloadSizeBytes: 1_884 * 1024 ** 2,
+      installedSizeBytes: 3_474 * 1024 ** 2,
+      installRoot: 'D:\\Video2Notes\\runtime-packages\\managed\\local-inference-nvidia-asr-cu129-win-x64\\0.2.0',
+      offlineOnly: true,
+      upstreamSources: [
+        'https://github.com/SYSTRAN/faster-whisper',
+        'https://developer.nvidia.com/cuda-toolkit',
+      ],
+    },
+  ],
+})
+
 const initialData = (demo = false): StudioData => ({
   view: 'create',
   contextCollapsed: false,
@@ -639,11 +919,20 @@ const initialData = (demo = false): StudioData => ({
   componentPreparationStatus: 'idle',
   componentPreparationResults: [],
   componentPreparationActivated: false,
+  componentPreparationActivatedRoles: [],
+  componentPreparationBlockedRoles: [],
+  componentPreparationWarnings: [],
   selectedComponentIds: demo
     ? componentReportFixture.inventory.items
         .filter(item => item.kind === 'local_model' && !item.ready)
         .map(item => item.id)
     : [],
+  runtimePackages: demo ? demoRuntimePackages() : undefined,
+  runtimePackagesStatus: demo ? 'ready' : 'idle',
+  jobPreflightStatus: 'idle',
+  jobPreflightDialogOpen: false,
+  preflightRuntimeOperationIds: [],
+  preflightAutoRetryPending: false,
   processingEstimates: {},
   processingEstimateStatus: 'idle',
   submissionInFlight: false,
@@ -1660,6 +1949,9 @@ const mapComponentPreparation = (
     detail: result.detail ?? undefined,
   })),
   activated: value.activated,
+  activatedRoles: [...(value.activated_roles ?? [])],
+  blockedRoles: [...(value.blocked_roles ?? [])],
+  warnings: [...(value.warnings ?? [])],
   report: mapComponentReport(value.report),
 })
 
@@ -1667,6 +1959,188 @@ const selectableComponentIds = (report: ComponentReportDefinition): string[] =>
   report.inventory.items
     .filter(item => item.kind === 'local_model' && !item.ready)
     .map(item => item.id)
+
+const runtimeRequirementLabels: Record<string, string> = {
+  'tool.ffmpeg': 'FFmpeg 视频处理',
+  'tool.ffprobe': 'FFprobe 媒体探测',
+  'download.ytdlp': 'yt-dlp 视频下载',
+  'asr.faster_whisper': 'faster-whisper 语音识别',
+  'ocr.paddleocr': 'PaddleOCR 画面文字识别',
+  'render.chromium_pdf': 'Chromium PDF 渲染',
+}
+
+const runtimeOperationKindLabels: Record<RuntimePackageOperationDefinition['kind'], string> = {
+  install: '安装',
+  upgrade: '升级',
+  uninstall: '卸载',
+  verify: '验证',
+}
+
+const mapRuntimeOperation = (
+  value: ApiRuntimePackageOperation,
+): RuntimePackageOperationDefinition => ({
+  operationId: value.operation_id,
+  kind: value.kind,
+  packageId: value.package_id,
+  targetVersion: value.target_version ?? undefined,
+  instanceId: value.instance_id ?? undefined,
+  sourceInstanceId: value.source_instance_id ?? undefined,
+  status: value.status,
+  phase: value.phase ?? undefined,
+  progress: value.progress,
+  downloadedBytes: value.downloaded_bytes,
+  totalBytes: value.total_bytes ?? undefined,
+  transferSpeedBytesPerSecond:
+    value.transfer_speed_bytes_per_second ?? undefined,
+  etaSeconds: value.eta_seconds ?? undefined,
+  expectedInstalledBytes: value.expected_installed_bytes ?? undefined,
+  targetRoot: value.target_root ?? undefined,
+  requestedBindings: [...(value.requested_bindings ?? [])],
+  resumable: value.resumable ?? value.kind !== 'uninstall',
+  cancelRequested: value.cancel_requested,
+  createdAtUtc: value.created_at_utc,
+  startedAtUtc: value.started_at_utc ?? undefined,
+  finishedAtUtc: value.finished_at_utc ?? undefined,
+  resultInstanceId: value.result_instance_id ?? undefined,
+  detail: value.detail ?? undefined,
+  errorCode: value.error_code ?? undefined,
+})
+
+const mapRuntimePackages = (
+  value: ApiRuntimePackageReport,
+): RuntimePackageInventoryDefinition => ({
+  managedRoot: value.managed_root,
+  instances: value.inventory.instances.map(instance => ({
+    instanceId: instance.instance_id,
+    packageId: instance.package_id,
+    version: instance.version,
+    displayName: instance.display_name,
+    source: instance.source,
+    root: instance.root,
+    state: instance.state,
+    ready: instance.ready,
+    detail: instance.detail ?? undefined,
+    manifestSha256: instance.manifest_sha256 ?? undefined,
+    targetTriple: instance.target_triple ?? undefined,
+    runtimeProtocolVersion: instance.runtime_protocol_version ?? undefined,
+    transport: instance.transport ?? undefined,
+    capabilities: [...instance.capabilities],
+    boundRequirements: [...instance.bound_requirements],
+    leased: instance.leased,
+    removable: instance.removable,
+    availableVersion: instance.available_version ?? undefined,
+  })),
+  bindings: Object.fromEntries(
+    Object.entries(value.inventory.bindings).map(([requirementId, binding]) => [
+      requirementId,
+      {
+        requirementId: binding.requirement_id,
+        capabilityId: binding.capability_id,
+        instanceId: binding.instance_id,
+        packageId: binding.package_id,
+        packageVersion: binding.package_version,
+        source: binding.source,
+        manifestSha256: binding.manifest_sha256,
+        boundAtUtc: binding.bound_at_utc,
+      },
+    ]),
+  ),
+  operations: value.inventory.operations.map(mapRuntimeOperation),
+  availableReleases: value.releases.map(release => ({
+    packageId: release.package_id,
+    version: release.version,
+    displayName: release.display_name,
+    capabilities: release.capabilities.map(capabilityId => ({
+      capabilityId,
+      engineId: capabilityId,
+      protocolVersion: 1,
+      transport: 'worker',
+      supportedDevices: [...release.supported_devices],
+    })),
+    archiveFileName: release.archive_file_name,
+    officialUrl: release.source_url ?? undefined,
+    downloadSizeBytes: release.download_size_bytes,
+    installedSizeBytes: release.installed_size_bytes,
+    installRoot: release.install_root,
+    offlineOnly: release.offline_only,
+    upstreamSources: [...release.upstream_sources],
+  })),
+})
+
+const mapJobPreflight = (value: ApiJobPreflight): JobPreflightDefinition => {
+  const requirementById = new Map(
+    value.requirements.map(requirement => [requirement.requirement_id, requirement]),
+  )
+  const actionByRequirement = new Map(
+    value.recommended_actions.flatMap(action =>
+      action.requirement_ids.map(requirementId => [requirementId, action] as const),
+    ),
+  )
+  const mapMissing = (requirementId: string) => {
+    const requirement = requirementById.get(requirementId)
+    const action = actionByRequirement.get(requirementId)
+    return {
+      requirementId,
+      capabilityId: requirement?.capability_id ?? requirementId,
+      label: runtimeRequirementLabels[requirementId] ?? requirementId,
+      detail: requirement?.detail ?? '当前任务需要此本地运行能力。',
+      packageId: action?.package_id,
+      version: action?.version,
+      officialUrl: action?.source_url ?? undefined,
+      downloadSizeBytes: action?.download_size_bytes,
+      installedSizeBytes: action?.installed_size_bytes,
+    }
+  }
+  return {
+    state: value.state,
+    requirements: value.requirements.map(requirement => requirement.requirement_id),
+    missingRequired: value.missing_required.map(mapMissing),
+    missingOptional: value.missing_optional.map(mapMissing),
+    selectedInstances: { ...value.selected_instances },
+    bindingSnapshot: Object.fromEntries(
+      Object.entries(value.binding_snapshot).map(([requirementId, binding]) => [
+        requirementId,
+        binding.instance_id,
+      ]),
+    ),
+    recommendedActions: value.recommended_actions.map(action => ({
+      kind: 'install',
+      label: `安装 ${action.display_name}`,
+      detail: `归档 ${action.archive_file_name} 将安装到 ${action.install_root}`,
+      packageId: action.package_id,
+      version: action.version,
+      bindRequirements: [...action.requirement_ids],
+      downloadSizeBytes: action.download_size_bytes,
+      installedSizeBytes: action.installed_size_bytes,
+      targetRoot: action.install_root,
+      officialUrl: action.source_url ?? undefined,
+      supportedDevices: [...action.supported_devices],
+    })),
+    estimatedDownloadBytes: value.estimated_download_bytes,
+    estimatedInstalledBytes: value.estimated_installed_bytes,
+    detail:
+      value.state === 'blocked'
+        ? '当前配置缺少必需运行能力，任务不会提交。'
+        : value.state === 'degraded'
+          ? '任务可以降级执行，缺失的可选能力会写入运行提示。'
+          : '当前任务所需运行能力已就绪。',
+  }
+}
+
+const mergeRuntimeOperation = (
+  inventory: RuntimePackageInventoryDefinition | undefined,
+  operation: ApiRuntimePackageOperation,
+): RuntimePackageInventoryDefinition | undefined => {
+  if (!inventory) return inventory
+  const mapped = mapRuntimeOperation(operation)
+  return {
+    ...inventory,
+    operations: [
+      mapped,
+      ...inventory.operations.filter(item => item.operationId !== mapped.operationId),
+    ],
+  }
+}
 
 const registryPresentation = (
   value: ApiModelRegistry,
@@ -2121,6 +2595,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           loadedRegistry,
           runs,
           componentPayload,
+          runtimePackagePayload,
         ] = await Promise.all([
           nextApi.system(),
           nextApi.performance(),
@@ -2130,6 +2605,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           nextApi.providers(),
           nextApi.listRuns(),
           nextApi.components(),
+          nextApi.runtimePackages().catch(() => undefined),
         ])
         api = nextApi
         registry = loadedRegistry
@@ -2167,8 +2643,21 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           componentPreparationStatus: 'idle',
           componentPreparationResults: [],
           componentPreparationActivated: false,
+          componentPreparationActivatedRoles: [],
+          componentPreparationBlockedRoles: [],
+          componentPreparationWarnings: [],
           componentPreparationError: undefined,
           selectedComponentIds: selectableComponentIds(componentReport),
+          runtimePackages: runtimePackagePayload
+            ? mapRuntimePackages(runtimePackagePayload)
+            : undefined,
+          runtimePackagesStatus: runtimePackagePayload ? 'ready' : 'idle',
+          runtimePackageError: undefined,
+          jobPreflight: undefined,
+          jobPreflightStatus: 'idle',
+          jobPreflightDialogOpen: false,
+          preflightRuntimeOperationIds: [],
+          preflightAutoRetryPending: false,
           backend: {
             mode: 'real',
             version: health.version,
@@ -2195,6 +2684,13 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
               : '本地后端已连接，任务和模型配置已同步。',
         })
         get().refreshTasks()
+        if (
+          runtimePackagePayload?.inventory.operations.some(operation =>
+            ['queued', 'running'].includes(operation.status),
+          )
+        ) {
+          get().refreshRuntimePackages()
+        }
       } catch (error) {
         api = undefined
         set({
@@ -2333,6 +2829,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
   },
   setDraftMode: mode => {
@@ -2344,6 +2841,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
   },
   setProcessingScope: processingScope => {
@@ -2363,6 +2861,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
     get().refreshProcessingEstimates()
   },
@@ -2375,6 +2874,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
   },
   setDraftBrowser: browser => {
@@ -2386,6 +2886,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
   },
   setDraftProfile: profile => {
@@ -2397,6 +2898,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
   },
   setDraftCookieFile: cookieFile => {
@@ -2408,18 +2910,19 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     }))
   },
   setLanguageHints: languageHints =>
-    set(state => ({ draft: { ...state.draft, languageHints } })),
+    set(state => ({ draft: { ...state.draft, languageHints }, ...clearedJobPreflight() })),
   setIncludeScreenshots: includeScreenshots =>
-    set(state => ({ draft: { ...state.draft, includeScreenshots } })),
+    set(state => ({ draft: { ...state.draft, includeScreenshots }, ...clearedJobPreflight() })),
   setGeneratePdf: generatePdf =>
-    set(state => ({ draft: { ...state.draft, generatePdf } })),
+    set(state => ({ draft: { ...state.draft, generatePdf }, ...clearedJobPreflight() })),
   setSamplingMode: samplingMode =>
-    set(state => ({ draft: { ...state.draft, samplingMode } })),
+    set(state => ({ draft: { ...state.draft, samplingMode }, ...clearedJobPreflight() })),
   setSamplingIntervalSeconds: samplingIntervalSeconds =>
-    set(state => ({ draft: { ...state.draft, samplingIntervalSeconds } })),
+    set(state => ({ draft: { ...state.draft, samplingIntervalSeconds }, ...clearedJobPreflight() })),
   addSamplingOverride: () =>
     set(state => {
       samplingOverrideSequence += 1
@@ -2429,6 +2932,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         `sampling-${samplingOverrideSequence}`,
       )
       return {
+        ...clearedJobPreflight(),
         draft: {
           ...state.draft,
           samplingOverrides: [...state.draft.samplingOverrides, override],
@@ -2437,6 +2941,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     }),
   updateSamplingOverride: (id, patch) =>
     set(state => ({
+      ...clearedJobPreflight(),
       draft: {
         ...state.draft,
         samplingOverrides: state.draft.samplingOverrides.map(override =>
@@ -2446,13 +2951,14 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     })),
   removeSamplingOverride: id =>
     set(state => ({
+      ...clearedJobPreflight(),
       draft: {
         ...state.draft,
         samplingOverrides: state.draft.samplingOverrides.filter(override => override.id !== id),
       },
     })),
   setReportPreset: reportPreset =>
-    set(state => ({ draft: { ...state.draft, reportPreset } })),
+    set(state => ({ draft: { ...state.draft, reportPreset }, ...clearedJobPreflight() })),
 
   probeSource: () => {
     const draft = get().draft
@@ -2469,6 +2975,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       processingEstimates: {},
       processingEstimateStatus: 'idle',
       processingEstimateError: undefined,
+      ...clearedJobPreflight(),
     })
     if (get().backend.mode === 'demo') {
       const manifest = detectSourceFixture(input)
@@ -2668,6 +3175,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         sourceLabel: `${fileName} · ${sizeMb} MB`,
       }
       set(state => ({
+        ...clearedJobPreflight(),
         draft: {
           ...state.draft,
           input: fileName,
@@ -2694,6 +3202,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       return
     }
     set(state => ({
+      ...clearedJobPreflight(),
       draft: invalidateProbedDraft(state.draft, {
         input: fileName,
         sourceKind: 'local',
@@ -2706,8 +3215,13 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
   },
 
   createTask: () => {
-    if (get().submissionInFlight || get().draft.status === 'submitting') {
-      set({ notice: '已有任务正在提交，请等待本次提交确认。' })
+    if (
+      get().submissionInFlight ||
+      get().draft.status === 'submitting' ||
+      get().jobPreflightStatus === 'loading' ||
+      get().preflightAutoRetryPending
+    ) {
+      set({ notice: '正在检查依赖或提交任务，请等待本次操作确认。' })
       return
     }
     const draft = get().draft
@@ -2779,58 +3293,119 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     const submission = buildPipelineSubmission(draft)
     const submissionId = ++submissionSequence
     const submittedProbeSequence = sourceProbeSequence
-    set(state => ({
-      submissionInFlight: true,
-      draft: { ...state.draft, status: 'submitting', error: undefined },
-    }))
-    void client
-      .submitJob(submission)
-      .then(response => {
-        if (submissionId !== submissionSequence) return
-        sourceByRun.set(response.run.run_id, draft.manifest!)
-        submissionByRun.set(response.run.run_id, submission)
-        const task = taskFromRun(
-          response.run,
-          response.job,
-          draft.manifest,
-          response.runtime_warnings,
-        )
-        set(state => {
-          const submittedDraftStillCurrent =
-            sourceProbeSequence === submittedProbeSequence &&
-            state.draft.status === 'submitting'
-          return {
-            submissionInFlight: false,
-            draft: submittedDraftStillCurrent
-              ? { ...state.draft, status: 'ready', error: undefined }
-              : state.draft,
-            tasks: [task, ...state.tasks.filter(item => item.id !== task.id)],
-            activeTaskId: submittedDraftStillCurrent ? task.id : state.activeTaskId,
-            view: submittedDraftStillCurrent ? 'tasks' : state.view,
-            notice:
-              response.runtime_warnings[0] ||
-              (submittedDraftStillCurrent
-                ? `真实任务 ${task.id} 已提交到本机处理队列。`
-                : `较早的草稿已提交为任务 ${task.id}；当前草稿保持不变。`),
-          }
+    const submissionFingerprint = JSON.stringify(submission)
+
+    const submitPreparedJob = (preflight: JobPreflightDefinition) => {
+      if (submissionId !== submissionSequence) return
+      set(state => ({
+        submissionInFlight: true,
+        jobPreflight: preflight,
+        jobPreflightStatus: 'ready',
+        jobPreflightDialogOpen: false,
+        preflightRuntimeOperationIds: [],
+        preflightAutoRetryPending: false,
+        draft: { ...state.draft, status: 'submitting', error: undefined },
+        notice:
+          preflight.state === 'degraded'
+            ? preflight.detail ?? '依赖预检允许降级执行，任务将保留相关提示。'
+            : '依赖检查通过，正在提交本机处理任务。',
+      }))
+      void client
+        .submitJob(submission)
+        .then(response => {
+          if (submissionId !== submissionSequence) return
+          sourceByRun.set(response.run.run_id, draft.manifest!)
+          submissionByRun.set(response.run.run_id, submission)
+          const task = taskFromRun(
+            response.run,
+            response.job,
+            draft.manifest,
+            response.runtime_warnings,
+          )
+          set(state => {
+            const submittedDraftStillCurrent =
+              sourceProbeSequence === submittedProbeSequence &&
+              state.draft.status === 'submitting'
+            return {
+              submissionInFlight: false,
+              draft: submittedDraftStillCurrent
+                ? { ...state.draft, status: 'ready', error: undefined }
+                : state.draft,
+              tasks: [task, ...state.tasks.filter(item => item.id !== task.id)],
+              activeTaskId: submittedDraftStillCurrent ? task.id : state.activeTaskId,
+              view: submittedDraftStillCurrent ? 'tasks' : state.view,
+              notice:
+                response.runtime_warnings[0] ||
+                (submittedDraftStillCurrent
+                  ? `真实任务 ${task.id} 已提交到本机处理队列。`
+                  : `较早的草稿已提交为任务 ${task.id}；当前草稿保持不变。`),
+            }
+          })
         })
+        .catch(error => {
+          if (submissionId !== submissionSequence) return
+          const message = errorMessage(error)
+          set(state => {
+            const submittedDraftStillCurrent =
+              sourceProbeSequence === submittedProbeSequence &&
+              state.draft.status === 'submitting'
+            return {
+              submissionInFlight: false,
+              draft: submittedDraftStillCurrent
+                ? { ...state.draft, status: 'error', error: message }
+                : state.draft,
+              notice: submittedDraftStillCurrent
+                ? state.notice
+                : `较早的任务提交失败：${message}；当前草稿保持不变。`,
+            }
+          })
+        })
+    }
+
+    set({
+      jobPreflight: undefined,
+      jobPreflightStatus: 'loading',
+      jobPreflightDialogOpen: false,
+      preflightRuntimeOperationIds: [],
+      preflightAutoRetryPending: false,
+      notice: '正在检查当前任务所需的本地工具与识别运行时。',
+    })
+    void client
+      .preflightJob(submission)
+      .then(payload => {
+        if (submissionId !== submissionSequence) return
+        const currentDraft = get().draft
+        if (
+          sourceProbeSequence !== submittedProbeSequence ||
+          currentDraft.status !== 'ready' ||
+          JSON.stringify(buildPipelineSubmission(currentDraft)) !== submissionFingerprint
+        ) {
+          set({ ...clearedJobPreflight() })
+          return
+        }
+        const preflight = mapJobPreflight(payload)
+        if (preflight.state === 'blocked') {
+          set({
+            jobPreflight: preflight,
+            jobPreflightStatus: 'ready',
+            jobPreflightDialogOpen: true,
+            preflightRuntimeOperationIds: [],
+            preflightAutoRetryPending: false,
+            notice: '任务尚未提交：请先安装或绑定缺失的本地依赖。',
+          })
+          return
+        }
+        submitPreparedJob(preflight)
       })
       .catch(error => {
         if (submissionId !== submissionSequence) return
         const message = errorMessage(error)
-        set(state => {
-          const submittedDraftStillCurrent =
-            sourceProbeSequence === submittedProbeSequence &&
-            state.draft.status === 'submitting'
-          return {
-            submissionInFlight: false,
-            draft: submittedDraftStillCurrent
-              ? { ...state.draft, status: 'error', error: message }
-              : state.draft,
-            notice: submittedDraftStillCurrent
-              ? state.notice
-              : `较早的任务提交失败：${message}；当前草稿保持不变。`,
-          }
+        set({
+          jobPreflightStatus: 'error',
+          jobPreflightDialogOpen: false,
+          preflightRuntimeOperationIds: [],
+          preflightAutoRetryPending: false,
+          notice: `依赖预检失败，任务未提交：${message}`,
         })
       })
   },
@@ -3725,6 +4300,9 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           componentPreparationStatus: 'idle',
           componentPreparationResults: [],
           componentPreparationActivated: false,
+          componentPreparationActivatedRoles: [],
+          componentPreparationBlockedRoles: [],
+          componentPreparationWarnings: [],
           componentPreparationError: undefined,
           notice: componentReport.inventory.ready
             ? '本地运行环境和推荐模型均已就绪。'
@@ -3795,6 +4373,9 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       componentPreparationStatus: 'preparing',
       componentPreparationResults: [],
       componentPreparationActivated: false,
+      componentPreparationActivatedRoles: [],
+      componentPreparationBlockedRoles: [],
+      componentPreparationWarnings: [],
       componentPreparationError: undefined,
       notice: componentIds
         ? `正在下载并校验 ${requestedIds.length} 个所选组件…`
@@ -3837,6 +4418,20 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         const failedMessage = failed
           .map(result => result.detail || `${result.componentId} 准备失败`)
           .join('；')
+        const activatedRoleSummary = preparation.activatedRoles.length > 0
+          ? `已激活：${preparation.activatedRoles.map(role => roleMetadata(role).label).join('、')}。`
+          : ''
+        const blockedRoleSummary = preparation.blockedRoles.length > 0
+          ? `仍未激活：${preparation.blockedRoles.map(role => roleMetadata(role).label).join('、')}。`
+          : ''
+        const warningSummary = preparation.warnings[0]
+          ? `提示：${preparation.warnings[0]}`
+          : ''
+        const activationSummary = [
+          activatedRoleSummary,
+          blockedRoleSummary,
+          warningSummary,
+        ].filter(Boolean).join(' ')
         const currentProviderId = get().selectedProviderId
         const nextPresentation = presentation
           ? {
@@ -3854,14 +4449,17 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           componentPreparationStatus: failed.length > 0 ? 'error' : 'success',
           componentPreparationResults: preparation.results,
           componentPreparationActivated: preparation.activated,
+          componentPreparationActivatedRoles: preparation.activatedRoles,
+          componentPreparationBlockedRoles: preparation.blockedRoles,
+          componentPreparationWarnings: preparation.warnings,
           componentPreparationError: failed.length > 0 ? failedMessage : undefined,
           selectedComponentIds: selectableComponentIds(preparation.report),
           notice:
             failed.length > 0
               ? `部分组件准备失败：${failedMessage}`
               : preparation.activated
-                ? `推荐模型已校验并激活。${refreshWarning}`.trim()
-                : `所选组件已准备；ASR 与 OCR 都就绪后会自动激活。${refreshWarning}`.trim(),
+                ? `推荐模型已校验并激活。${activationSummary} ${refreshWarning}`.trim()
+                : `所选组件已准备。${activationSummary || 'ASR 与 OCR 都就绪后会自动激活。'} ${refreshWarning}`.trim(),
         })
       })
       .catch(error => {
@@ -3872,6 +4470,443 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           notice: message,
         })
       })
+  },
+  refreshRuntimePackages: () => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '演示模式只展示运行时包样例，不会扫描或修改本机目录。' })
+      return
+    }
+    stopRuntimeInventoryPolling()
+    if (!get().runtimePackages) {
+      set({ runtimePackagesStatus: 'loading', runtimePackageError: undefined })
+    }
+    void api
+      .runtimePackages()
+      .then(payload => {
+        const inventory = mapRuntimePackages(payload)
+        const state = get()
+        const previousOperations = new Map(
+          (state.runtimePackages?.operations ?? []).map(operation => [
+            operation.operationId,
+            operation,
+          ]),
+        )
+        const active = inventory.operations.some(operation =>
+          ['queued', 'running'].includes(operation.status),
+        )
+        const watchedIds = state.preflightRuntimeOperationIds
+        const watchingPreflight =
+          state.preflightAutoRetryPending && watchedIds.length > 0
+        const watchedOperations = watchedIds
+          .map(operationId =>
+            inventory.operations.find(
+              operation => operation.operationId === operationId,
+            ),
+          )
+          .filter(
+            (operation): operation is RuntimePackageOperationDefinition =>
+              operation !== undefined,
+          )
+        const allWatchedFound = watchedOperations.length === watchedIds.length
+        const allWatchedTerminal =
+          allWatchedFound &&
+          watchedOperations.every(operation =>
+            ['succeeded', 'failed', 'cancelled'].includes(operation.status),
+          )
+
+        if (watchingPreflight && allWatchedTerminal) {
+          const failedOperation = watchedOperations.find(
+            operation => operation.status !== 'succeeded',
+          )
+          if (failedOperation) {
+            const detail = failedOperation.detail
+              ? `${failedOperation.packageId}：${failedOperation.detail}`
+              : `${failedOperation.packageId} 的${runtimeOperationKindLabels[failedOperation.kind]}任务${failedOperation.status === 'cancelled' ? '已取消' : '失败'}。`
+            set({
+              runtimePackages: inventory,
+              runtimePackagesStatus: 'ready',
+              runtimePackageError: detail,
+              preflightRuntimeOperationIds: [],
+              preflightAutoRetryPending: false,
+              jobPreflightDialogOpen: true,
+              notice: `依赖准备未完成：${detail}`,
+            })
+            return
+          }
+
+          set({
+            runtimePackages: inventory,
+            runtimePackagesStatus: 'ready',
+            runtimePackageError: undefined,
+            preflightRuntimeOperationIds: [],
+            preflightAutoRetryPending: false,
+            jobPreflightDialogOpen: false,
+            notice: '所需依赖已全部安装并绑定，正在重新检查同一任务。',
+          })
+          void Promise.resolve().then(() => get().createTask())
+          return
+        }
+
+        const terminalTransitions = inventory.operations.filter(operation => {
+          const previous = previousOperations.get(operation.operationId)
+          return Boolean(
+            previous &&
+              ['queued', 'running'].includes(previous.status) &&
+              ['succeeded', 'failed', 'cancelled'].includes(operation.status),
+          )
+        })
+        const failedTransition = terminalTransitions.find(
+          operation => operation.status === 'failed',
+        )
+        const cancelledTransition = terminalTransitions.find(
+          operation => operation.status === 'cancelled',
+        )
+        const completedTransition = terminalTransitions.find(
+          operation => operation.status === 'succeeded',
+        )
+        const transitionNotice = failedTransition
+          ? `${failedTransition.packageId} 的${runtimeOperationKindLabels[failedTransition.kind]}失败：${failedTransition.detail ?? failedTransition.errorCode ?? '请查看操作记录。'}`
+          : cancelledTransition
+            ? `${cancelledTransition.packageId} 的${runtimeOperationKindLabels[cancelledTransition.kind]}已取消。`
+            : completedTransition
+              ? `${completedTransition.packageId} 的${runtimeOperationKindLabels[completedTransition.kind]}已完成，运行时清单与绑定已刷新。`
+              : undefined
+        set({
+          runtimePackages: inventory,
+          runtimePackagesStatus: 'ready',
+          runtimePackageError: failedTransition
+            ? failedTransition.detail ?? failedTransition.errorCode ?? '运行时操作失败。'
+            : undefined,
+          ...(transitionNotice ? { notice: transitionNotice } : {}),
+        })
+        if (
+          (active || (watchingPreflight && !allWatchedTerminal)) &&
+          typeof window !== 'undefined'
+        ) {
+          runtimeInventoryPollTimer = window.setTimeout(
+            () => get().refreshRuntimePackages(),
+            800,
+          )
+        }
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({
+          runtimePackagesStatus: 'error',
+          runtimePackageError: message,
+          notice: message,
+        })
+        if (get().preflightAutoRetryPending && typeof window !== 'undefined') {
+          runtimeInventoryPollTimer = window.setTimeout(
+            () => get().refreshRuntimePackages(),
+            800,
+          )
+        }
+      })
+  },
+  discoverRuntimePackages: () => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '连接真实本机后端后才能重新发现系统运行时。' })
+      return
+    }
+    stopRuntimeInventoryPolling()
+    set({
+      runtimePackagesStatus: 'loading',
+      runtimePackageError: undefined,
+      notice: '正在检查随包、受管和本机系统运行时。',
+    })
+    void api
+      .discoverRuntimePackages()
+      .then(payload => {
+        const inventory = mapRuntimePackages(payload)
+        set({
+          runtimePackages: inventory,
+          runtimePackagesStatus: 'ready',
+          runtimePackageError: undefined,
+          notice: `运行时发现完成，共找到 ${inventory.instances.length} 个可登记实例。`,
+        })
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({
+          runtimePackagesStatus: 'error',
+          runtimePackageError: message,
+          notice: message,
+        })
+      })
+  },
+  registerCustomRuntimeDirectory: () => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '连接真实本机后端后才能登记自定义运行时目录。' })
+      return
+    }
+    void pickRuntimeDirectoryWithNativeDialog()
+      .then(root => {
+        if (!root) return
+        set({
+          runtimePackagesStatus: 'loading',
+          runtimePackageError: undefined,
+          notice: '正在验证目录中的 runtime-package.json 与固定入口。',
+        })
+        return api!
+          .registerCustomRuntime(root)
+          .then(() => {
+            set({
+              runtimePackagesStatus: 'ready',
+              runtimePackageError: undefined,
+              notice: '自定义运行时已登记；应用不会接管或删除原目录。',
+            })
+            get().refreshRuntimePackages()
+          })
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({
+          runtimePackagesStatus: 'error',
+          runtimePackageError: message,
+          notice: message,
+        })
+      })
+  },
+  installRuntimePackage: (packageId, version, bindRequirements = []) => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '演示模式不会下载运行时包。' })
+      return
+    }
+    set({
+      runtimePackageError: undefined,
+      notice: `正在创建 ${packageId} 的受管安装任务。`,
+    })
+    void api
+      .installRuntimePackage({
+        package_id: packageId,
+        version: version ?? null,
+        bind_requirements: [...new Set(bindRequirements)],
+      })
+      .then(operation => {
+        set(state => ({
+          runtimePackages: mergeRuntimeOperation(state.runtimePackages, operation),
+          runtimePackagesStatus: 'ready',
+          notice: '安装任务已开始；可安全取消，已下载的分片会保留用于续传。',
+        }))
+        get().refreshRuntimePackages()
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({ runtimePackagesStatus: 'error', runtimePackageError: message, notice: message })
+      })
+  },
+  upgradeRuntimePackage: instanceId => {
+    const instance = get().runtimePackages?.instances.find(
+      item => item.instanceId === instanceId,
+    )
+    if (!instance || instance.source !== 'managed') {
+      set({ notice: '只有应用受管的运行时包可以升级。' })
+      return
+    }
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '演示模式不会升级运行时包。' })
+      return
+    }
+    set({ runtimePackageError: undefined, notice: '正在创建并排升级任务。' })
+    void api
+      .upgradeRuntimePackage(instanceId)
+      .then(operation => {
+        set(state => ({
+          runtimePackages: mergeRuntimeOperation(state.runtimePackages, operation),
+          runtimePackagesStatus: 'ready',
+          notice: '升级任务已开始；新版本验证通过后才会切换绑定。',
+        }))
+        get().refreshRuntimePackages()
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({ runtimePackagesStatus: 'error', runtimePackageError: message, notice: message })
+      })
+  },
+  cancelRuntimeOperation: operationId => {
+    if (!api || get().backend.mode !== 'real') return
+    void api
+      .cancelRuntimePackageOperation(operationId)
+      .then(operation => {
+        set(state => ({
+          runtimePackages: mergeRuntimeOperation(state.runtimePackages, operation),
+          notice: '已请求取消；当前校验或文件操作到达安全点后会停止。',
+        }))
+        get().refreshRuntimePackages()
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  bindRuntimeRequirement: (requirementId, instanceId, capabilityId) => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '演示模式不会修改运行时绑定。' })
+      return
+    }
+    void api
+      .bindRuntimePackage({
+        requirement_id: requirementId,
+        instance_id: instanceId,
+        capability_id: capabilityId ?? null,
+      })
+      .then(() => {
+        set({
+          runtimePackagesStatus: 'ready',
+          runtimePackageError: undefined,
+          notice: `${runtimeRequirementLabels[requirementId] ?? requirementId} 已绑定。`,
+        })
+        get().refreshRuntimePackages()
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  unbindRuntimeRequirement: requirementId => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '演示模式不会修改运行时绑定。' })
+      return
+    }
+    void api
+      .unbindRuntimeRequirement(requirementId)
+      .then(() => {
+        set({
+          runtimePackagesStatus: 'ready',
+          runtimePackageError: undefined,
+          notice: `${runtimeRequirementLabels[requirementId] ?? requirementId} 已取消绑定。`,
+        })
+        get().refreshRuntimePackages()
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  removeRuntimePackage: instanceId => {
+    const instance = get().runtimePackages?.instances.find(
+      item => item.instanceId === instanceId,
+    )
+    if (!instance || instance.source !== 'managed') {
+      set({ notice: '只有应用受管的运行时包可以卸载。' })
+      return
+    }
+    if (!api || get().backend.mode !== 'real') return
+    void api
+      .uninstallRuntimePackage(instanceId)
+      .then(operation => {
+        set(state => ({
+          runtimePackages: mergeRuntimeOperation(state.runtimePackages, operation),
+          notice: '卸载任务已开始；仍被绑定或使用中的版本不会被删除。',
+        }))
+        get().refreshRuntimePackages()
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  forgetRuntimePackage: instanceId => {
+    const instance = get().runtimePackages?.instances.find(
+      item => item.instanceId === instanceId,
+    )
+    if (!instance || instance.source !== 'custom') {
+      set({ notice: '只有自定义登记可以从清单中忘记。' })
+      return
+    }
+    if (!api || get().backend.mode !== 'real') return
+    void api
+      .forgetCustomRuntime(instanceId)
+      .then(() => {
+        set({
+          runtimePackagesStatus: 'ready',
+          runtimePackageError: undefined,
+          notice: '已忘记自定义运行时登记；原目录与文件没有被删除。',
+        })
+        get().refreshRuntimePackages()
+      })
+      .catch(error => set({ notice: errorMessage(error) }))
+  },
+  installPreflightRequirements: () => {
+    const preflight = get().jobPreflight
+    if (get().preflightAutoRetryPending) {
+      set({ notice: '依赖安装正在进行，全部完成后会自动重新检查当前任务。' })
+      return
+    }
+    if (!preflight || !api || get().backend.mode !== 'real') {
+      set({ notice: '当前没有可自动安装的依赖建议。' })
+      return
+    }
+    const installs = Array.from(
+      preflight.recommendedActions
+        .filter(action => action.kind === 'install' && action.packageId)
+        .reduce((items, action) => {
+          const key = `${action.packageId}@${action.version ?? 'latest'}`
+          const existing = items.get(key)
+          items.set(key, {
+            packageId: action.packageId!,
+            version: action.version,
+            bindRequirements: [
+              ...(existing?.bindRequirements ?? []),
+              ...action.bindRequirements,
+            ],
+          })
+          return items
+        }, new Map<string, { packageId: string; version?: string; bindRequirements: string[] }>())
+        .values(),
+    )
+    if (installs.length === 0) {
+      set({ notice: '后端没有提供可自动执行的安装建议，请打开依赖管理。' })
+      return
+    }
+    set({
+      runtimePackageError: undefined,
+      preflightRuntimeOperationIds: [],
+      preflightAutoRetryPending: false,
+      notice: '正在创建缺失依赖的安装与绑定任务。',
+    })
+    void Promise.allSettled(
+      installs.map(item =>
+        api!.installRuntimePackage({
+          package_id: item.packageId,
+          version: item.version ?? null,
+          bind_requirements: [...new Set(item.bindRequirements)],
+        }),
+      ),
+    )
+      .then(results => {
+        const startedOperations = results.flatMap(result =>
+          result.status === 'fulfilled' ? [result.value] : [],
+        )
+        const startFailures = results.flatMap(result =>
+          result.status === 'rejected' ? [errorMessage(result.reason)] : [],
+        )
+        const operationIds = startedOperations.map(
+          operation => operation.operation_id,
+        )
+        set(state => ({
+          runtimePackages: startedOperations.reduce(
+            (inventory, operation) => mergeRuntimeOperation(inventory, operation),
+            state.runtimePackages,
+          ),
+          preflightRuntimeOperationIds: operationIds,
+          preflightAutoRetryPending:
+            startFailures.length === 0 && operationIds.length === installs.length,
+          runtimePackageError:
+            startFailures.length > 0
+              ? `部分安装任务无法启动：${startFailures.join('；')}`
+              : undefined,
+          jobPreflightDialogOpen: true,
+          notice:
+            startFailures.length > 0
+              ? `部分安装任务无法启动：${startFailures.join('；')}`
+              : '所需组件任务已开始；全部完成后会自动刷新清单并重新检查当前任务。',
+        }))
+        get().refreshRuntimePackages()
+      })
+  },
+  dismissJobPreflight: () => {
+    const autoRetryPending = get().preflightAutoRetryPending
+    set({
+      jobPreflightDialogOpen: false,
+      ...(autoRetryPending
+        ? {
+            preflightRuntimeOperationIds: [],
+            preflightAutoRetryPending: false,
+            notice:
+              '依赖安装会继续在后台进行；自动重检与任务提交已取消，完成后可手动重新检查。',
+          }
+        : {}),
+    })
   },
   savePerformance: settings => {
     const normalized: PerformanceSettings = {
@@ -4282,6 +5317,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
 
   clearNotice: () => set({ notice: undefined }),
   resetDemo: () => {
+    stopRuntimeInventoryPolling()
     api = undefined
     registry = undefined
     demoOperationSequence = 0

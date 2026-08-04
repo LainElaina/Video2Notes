@@ -14,6 +14,7 @@ import {
   Video2NotesApi,
   bundledDemoVideoPath,
   localArtifactUrl,
+  pickRuntimeDirectoryWithNativeDialog,
   pickVideoWithNativeDialog,
   resolveBackendConnection,
 } from './api'
@@ -69,6 +70,7 @@ describe('real local API client', () => {
         data_root: 'C:/Video2Notes',
       })
       .mockResolvedValueOnce('D:/captures/lecture.mp4')
+      .mockResolvedValueOnce('D:/AI-Runtimes/faster-whisper')
       .mockResolvedValueOnce('C:/Program Files/Video2Notes/demo/evidence-demo.mp4')
       .mockResolvedValueOnce('C:/Video2Notes/runs/run_01/media/source.mp4')
 
@@ -82,6 +84,9 @@ describe('real local API client', () => {
       },
     })
     await expect(pickVideoWithNativeDialog()).resolves.toBe('D:/captures/lecture.mp4')
+    await expect(pickRuntimeDirectoryWithNativeDialog()).resolves.toBe(
+      'D:/AI-Runtimes/faster-whisper',
+    )
     await expect(bundledDemoVideoPath()).resolves.toBe(
       'C:/Program Files/Video2Notes/demo/evidence-demo.mp4',
     )
@@ -90,8 +95,9 @@ describe('real local API client', () => {
     )
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'backend_connection')
     expect(invokeMock).toHaveBeenNthCalledWith(2, 'pick_video')
-    expect(invokeMock).toHaveBeenNthCalledWith(3, 'demo_video_path')
-    expect(invokeMock).toHaveBeenNthCalledWith(4, 'artifact_file_path', {
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'pick_runtime_directory')
+    expect(invokeMock).toHaveBeenNthCalledWith(4, 'demo_video_path')
+    expect(invokeMock).toHaveBeenNthCalledWith(5, 'artifact_file_path', {
       runId: 'run_01',
       relativePath: 'media/source.mp4',
     })
@@ -273,6 +279,125 @@ describe('real local API client', () => {
       activate: true,
     })
     expect(new Headers(calls[1].init.headers).get('X-Video2Notes-Token')).toBe(
+      'session-secret',
+    )
+  })
+
+  it('maps runtime package management and job preflight contracts', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(json({ ok: true })))
+    const client = new Video2NotesApi({
+      baseUrl: 'http://127.0.0.1:43119/',
+      token: 'session-secret',
+    })
+    const jobRequest: Parameters<Video2NotesApi['preflightJob']>[0] = {
+      source: { kind: 'local', value: 'D:/clips/runtime-check.mp4' },
+      auth: { kind: 'none' },
+      acquisition: {
+        mode: 'accurate',
+        include_subtitles: true,
+        include_automatic_captions: true,
+        allow_quality_change: false,
+        prefer_hardlink: true,
+      },
+      quality_mode: 'accurate',
+      processing_scope: 'audio_only',
+      language_hints: ['zh-CN', 'en'],
+      sampling_plan: {
+        default: { mode: 'adaptive' },
+        overrides: [],
+      },
+      include_screenshots: false,
+      generate_pdf: true,
+      report_spec: {
+        preset: 'professional',
+        language: 'zh-CN',
+        include_screenshots: false,
+        output_formats: ['markdown', 'html', 'pdf'],
+      },
+    }
+
+    await client.runtimePackages()
+    await client.discoverRuntimePackages()
+    await client.installRuntimePackage({
+      package_id: 'local-inference-nvidia-asr-cu129-win-x64',
+      version: '0.2.0',
+      bind_requirements: ['asr.faster_whisper'],
+    })
+    await client.runtimePackageOperation('operation / 01')
+    await client.cancelRuntimePackageOperation('operation / 01')
+    await client.bindRuntimePackage({
+      requirement_id: 'asr.faster_whisper',
+      instance_id: 'managed:nvidia/asr',
+      capability_id: 'asr.faster_whisper',
+    })
+    await client.unbindRuntimeRequirement('asr.faster_whisper / primary')
+    await client.registerCustomRuntime('D:/AI Runtimes/PaddleOCR')
+    await client.forgetCustomRuntime('custom:paddle/ocr')
+    await client.upgradeRuntimePackage('managed:nvidia/asr', '0.3.0')
+    await client.uninstallRuntimePackage('managed:nvidia/asr')
+    await client.preflightJob(jobRequest)
+
+    const calls = fetchMock.mock.calls.map(asRequest)
+    expect(calls[0].url).toBe('http://127.0.0.1:43119/api/runtime-packages')
+    expect(calls[1]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/discover',
+      init: { method: 'POST' },
+    })
+    expect(calls[2]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/install',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(calls[2].init.body))).toEqual({
+      package_id: 'local-inference-nvidia-asr-cu129-win-x64',
+      version: '0.2.0',
+      bind_requirements: ['asr.faster_whisper'],
+    })
+    expect(calls[3].url).toBe(
+      'http://127.0.0.1:43119/api/runtime-packages/operations/operation%20%2F%2001',
+    )
+    expect(calls[4]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/operations/operation%20%2F%2001/cancel',
+      init: { method: 'POST' },
+    })
+    expect(calls[5]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/bindings',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(calls[5].init.body))).toEqual({
+      requirement_id: 'asr.faster_whisper',
+      instance_id: 'managed:nvidia/asr',
+      capability_id: 'asr.faster_whisper',
+    })
+    expect(calls[6]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/bindings/asr.faster_whisper%20%2F%20primary',
+      init: { method: 'DELETE' },
+    })
+    expect(calls[7]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/custom',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(calls[7].init.body))).toEqual({
+      root: 'D:/AI Runtimes/PaddleOCR',
+    })
+    expect(calls[8]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/custom/custom%3Apaddle%2Focr',
+      init: { method: 'DELETE' },
+    })
+    expect(calls[9]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/instances/managed%3Anvidia%2Fasr/upgrade',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(calls[9].init.body))).toEqual({ version: '0.3.0' })
+    expect(calls[10]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/runtime-packages/instances/managed%3Anvidia%2Fasr',
+      init: { method: 'DELETE' },
+    })
+    expect(calls[11]).toMatchObject({
+      url: 'http://127.0.0.1:43119/api/jobs/preflight',
+      init: { method: 'POST' },
+    })
+    expect(JSON.parse(String(calls[11].init.body))).toEqual(jobRequest)
+    expect(new Headers(calls[11].init.headers).get('X-Video2Notes-Token')).toBe(
       'session-secret',
     )
   })

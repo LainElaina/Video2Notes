@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ApiEvidenceSpan,
+  ApiJobPreflight,
   ApiJobSnapshot,
   ApiRunManifest,
   ApiRunMaterial,
   ApiRunOperation,
   ApiRunOperationRequest,
+  ApiRuntimePackageOperation,
+  ApiRuntimePackageReport,
 } from './api'
 import { useStudioStore } from './store'
 
@@ -357,6 +360,66 @@ const runningRun: ApiRunManifest = {
   warnings: [],
 }
 
+const readyRuntimePreflight = (): ApiJobPreflight => ({
+  state: 'ready',
+  requirements: [],
+  missing_required: [],
+  missing_optional: [],
+  selected_instances: {},
+  binding_snapshot: {},
+  recommended_actions: [],
+  estimated_download_bytes: 0,
+  estimated_installed_bytes: 0,
+})
+
+const blockedRuntimePreflight = (): ApiJobPreflight => ({
+  state: 'blocked',
+  requirements: [
+    {
+      requirement_id: 'asr.faster_whisper',
+      capability_id: 'asr.faster_whisper',
+      required: true,
+      state: 'blocked',
+      selected_instance_id: null,
+      selected_source: null,
+      detail: '当前任务需要本地语音识别运行时。',
+    },
+  ],
+  missing_required: ['asr.faster_whisper'],
+  missing_optional: [],
+  selected_instances: {},
+  binding_snapshot: {},
+  recommended_actions: [
+    {
+      package_id: 'video2notes-nvidia-asr',
+      version: '1.0.0',
+      display_name: 'NVIDIA ASR 运行时',
+      requirement_ids: ['asr.faster_whisper'],
+      archive_file_name: 'video2notes-nvidia-asr-1.0.0.zip',
+      source_url: 'https://downloads.example.test/video2notes-nvidia-asr-1.0.0.zip',
+      download_size_bytes: 512 * 1024 ** 2,
+      installed_size_bytes: 1024 ** 3,
+      install_root: 'D:/data/runtime-packages/video2notes-nvidia-asr/1.0.0',
+      supported_devices: ['cuda'],
+    },
+  ],
+  estimated_download_bytes: 512 * 1024 ** 2,
+  estimated_installed_bytes: 1024 ** 3,
+})
+
+const runtimePackageReport = (
+  operations: ApiRuntimePackageOperation[],
+): ApiRuntimePackageReport => ({
+  inventory: {
+    instances: [],
+    bindings: {},
+    operations,
+    available_releases: [],
+  },
+  managed_root: 'D:/data/runtime-packages',
+  releases: [],
+})
+
 describe('studio store against the real loopback API contract', () => {
   const fetchMock = vi.fn()
   const requests: Array<{
@@ -384,6 +447,10 @@ describe('studio store against the real loopback API contract', () => {
   let includeProcessingScopeCapability = true
   let probeGate: Promise<void> | undefined
   let submissionGate: Promise<void> | undefined
+  let runtimePackageOperations: ApiRuntimePackageOperation[] = []
+  let runtimeInstallSequence = 0
+  let preflightResponses: ApiJobPreflight[] = [readyRuntimePreflight()]
+  let preflightRequestCount = 0
 
   beforeEach(() => {
     vi.unstubAllEnvs()
@@ -408,6 +475,10 @@ describe('studio store against the real loopback API contract', () => {
     includeProcessingScopeCapability = true
     probeGate = undefined
     submissionGate = undefined
+    runtimePackageOperations = []
+    runtimeInstallSequence = 0
+    preflightResponses = [readyRuntimePreflight()]
+    preflightRequestCount = 0
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -531,9 +602,58 @@ describe('studio store against the real loopback API contract', () => {
               detail: null,
             })),
             activated: componentsReady && body.activate !== false,
+            activated_roles:
+              componentsReady && body.activate !== false
+                ? ['asr.primary', 'ocr.primary', 'vision.text_detector']
+                : [],
+            blocked_roles:
+              componentsReady && body.activate !== false
+                ? []
+                : ['asr.primary', 'ocr.primary', 'vision.text_detector'],
+            warnings: [],
             report: componentReportPayload(componentsReady),
           }),
         )
+      }
+      if (url.pathname === '/api/runtime-packages' && method === 'GET') {
+        return Promise.resolve(json(runtimePackageReport(runtimePackageOperations)))
+      }
+      if (url.pathname === '/api/runtime-packages/discover' && method === 'POST') {
+        return Promise.resolve(json(runtimePackageReport(runtimePackageOperations)))
+      }
+      if (url.pathname === '/api/runtime-packages/install' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as {
+          package_id: string
+          version?: string | null
+          bind_requirements?: string[]
+        }
+        runtimeInstallSequence += 1
+        const operation: ApiRuntimePackageOperation = {
+          operation_id: `runtime-install-${runtimeInstallSequence}`,
+          kind: 'install',
+          package_id: body.package_id,
+          target_version: body.version ?? null,
+          instance_id: null,
+          source_instance_id: null,
+          status: 'queued',
+          phase: 'queued',
+          progress: 0,
+          downloaded_bytes: 0,
+          total_bytes: 512 * 1024 ** 2,
+          expected_installed_bytes: 1024 ** 3,
+          resumable: true,
+          target_root: `D:/data/runtime-packages/${body.package_id}/${body.version ?? 'latest'}`,
+          requested_bindings: body.bind_requirements ?? [],
+          cancel_requested: false,
+          created_at_utc: `2026-07-28T12:30:0${runtimeInstallSequence}Z`,
+          started_at_utc: null,
+          finished_at_utc: null,
+          result_instance_id: null,
+          detail: null,
+          error_code: null,
+        }
+        runtimePackageOperations = [...runtimePackageOperations, operation]
+        return Promise.resolve(json(operation, 202))
       }
       if (url.pathname === '/api/browser-profiles') {
         return Promise.resolve(
@@ -638,6 +758,14 @@ describe('studio store against the real loopback API contract', () => {
             notes: ['test estimate'],
           }),
         )
+      }
+      if (url.pathname === '/api/jobs/preflight' && method === 'POST') {
+        const response =
+          preflightResponses[
+            Math.min(preflightRequestCount, preflightResponses.length - 1)
+          ] ?? readyRuntimePreflight()
+        preflightRequestCount += 1
+        return Promise.resolve(json(response))
       }
       if (url.pathname === '/api/jobs' && method === 'POST') {
         const response = () =>
@@ -1046,7 +1174,13 @@ describe('studio store against the real loopback API contract', () => {
     })
 
     useStudioStore.getState().createTask()
-    await vi.waitFor(() => expect(useStudioStore.getState().tasks).toHaveLength(1))
+    await vi.waitFor(() =>
+      expect(
+        requests.some(
+          request => request.url === '/api/jobs' && request.method === 'POST',
+        ),
+      ).toBe(true),
+    )
     const submission = requests.find(request => request.url === '/api/jobs' && request.method === 'POST')
     expect(JSON.parse(submission?.body ?? '{}')).toMatchObject({
       quality_mode: 'balanced',
@@ -1529,7 +1663,9 @@ describe('studio store against the real loopback API contract', () => {
     submissionGate = gate.promise
     currentRun = { ...runningRun, processing_scope: 'audio_only' }
     useStudioStore.getState().createTask()
-    expect(useStudioStore.getState().submissionInFlight).toBe(true)
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().submissionInFlight).toBe(true),
+    )
     expect(useStudioStore.getState().draft.status).toBe('submitting')
 
     useStudioStore.getState().setProcessingScope('audio_only')
@@ -1724,6 +1860,167 @@ describe('studio store against the real loopback API contract', () => {
     expect(useStudioStore.getState().tasks[0]?.recovery?.reason).toContain(
       '暂未提供同一任务从失败阶段续跑',
     )
+  })
+
+  it('waits for every recommended runtime install before rechecking and submitting', async () => {
+    const blocked = blockedRuntimePreflight()
+    blocked.requirements.push({
+      requirement_id: 'tool.ffmpeg',
+      capability_id: 'tool.ffmpeg',
+      required: true,
+      state: 'blocked',
+      selected_instance_id: null,
+      selected_source: null,
+      detail: '当前任务需要 FFmpeg。',
+    })
+    blocked.missing_required.push('tool.ffmpeg')
+    blocked.recommended_actions.push({
+      package_id: 'video2notes-media-tools',
+      version: '1.0.0',
+      display_name: '媒体工具运行时',
+      requirement_ids: ['tool.ffmpeg'],
+      archive_file_name: 'video2notes-media-tools-1.0.0.zip',
+      source_url: 'https://downloads.example.test/video2notes-media-tools-1.0.0.zip',
+      download_size_bytes: 128 * 1024 ** 2,
+      installed_size_bytes: 256 * 1024 ** 2,
+      install_root: 'D:/data/runtime-packages/video2notes-media-tools/1.0.0',
+      supported_devices: ['cpu'],
+    })
+    blocked.estimated_download_bytes += 128 * 1024 ** 2
+    blocked.estimated_installed_bytes += 256 * 1024 ** 2
+    preflightResponses = [blocked, readyRuntimePreflight()]
+
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+    useStudioStore
+      .getState()
+      .setDraftInput('https://www.youtube.com/watch?v=runtime-preflight-success')
+    useStudioStore.getState().probeSource()
+    await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
+
+    useStudioStore.getState().createTask()
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().jobPreflightDialogOpen).toBe(true),
+    )
+    expect(
+      requests.filter(
+        request => request.url === '/api/jobs' && request.method === 'POST',
+      ),
+    ).toHaveLength(0)
+
+    useStudioStore.getState().installPreflightRequirements()
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().preflightRuntimeOperationIds).toHaveLength(2),
+    )
+    expect(useStudioStore.getState().preflightAutoRetryPending).toBe(true)
+
+    runtimePackageOperations = runtimePackageOperations.map((operation, index) =>
+      index === 0
+        ? {
+            ...operation,
+            status: 'succeeded',
+            phase: 'completed',
+            progress: 1,
+            finished_at_utc: '2026-07-28T12:31:01Z',
+          }
+        : {
+            ...operation,
+            status: 'running',
+            phase: 'extracting',
+            progress: 0.7,
+            started_at_utc: '2026-07-28T12:30:02Z',
+          },
+    )
+    useStudioStore.getState().refreshRuntimePackages()
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().runtimePackages?.operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ status: 'succeeded' }),
+          expect.objectContaining({ status: 'running' }),
+        ]),
+      ),
+    )
+    expect(preflightRequestCount).toBe(1)
+    expect(
+      requests.filter(
+        request => request.url === '/api/jobs' && request.method === 'POST',
+      ),
+    ).toHaveLength(0)
+
+    runtimePackageOperations = runtimePackageOperations.map(operation => ({
+      ...operation,
+      status: 'succeeded',
+      phase: 'completed',
+      progress: 1,
+      finished_at_utc: '2026-07-28T12:31:02Z',
+    }))
+    useStudioStore.getState().refreshRuntimePackages()
+
+    await vi.waitFor(() => expect(preflightRequestCount).toBe(2))
+    await vi.waitFor(() =>
+      expect(
+        requests.filter(
+          request => request.url === '/api/jobs' && request.method === 'POST',
+        ),
+      ).toHaveLength(1),
+    )
+    expect(useStudioStore.getState()).toMatchObject({
+      preflightRuntimeOperationIds: [],
+      preflightAutoRetryPending: false,
+      jobPreflightDialogOpen: false,
+    })
+    const requestOrder = requests.map(request => `${request.method} ${request.url}`)
+    const finalInventoryIndex = requestOrder.lastIndexOf('GET /api/runtime-packages')
+    const secondPreflightIndex = requestOrder.lastIndexOf('POST /api/jobs/preflight')
+    const submitIndex = requestOrder.lastIndexOf('POST /api/jobs')
+    expect(finalInventoryIndex).toBeLessThan(secondPreflightIndex)
+    expect(secondPreflightIndex).toBeLessThan(submitIndex)
+  })
+
+  it('keeps the dependency dialog open when a preflight install fails', async () => {
+    preflightResponses = [blockedRuntimePreflight()]
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() => expect(useStudioStore.getState().backend.mode).toBe('real'))
+    useStudioStore
+      .getState()
+      .setDraftInput('https://www.youtube.com/watch?v=runtime-preflight-failure')
+    useStudioStore.getState().probeSource()
+    await vi.waitFor(() => expect(useStudioStore.getState().draft.status).toBe('ready'))
+    useStudioStore.getState().createTask()
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().jobPreflightDialogOpen).toBe(true),
+    )
+
+    useStudioStore.getState().installPreflightRequirements()
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().preflightAutoRetryPending).toBe(true),
+    )
+    runtimePackageOperations = runtimePackageOperations.map(operation => ({
+      ...operation,
+      status: 'failed',
+      phase: 'failed',
+      progress: 0.42,
+      finished_at_utc: '2026-07-28T12:32:00Z',
+      detail: '归档哈希不匹配。',
+      error_code: 'archive_hash_mismatch',
+    }))
+    useStudioStore.getState().refreshRuntimePackages()
+
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().preflightAutoRetryPending).toBe(false),
+    )
+    expect(useStudioStore.getState()).toMatchObject({
+      jobPreflightDialogOpen: true,
+      preflightRuntimeOperationIds: [],
+      runtimePackageError: expect.stringContaining('归档哈希不匹配'),
+      notice: expect.stringContaining('依赖准备未完成'),
+    })
+    expect(preflightRequestCount).toBe(1)
+    expect(
+      requests.filter(
+        request => request.url === '/api/jobs' && request.method === 'POST',
+      ),
+    ).toHaveLength(0)
   })
 
   it('loads component inventory and prepares the recommended local models in one request', async () => {

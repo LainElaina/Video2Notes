@@ -557,7 +557,168 @@ export interface ComponentPreparationDefinition {
   hardwareTier: HardwareTier
   results: ComponentPrepareResultDefinition[]
   activated: boolean
+  activatedRoles: string[]
+  blockedRoles: string[]
+  warnings: string[]
   report: ComponentReportDefinition
+}
+
+export type RuntimePackageSource = 'bundled' | 'managed' | 'system' | 'custom'
+export type RuntimePackageState = 'ready' | 'missing' | 'invalid' | 'degraded'
+export type RuntimeTransport = 'in_process' | 'worker' | 'executable'
+export type RuntimeOperationKind = 'install' | 'upgrade' | 'uninstall' | 'verify'
+export type RuntimeOperationStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+export type RuntimeOperationPhase =
+  | 'queued'
+  | 'downloading'
+  | 'verifying_archive'
+  | 'extracting'
+  | 'probing'
+  | 'publishing'
+  | 'removing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface RuntimeCapabilityDefinition {
+  capabilityId: string
+  engineId: string
+  protocolVersion: number
+  transport: RuntimeTransport
+  entrypoint?: string
+  supportedDevices: Array<'cpu' | 'cuda'>
+}
+
+export interface RuntimePackageReleaseDefinition {
+  packageId: string
+  version: string
+  displayName: string
+  targetTriple?: string
+  runtimeProtocolVersion?: number
+  capabilities: RuntimeCapabilityDefinition[]
+  archiveFileName: string
+  officialUrl?: string
+  downloadSizeBytes: number
+  installedSizeBytes: number
+  installRoot?: string
+  offlineOnly: boolean
+  upstreamSources: string[]
+}
+
+export interface RuntimePackageInstanceDefinition {
+  instanceId: string
+  packageId: string
+  version: string
+  displayName: string
+  source: RuntimePackageSource
+  root: string
+  state: RuntimePackageState
+  ready: boolean
+  detail?: string
+  manifestSha256?: string
+  targetTriple?: string
+  runtimeProtocolVersion?: number
+  transport?: RuntimeTransport
+  capabilities: string[]
+  boundRequirements: string[]
+  leased: boolean
+  removable: boolean
+  availableVersion?: string
+}
+
+export interface RuntimeBindingDefinition {
+  requirementId: string
+  capabilityId: string
+  instanceId: string
+  packageId: string
+  packageVersion: string
+  source: RuntimePackageSource
+  manifestSha256: string
+  boundAtUtc: string
+}
+
+export interface RuntimePackageOperationDefinition {
+  operationId: string
+  kind: RuntimeOperationKind
+  packageId: string
+  targetVersion?: string
+  instanceId?: string
+  sourceInstanceId?: string
+  status: RuntimeOperationStatus
+  phase?: RuntimeOperationPhase
+  progress: number
+  downloadedBytes: number
+  totalBytes?: number
+  transferSpeedBytesPerSecond?: number
+  etaSeconds?: number
+  expectedInstalledBytes?: number
+  targetRoot?: string
+  requestedBindings: string[]
+  resumable: boolean
+  cancelRequested: boolean
+  createdAtUtc: string
+  startedAtUtc?: string
+  finishedAtUtc?: string
+  resultInstanceId?: string
+  detail?: string
+  errorCode?: string
+}
+
+export interface RuntimePackageInventoryDefinition {
+  managedRoot?: string
+  instances: RuntimePackageInstanceDefinition[]
+  bindings: Record<string, RuntimeBindingDefinition>
+  operations: RuntimePackageOperationDefinition[]
+  availableReleases: RuntimePackageReleaseDefinition[]
+}
+
+export type JobPreflightState = 'ready' | 'degraded' | 'blocked'
+
+export interface MissingRuntimeRequirementDefinition {
+  requirementId: string
+  capabilityId: string
+  label: string
+  detail: string
+  packageId?: string
+  version?: string
+  officialUrl?: string
+  downloadSizeBytes?: number
+  installedSizeBytes?: number
+}
+
+export interface JobPreflightActionDefinition {
+  kind: 'install' | 'bind' | 'open_runtime_manager' | 'continue_degraded'
+  label: string
+  detail?: string
+  packageId?: string
+  version?: string
+  requirementId?: string
+  capabilityId?: string
+  instanceId?: string
+  bindRequirements: string[]
+  downloadSizeBytes?: number
+  installedSizeBytes?: number
+  targetRoot?: string
+  officialUrl?: string
+  supportedDevices: Array<'cpu' | 'cuda'>
+}
+
+export interface JobPreflightDefinition {
+  state: JobPreflightState
+  requirements: string[]
+  missingRequired: MissingRuntimeRequirementDefinition[]
+  missingOptional: MissingRuntimeRequirementDefinition[]
+  selectedInstances: Record<string, string>
+  bindingSnapshot: Record<string, string>
+  recommendedActions: JobPreflightActionDefinition[]
+  estimatedDownloadBytes: number
+  estimatedInstalledBytes: number
+  detail?: string
 }
 
 export interface MachineProfile {

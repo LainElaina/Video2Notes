@@ -16,6 +16,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { CreateProcessingOptions } from '../components/CreateProcessingOptions'
+import { DependencyPreflightDialog } from '../components/DependencyPreflightDialog'
 import { ProcessingBenchmarkGuide } from '../components/ProcessingBenchmarkGuide'
 import { formatTime, platformLabel } from '../domain'
 import type { ProcessingMode } from '../domain'
@@ -75,6 +76,8 @@ export function CreatePage() {
   const createTask = useStudioStore(state => state.createTask)
   const backend = useStudioStore(state => state.backend)
   const submissionInFlight = useStudioStore(state => state.submissionInFlight)
+  const jobPreflight = useStudioStore(state => state.jobPreflight)
+  const jobPreflightStatus = useStudioStore(state => state.jobPreflightStatus)
   const machine = useStudioStore(state => state.machine)
   const processingEstimates = useStudioStore(state => state.processingEstimates)
   const processingEstimateStatus = useStudioStore(state => state.processingEstimateStatus)
@@ -495,19 +498,32 @@ export function CreatePage() {
           onClick={createTask}
           disabled={
             submissionInFlight ||
+            jobPreflightStatus === 'loading' ||
             draft.status !== 'ready' ||
             samplingValidation.errors.length > 0 ||
             (draft.processingScope === 'audio_only' && !audioOnlySupported)
           }
         >
-          {submissionInFlight || draft.status === 'submitting'
+          {jobPreflightStatus === 'loading'
+            ? '正在检查依赖…'
+            : submissionInFlight || draft.status === 'submitting'
             ? '正在提交…'
+            : jobPreflight?.state === 'blocked'
+              ? '重新检查依赖'
             : manifestNeedsRefresh
               ? '需重新探测'
               : '开始处理'}
           <ArrowRight size={17} aria-hidden="true" />
         </button>
       </footer>
+
+      {jobPreflightStatus === 'error' && (
+        <div className="inline-error create-preflight-error" role="alert">
+          依赖检查失败，任务没有提交。请确认本机后端可用后重试，或打开“模型与性能”检查运行时。
+        </div>
+      )}
+
+      <DependencyPreflightDialog />
     </div>
   )
 }

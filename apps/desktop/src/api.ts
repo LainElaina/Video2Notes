@@ -523,7 +523,216 @@ export interface ApiComponentPreparationResponse {
   hardware_tier: ApiHardwareTier
   results: ApiComponentPrepareResult[]
   activated: boolean
+  activated_roles?: string[]
+  blocked_roles?: string[]
+  warnings?: string[]
   report: ApiComponentReport
+}
+
+export type ApiRuntimePackageSource = 'bundled' | 'managed' | 'system' | 'custom'
+export type ApiRuntimePackageState = 'ready' | 'missing' | 'invalid' | 'degraded'
+export type ApiRuntimeTransport = 'in_process' | 'worker' | 'executable'
+export type ApiRuntimeOperationKind = 'install' | 'upgrade' | 'uninstall' | 'verify'
+export type ApiRuntimeOperationStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+export interface ApiRuntimeCapability {
+  capability_id: string
+  engine_id: string
+  protocol_version: number
+  transport: ApiRuntimeTransport
+  entrypoint?: string | null
+  supported_devices: Array<'cpu' | 'cuda'>
+}
+
+export interface ApiRuntimePackageRelease {
+  schema?: number
+  package_id: string
+  version: string
+  display_name: string
+  target_triple: string
+  runtime_protocol_version: number
+  capabilities: ApiRuntimeCapability[]
+  archive: {
+    file_name: string
+    source_url?: string | null
+    size_bytes: number
+    sha256: string
+    offline_only: boolean
+  }
+  installed_size_bytes: number
+  upstream_sources: string[]
+}
+
+export interface ApiRuntimePackageInstance {
+  instance_id: string
+  package_id: string
+  version: string
+  display_name: string
+  source: ApiRuntimePackageSource
+  root: string
+  state: ApiRuntimePackageState
+  ready: boolean
+  detail?: string | null
+  manifest_sha256?: string | null
+  target_triple?: string | null
+  runtime_protocol_version?: number | null
+  transport?: ApiRuntimeTransport | null
+  capabilities: string[]
+  bound_requirements: string[]
+  leased: boolean
+  removable: boolean
+  available_version?: string | null
+}
+
+export interface ApiRuntimeBinding {
+  requirement_id: string
+  capability_id: string
+  instance_id: string
+  package_id: string
+  package_version: string
+  source: ApiRuntimePackageSource
+  manifest_sha256: string
+  bound_at_utc: string
+}
+
+export interface ApiRuntimePackageOperation {
+  schema_version?: number
+  operation_id: string
+  kind: ApiRuntimeOperationKind
+  package_id: string
+  target_version?: string | null
+  instance_id?: string | null
+  source_instance_id?: string | null
+  status: ApiRuntimeOperationStatus
+  phase?:
+    | 'queued'
+    | 'downloading'
+    | 'verifying_archive'
+    | 'extracting'
+    | 'probing'
+    | 'publishing'
+    | 'removing'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | null
+  progress: number
+  downloaded_bytes: number
+  total_bytes?: number | null
+  transfer_speed_bytes_per_second?: number | null
+  eta_seconds?: number | null
+  expected_installed_bytes?: number | null
+  resumable?: boolean
+  target_root?: string | null
+  requested_bindings?: string[]
+  cancel_requested: boolean
+  created_at_utc: string
+  started_at_utc?: string | null
+  finished_at_utc?: string | null
+  result_instance_id?: string | null
+  detail?: string | null
+  error_code?: string | null
+}
+
+export interface ApiRuntimePackageInventory {
+  instances: ApiRuntimePackageInstance[]
+  bindings: Record<string, ApiRuntimeBinding>
+  operations: ApiRuntimePackageOperation[]
+  available_releases: ApiRuntimePackageRelease[]
+}
+
+export interface ApiRuntimeReleaseView {
+  package_id: string
+  version: string
+  display_name: string
+  capabilities: string[]
+  supported_devices: Array<'cpu' | 'cuda'>
+  archive_file_name: string
+  source_url?: string | null
+  download_size_bytes: number
+  installed_size_bytes: number
+  offline_only: boolean
+  upstream_sources: string[]
+  install_root: string
+}
+
+export interface ApiRuntimePackageReport {
+  inventory: ApiRuntimePackageInventory
+  managed_root: string
+  releases: ApiRuntimeReleaseView[]
+}
+
+export interface ApiRuntimeInstallRequest {
+  package_id: string
+  version?: string | null
+  bind_requirements?: string[]
+}
+
+export interface ApiRuntimeBindingRequest {
+  requirement_id: string
+  instance_id: string
+  capability_id?: string | null
+}
+
+export interface ApiMissingRuntimeRequirement {
+  requirement_id: string
+  capability_id?: string | null
+  label?: string | null
+  detail?: string | null
+  package_id?: string | null
+  version?: string | null
+  official_url?: string | null
+  download_size_bytes?: number | null
+  installed_size_bytes?: number | null
+}
+
+export interface ApiRuntimeRequirementStatus {
+  requirement_id: string
+  capability_id: string
+  required: boolean
+  state: 'ready' | 'degraded' | 'blocked'
+  selected_instance_id?: string | null
+  selected_source?: ApiRuntimePackageSource | null
+  detail?: string | null
+}
+
+export interface ApiRuntimeBindingSnapshot {
+  requirement_id: string
+  capability_id: string
+  instance_id: string
+  source: ApiRuntimePackageSource
+  manifest_sha256: string
+}
+
+export interface ApiJobPreflightAction {
+  package_id: string
+  version: string
+  display_name: string
+  requirement_ids: string[]
+  archive_file_name: string
+  source_url?: string | null
+  download_size_bytes: number
+  installed_size_bytes: number
+  install_root: string
+  supported_devices: Array<'cpu' | 'cuda'>
+}
+
+export interface ApiJobPreflight {
+  state: 'ready' | 'degraded' | 'blocked'
+  requirements: ApiRuntimeRequirementStatus[]
+  missing_required: string[]
+  missing_optional: string[]
+  selected_instances: Record<string, string>
+  binding_snapshot: Record<string, ApiRuntimeBindingSnapshot>
+  recommended_actions: ApiJobPreflightAction[]
+  estimated_download_bytes: number
+  estimated_installed_bytes: number
+  detail?: string | null
 }
 
 export type ApiExperienceMode = 'guided' | 'professional'
@@ -870,6 +1079,11 @@ export const pickVideoWithNativeDialog = async (): Promise<string | null> => {
   return invoke<string | null>('pick_video')
 }
 
+export const pickRuntimeDirectoryWithNativeDialog = async (): Promise<string | null> => {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
+  return invoke<string | null>('pick_runtime_directory')
+}
+
 export const bundledDemoVideoPath = async (): Promise<string | null> => {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
   return invoke<string>('demo_video_path')
@@ -970,6 +1184,87 @@ export class Video2NotesApi {
     })
   }
 
+  runtimePackages(): Promise<ApiRuntimePackageReport> {
+    return this.request('/api/runtime-packages')
+  }
+
+  discoverRuntimePackages(): Promise<ApiRuntimePackageReport> {
+    return this.request('/api/runtime-packages/discover', { method: 'POST' })
+  }
+
+  installRuntimePackage(
+    request: ApiRuntimeInstallRequest,
+  ): Promise<ApiRuntimePackageOperation> {
+    return this.request('/api/runtime-packages/install', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+
+  runtimePackageOperation(operationId: string): Promise<ApiRuntimePackageOperation> {
+    return this.request(
+      `/api/runtime-packages/operations/${encodeURIComponent(operationId)}`,
+    )
+  }
+
+  cancelRuntimePackageOperation(
+    operationId: string,
+  ): Promise<ApiRuntimePackageOperation> {
+    return this.request(
+      `/api/runtime-packages/operations/${encodeURIComponent(operationId)}/cancel`,
+      { method: 'POST' },
+    )
+  }
+
+  bindRuntimePackage(
+    request: ApiRuntimeBindingRequest,
+  ): Promise<ApiRuntimeBinding> {
+    return this.request('/api/runtime-packages/bindings', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+
+  unbindRuntimeRequirement(
+    requirementId: string,
+  ): Promise<{ removed: boolean }> {
+    return this.request(
+      `/api/runtime-packages/bindings/${encodeURIComponent(requirementId)}`,
+      { method: 'DELETE' },
+    )
+  }
+
+  registerCustomRuntime(root: string): Promise<ApiRuntimePackageInstance> {
+    return this.request('/api/runtime-packages/custom', {
+      method: 'POST',
+      body: JSON.stringify({ root }),
+    })
+  }
+
+  forgetCustomRuntime(instanceId: string): Promise<{ removed: boolean }> {
+    return this.request(
+      `/api/runtime-packages/custom/${encodeURIComponent(instanceId)}`,
+      { method: 'DELETE' },
+    )
+  }
+
+  upgradeRuntimePackage(
+    instanceId: string,
+    version?: string,
+  ): Promise<ApiRuntimePackageOperation> {
+    return this.request(
+      `/api/runtime-packages/instances/${encodeURIComponent(instanceId)}/upgrade`,
+      { method: 'POST', body: JSON.stringify({ version: version ?? null }) },
+    )
+  }
+
+  uninstallRuntimePackage(instanceId: string): Promise<ApiRuntimePackageOperation> {
+    return this.request(
+      `/api/runtime-packages/instances/${encodeURIComponent(instanceId)}`,
+      { method: 'DELETE' },
+    )
+  }
+
   savePerformance(settings: ApiPerformanceSettings): Promise<ApiPerformanceSettings> {
     return this.request('/api/performance', {
       method: 'PUT',
@@ -1017,6 +1312,13 @@ export class Video2NotesApi {
 
   submitJob(request: PipelineSubmission): Promise<ApiProcessingRun> {
     return this.request('/api/jobs', {
+      method: 'POST',
+      body: JSON.stringify(backwardCompatibleScopePayload(request)),
+    })
+  }
+
+  preflightJob(request: PipelineSubmission): Promise<ApiJobPreflight> {
+    return this.request('/api/jobs/preflight', {
       method: 'POST',
       body: JSON.stringify(backwardCompatibleScopePayload(request)),
     })

@@ -40,6 +40,7 @@ import type {
   ProviderProtocol,
   ResourceReserve,
 } from '../domain'
+import { RuntimePackagesPanel } from '../components/RuntimePackagesPanel'
 import { useStudioStore } from '../store'
 
 const capabilityLabels: Record<ModelCapability, string> = {
@@ -151,23 +152,6 @@ const componentStateCopy: Record<
   missing: '待下载',
   incomplete: '可续传',
   degraded: '需修复',
-}
-
-const runtimeName = (item: ComponentInventoryItemDefinition): string => {
-  const translated: Record<string, string> = {
-    'runtime-root': '便携运行资源',
-    'python-runtime': '内嵌 Python',
-    ffmpeg: 'FFmpeg',
-    ffprobe: 'FFprobe',
-    'yt-dlp': 'yt-dlp',
-    psutil: '资源监控',
-    'faster-whisper': 'Whisper 运行时',
-    ctranslate2: 'CTranslate2',
-    'huggingface-hub': '模型下载器',
-    paddleocr: 'PaddleOCR',
-    paddlepaddle: 'PaddlePaddle',
-  }
-  return translated[item.id] ?? item.displayName
 }
 
 const clampNumber = (value: string, min: number, max: number): number =>
@@ -287,6 +271,15 @@ export function ModelsPage() {
   const componentPreparationActivated = useStudioStore(
     state => state.componentPreparationActivated,
   )
+  const componentPreparationActivatedRoles = useStudioStore(
+    state => state.componentPreparationActivatedRoles,
+  )
+  const componentPreparationBlockedRoles = useStudioStore(
+    state => state.componentPreparationBlockedRoles,
+  )
+  const componentPreparationWarnings = useStudioStore(
+    state => state.componentPreparationWarnings,
+  )
   const componentPreparationError = useStudioStore(
     state => state.componentPreparationError,
   )
@@ -328,9 +321,6 @@ export function ModelsPage() {
     : undefined
   const recommendation = systemReport?.recommendation
   const recommendedPlan = systemReport?.plans.balanced
-  const runtimeComponents = componentReport?.inventory.items.filter(
-    item => item.kind !== 'local_model',
-  ) ?? []
   const localModelComponents = componentReport?.inventory.items.filter(
     item => item.kind === 'local_model',
   ) ?? []
@@ -338,6 +328,8 @@ export function ModelsPage() {
     ? hardwareTierCopy[componentReport.hardwareTier]
     : undefined
   const componentPreparing = componentPreparationStatus === 'preparing'
+  const preparationRoleLabel = (roleId: string): string =>
+    roles.find(role => role.id === roleId)?.label ?? roleId
   const asrCudaAvailable = systemReport?.acceleration.asr.cudaAvailable === true
   const ocrCudaAvailable = systemReport?.acceleration.ocr.cudaAvailable === true
 
@@ -558,6 +550,8 @@ export function ModelsPage() {
         </div>
       </header>
 
+      <RuntimePackagesPanel experienceMode={performanceDraft.experienceMode} />
+
       <section className="component-setup-panel models-surface" aria-labelledby="component-setup-title">
         <div className="models-section-heading">
           <div className="section-heading-icon">
@@ -565,8 +559,8 @@ export function ModelsPage() {
           </div>
           <div>
             <span className="section-kicker">本地运行环境</span>
-            <h2 id="component-setup-title">工具与识别模型准备</h2>
-            <p>先检查便携运行时，再按当前硬件下载并激活推荐的 ASR / OCR 权重。</p>
+            <h2 id="component-setup-title">本地识别模型权重</h2>
+            <p>运行时就绪后，再按当前硬件下载 ASR / OCR 模型权重；权重与执行环境独立管理。</p>
           </div>
           <div className="component-heading-actions">
             {backend.mode === 'demo' && <span className="component-demo-badge">演示状态样例</span>}
@@ -631,33 +625,7 @@ export function ModelsPage() {
               </dl>
             </div>
 
-            <div className="component-columns">
-              <section className="runtime-inventory" aria-labelledby="runtime-inventory-title">
-                <header>
-                  <div>
-                    <span className="section-kicker">便携组件</span>
-                    <h3 id="runtime-inventory-title">工具与运行时</h3>
-                  </div>
-                  <span>{runtimeComponents.filter(item => item.ready).length} / {runtimeComponents.length} 可用</span>
-                </header>
-                <p className="component-subcopy">绿色只表示当前环境已找到并可用；缺失项需要更新或修复便携包。</p>
-                <ul className="runtime-component-grid">
-                  {runtimeComponents.map(item => (
-                    <li
-                      className={item.ready ? 'is-ready' : 'needs-attention'}
-                      key={item.id}
-                      title={item.detail ?? item.path}
-                    >
-                      <span className="runtime-state-dot" aria-hidden="true" />
-                      <span>
-                        <strong>{runtimeName(item)}</strong>
-                        <small>{item.ready ? '当前可用' : '缺失 · 需修复'}{item.version ? ` · ${item.version}` : ''}</small>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
+            <div className="component-model-only">
               <section className="managed-models" aria-labelledby="managed-models-title">
                 <header>
                   <div>
@@ -753,12 +721,31 @@ export function ModelsPage() {
                     <div className="component-feedback is-success">
                       <Check size={15} aria-hidden="true" />
                       <div>
-                        <strong>{componentPreparationActivated ? '推荐模型已激活' : '所选组件已准备'}</strong>
+                        <strong>
+                          {componentPreparationBlockedRoles.length > 0
+                            ? '组件已准备，部分角色仍不可用'
+                            : componentPreparationActivatedRoles.length > 0 || componentPreparationActivated
+                              ? '本地模型角色已激活'
+                              : '所选组件已准备'}
+                        </strong>
                         <span>
                           {componentPreparationResults.map(result =>
                             `${result.componentId}：${result.status === 'reused' ? '已复用' : result.resumed ? '已续传完成' : '已准备'}`,
                           ).join(' · ')}
                         </span>
+                        {componentPreparationActivatedRoles.length > 0 && (
+                          <span>
+                            已激活：{componentPreparationActivatedRoles.map(preparationRoleLabel).join('、')}
+                          </span>
+                        )}
+                        {componentPreparationBlockedRoles.length > 0 && (
+                          <span>
+                            未激活：{componentPreparationBlockedRoles.map(preparationRoleLabel).join('、')}
+                          </span>
+                        )}
+                        {componentPreparationWarnings.map(warning => (
+                          <span key={warning}>提示：{warning}</span>
+                        ))}
                       </div>
                     </div>
                   )}

@@ -126,12 +126,16 @@ describe('models and performance workspace', () => {
   it('separates packaged runtime readiness from on-demand model weights', () => {
     render(<ModelsPage />)
 
-    expect(screen.getByText('工具与识别模型准备')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: '依赖与运行时' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: '本地识别模型权重' }),
+    ).toBeInTheDocument()
     expect(screen.getByText('24 GB+ 显存')).toBeInTheDocument()
     expect(screen.getByText(/cuda · float16 · CUDA 运行时就绪/i)).toBeInTheDocument()
     expect(screen.getByText(/cpu · CPU 运行时/i)).toBeInTheDocument()
     expect(screen.getByText(/模型权重不会随 EXE 预装/)).toBeInTheDocument()
-    expect(screen.getByText('FFmpeg')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '一键准备推荐模型' })).toBeDisabled()
     expect(
       screen.queryByLabelText('选择组件 faster-whisper large-v3'),
@@ -152,6 +156,95 @@ describe('models and performance workspace', () => {
       'ocr-paddle-ppocrv5-server',
     ])
     expect(screen.getByRole('button', { name: '准备所选组件' })).toBeDisabled()
+  })
+
+  it('shows every runtime ownership class and limits destructive actions by ownership', () => {
+    render(<ModelsPage />)
+
+    expect(screen.getByText('随应用提供')).toBeInTheDocument()
+    expect(screen.getByText('应用受管')).toBeInTheDocument()
+    expect(screen.getByText('复用本机环境')).toBeInTheDocument()
+    expect(screen.getByText('自定义目录')).toBeInTheDocument()
+
+    const bundled = screen
+      .getByRole('heading', { name: 'Core media tools' })
+      .closest('article')
+    const managed = screen
+      .getByRole('heading', { name: 'NVIDIA ASR worker' })
+      .closest('article')
+    const system = screen
+      .getByRole('heading', { name: 'System FFmpeg' })
+      .closest('article')
+    const custom = screen
+      .getByRole('heading', { name: 'Custom PaddleOCR worker' })
+      .closest('article')
+
+    expect(bundled).not.toBeNull()
+    expect(managed).not.toBeNull()
+    expect(system).not.toBeNull()
+    expect(custom).not.toBeNull()
+    expect(within(managed!).getByRole('button', { name: '卸载' })).toBeDisabled()
+    expect(
+      within(managed!).queryByRole('button', { name: '忘记登记' }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(custom!).getByRole('button', { name: '忘记登记' }),
+    ).toBeDisabled()
+    expect(
+      within(custom!).queryByRole('button', { name: '卸载' }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(bundled!).queryByRole('button', { name: /卸载|忘记登记/ }),
+    ).not.toBeInTheDocument()
+    expect(
+      within(system!).queryByRole('button', { name: /卸载|忘记登记/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('exposes explicit compatible runtime bindings in professional mode', () => {
+    render(<ModelsPage />)
+
+    expect(screen.queryByRole('heading', { name: '功能绑定' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /自定义性能/ }))
+
+    expect(screen.getByRole('heading', { name: '功能绑定' })).toBeInTheDocument()
+    const videoRuntime = screen.getByLabelText('为视频处理选择运行时')
+    const asrRuntime = screen.getByLabelText('为本地语音识别选择运行时')
+    const ocrRuntime = screen.getByLabelText('为画面文字识别选择运行时')
+
+    expect(
+      within(videoRuntime).getByRole('option', {
+        name: 'Core media tools · 随应用提供',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      within(videoRuntime).getByRole('option', {
+        name: 'System FFmpeg · 复用本机环境',
+      }),
+    ).toBeInTheDocument()
+    expect(asrRuntime).toHaveValue('managed:local-inference-nvidia-asr:0.1.0')
+    expect(ocrRuntime).toHaveValue('custom:paddleocr:3.0.0')
+  })
+
+  it('renders completed runtime operation progress and success state', () => {
+    render(<ModelsPage />)
+
+    const operationTitle = screen.getByText(
+      '安装 · local-inference-nvidia-asr-cu129-win-x64',
+    )
+    const operation = operationTitle.closest('article')
+    const progress = screen.getByRole('progressbar', {
+      name: 'local-inference-nvidia-asr-cu129-win-x64 操作进度',
+    })
+
+    expect(operation).not.toBeNull()
+    expect(operation).toHaveClass('status-succeeded')
+    expect(progress).toHaveAttribute('value', '1')
+    expect(within(operation!).getByText('已完成')).toBeInTheDocument()
+    expect(within(operation!).getByText('100%')).toBeInTheDocument()
+    expect(
+      within(operation!).getByText(/组件已安装并通过 worker 探测/),
+    ).toBeInTheDocument()
   })
 
   it('keeps acceleration status pending until the backend system report arrives', () => {
@@ -182,6 +275,9 @@ describe('models and performance workspace', () => {
       componentPreparationStatus: 'preparing',
       componentPreparationResults: [],
       componentPreparationActivated: false,
+      componentPreparationActivatedRoles: [],
+      componentPreparationBlockedRoles: [],
+      componentPreparationWarnings: [],
       componentPreparationError: undefined,
     })
     render(<ModelsPage />)
@@ -207,9 +303,15 @@ describe('models and performance workspace', () => {
           },
         ],
         componentPreparationActivated: true,
+        componentPreparationActivatedRoles: ['asr.primary'],
+        componentPreparationBlockedRoles: ['ocr.primary'],
+        componentPreparationWarnings: ['OCR 权重仍需校验。'],
       })
     })
-    expect(screen.getByText('推荐模型已激活')).toBeInTheDocument()
+    expect(screen.getByText('组件已准备，部分角色仍不可用')).toBeInTheDocument()
+    expect(screen.getByText('已激活：主要语音识别')).toBeInTheDocument()
+    expect(screen.getByText('未激活：主要 OCR')).toBeInTheDocument()
+    expect(screen.getByText('提示：OCR 权重仍需校验。')).toBeInTheDocument()
     expect(screen.getByText(/ocr-paddle-ppocrv5-server：已复用/)).toBeInTheDocument()
 
     act(() => {
@@ -217,6 +319,9 @@ describe('models and performance workspace', () => {
         componentPreparationStatus: 'error',
         componentPreparationError: '网络中断，可稍后续传。',
         componentPreparationActivated: false,
+        componentPreparationActivatedRoles: [],
+        componentPreparationBlockedRoles: [],
+        componentPreparationWarnings: [],
       })
     })
     expect(screen.getByRole('alert')).toHaveTextContent('网络中断，可稍后续传。')

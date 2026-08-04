@@ -148,6 +148,67 @@ describe('desktop workflow', () => {
     expect(screen.getByRole('radio', { name: /仅识别音频/ })).toBeDisabled()
   })
 
+  it('shows blocked dependency details and opens the runtime manager', () => {
+    useStudioStore.setState({
+      backend: {
+        mode: 'real',
+        version: 'test',
+        capabilities: ['processing_scope_audio_only'],
+        detail: 'ready',
+      },
+      jobPreflightStatus: 'ready',
+      jobPreflightDialogOpen: true,
+      jobPreflight: {
+        state: 'blocked',
+        requirements: ['asr.faster_whisper'],
+        missingRequired: [
+          {
+            requirementId: 'asr.faster_whisper',
+            capabilityId: 'asr.faster_whisper',
+            label: '本地语音识别',
+            detail: '当前任务需要本地 ASR 与时间戳能力。',
+            packageId: 'video2notes-nvidia-asr',
+            version: '1.0.0',
+            officialUrl: 'https://downloads.example.test/video2notes-nvidia-asr.zip',
+            downloadSizeBytes: 512 * 1024 ** 2,
+            installedSizeBytes: 1024 ** 3,
+          },
+        ],
+        missingOptional: [],
+        selectedInstances: {},
+        bindingSnapshot: {},
+        recommendedActions: [
+          {
+            kind: 'install',
+            label: '安装 NVIDIA ASR 运行时',
+            packageId: 'video2notes-nvidia-asr',
+            version: '1.0.0',
+            bindRequirements: ['asr.faster_whisper'],
+            downloadSizeBytes: 512 * 1024 ** 2,
+            installedSizeBytes: 1024 ** 3,
+            targetRoot: 'D:/data/runtime-packages/video2notes-nvidia-asr/1.0.0',
+            officialUrl: 'https://downloads.example.test/video2notes-nvidia-asr.zip',
+            supportedDevices: ['cuda'],
+          },
+        ],
+        estimatedDownloadBytes: 512 * 1024 ** 2,
+        estimatedInstalledBytes: 1024 ** 3,
+        detail: '当前配置缺少必需运行能力，任务不会提交。',
+      },
+    })
+
+    render(<App />)
+
+    const dialog = screen.getByRole('dialog', { name: '开始前还需要本地组件' })
+    expect(within(dialog).getByText('本地语音识别')).toBeInTheDocument()
+    expect(within(dialog).getAllByText('512 MB').length).toBeGreaterThan(0)
+    expect(within(dialog).getAllByText('1.00 GB').length).toBeGreaterThan(0)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '打开依赖管理' }))
+    expect(screen.getByRole('heading', { name: '模型与性能' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '开始前还需要本地组件' })).not.toBeInTheDocument()
+  })
+
   it('adds and edits a fixed sampling override in advanced options', () => {
     render(<App />)
 
