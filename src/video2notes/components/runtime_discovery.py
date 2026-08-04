@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import platform
 import shutil
 import sys
@@ -140,6 +141,10 @@ def build_current_runtime_candidate(
         root=str(root),
         manifest=manifest,
     )
+
+
+def find_pdf_browser() -> Path | None:
+    return _resolve_binary(None, "msedge", "chrome", "chromium")
 
 
 def _attach_offline_archives(
@@ -291,6 +296,24 @@ def _resolve_binary(
         located = shutil.which(name)
         if located:
             return Path(located).resolve()
+    if os.name == "nt" and any(name in {"msedge", "chrome", "chromium"} for name in names):
+        roots = (
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("LOCALAPPDATA"),
+        )
+        relatives = (
+            Path("Microsoft/Edge/Application/msedge.exe"),
+            Path("Google/Chrome/Application/chrome.exe"),
+            Path("Chromium/Application/chrome.exe"),
+        )
+        for root in roots:
+            if not root:
+                continue
+            for relative in relatives:
+                candidate = (Path(root) / relative).resolve()
+                if candidate.is_file():
+                    return candidate
     return None
 
 

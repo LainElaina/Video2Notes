@@ -187,6 +187,11 @@ class ComponentManager:
             actions=tuple(actions_by_id.values()),
         )
 
+    def binary_path(self, name: str) -> Path | None:
+        if name not in self._explicit_binaries:
+            raise ValueError(f"unsupported managed binary: {name}")
+        return self._find_binary(name)
+
     def prepare(self, component_id: str) -> PrepareResult:
         manifest = self.catalog.manifests.get(component_id)
         if manifest is None:
@@ -308,30 +313,37 @@ class ComponentManager:
         )
 
     def local_adapter_settings(self, tier: HardwareTier) -> LocalAdapterSettings:
+        asr, asr_profiles = self.local_asr_adapter_settings(tier)
+        ocr, ocr_profiles = self.local_ocr_adapter_settings(tier)
+        return LocalAdapterSettings(
+            asr=asr,
+            ocr=ocr,
+            asr_profiles=asr_profiles,
+            ocr_profiles=ocr_profiles,
+        )
+
+    def local_asr_adapter_settings(
+        self,
+        tier: HardwareTier,
+    ) -> tuple[
+        dict[str, str | int | float | bool],
+        dict[QualityMode, dict[str, str | int | float | bool]],
+    ]:
         recommendation = self.recommendation(tier)
         asr_manifest = self.catalog.manifests[recommendation.asr_component_id]
-        ocr_manifest = self.catalog.manifests[recommendation.ocr_component_id]
         asr_path = self._target_path(asr_manifest)
-        ocr_path = self._target_path(ocr_manifest)
         asr_ready, _ = self._ready_at(asr_path, asr_manifest)
-        ocr_ready, _ = self._ready_at(ocr_path, ocr_manifest)
-        if not asr_ready or not ocr_ready:
-            raise ComponentNotReadyError("recommended local ASR/OCR models are not ready")
+        if not asr_ready:
+            raise ComponentNotReadyError("recommended local ASR model is not ready")
 
         accurate_asr = self._strongest_ready_recommended_model(
             LocalModelRole.ASR,
             fallback=asr_manifest,
         )
-        accurate_ocr = self._strongest_ready_recommended_model(
-            LocalModelRole.OCR,
-            fallback=ocr_manifest,
-        )
         asr = self._asr_adapter_settings(asr_manifest, recommendation)
-        ocr = self._ocr_adapter_settings(ocr_manifest, recommendation)
-        return LocalAdapterSettings(
-            asr=asr,
-            ocr=ocr,
-            asr_profiles={
+        return (
+            asr,
+            {
                 QualityMode.FAST: dict(asr),
                 QualityMode.BALANCED: dict(asr),
                 QualityMode.ACCURATE: self._asr_adapter_settings(
@@ -339,7 +351,29 @@ class ComponentManager:
                     recommendation,
                 ),
             },
-            ocr_profiles={
+        )
+
+    def local_ocr_adapter_settings(
+        self,
+        tier: HardwareTier,
+    ) -> tuple[
+        dict[str, str | int | float | bool],
+        dict[QualityMode, dict[str, str | int | float | bool]],
+    ]:
+        recommendation = self.recommendation(tier)
+        ocr_manifest = self.catalog.manifests[recommendation.ocr_component_id]
+        ocr_path = self._target_path(ocr_manifest)
+        ocr_ready, _ = self._ready_at(ocr_path, ocr_manifest)
+        if not ocr_ready:
+            raise ComponentNotReadyError("recommended local OCR model is not ready")
+        accurate_ocr = self._strongest_ready_recommended_model(
+            LocalModelRole.OCR,
+            fallback=ocr_manifest,
+        )
+        ocr = self._ocr_adapter_settings(ocr_manifest, recommendation)
+        return (
+            ocr,
+            {
                 QualityMode.FAST: dict(ocr),
                 QualityMode.BALANCED: dict(ocr),
                 QualityMode.ACCURATE: self._ocr_adapter_settings(

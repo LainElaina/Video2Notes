@@ -198,6 +198,8 @@ class PipelineRuntime:
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     pdf_browser_executable: str | Path | None = None
+    runtime_bindings: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    runtime_package_instance_ids: tuple[str, ...] = ()
 
     @classmethod
     def local_defaults(cls) -> PipelineRuntime:
@@ -209,17 +211,17 @@ class PipelineRuntime:
 
 class Video2NotesPipeline:
     STAGE_VERSIONS: Mapping[str, str] = {
-        "source.acquire": "2",
-        "media.probe": "2",
-        "system.plan": "4",
-        "vision.scan": "5",
-        "audio.extract": "2",
+        "source.acquire": "3",
+        "media.probe": "3",
+        "system.plan": "5",
+        "vision.scan": "6",
+        "audio.extract": "3",
         "captions.parse": "2",
         "audio.asr": "5",
         "ocr.extract": "4",
         "evidence.fuse": "3",
         "notes.compose": "11",
-        "render.outputs": "8",
+        "render.outputs": "9",
     }
 
     def __init__(
@@ -541,6 +543,9 @@ class Video2NotesPipeline:
             },
             "degraded_features": degraded,
             "skipped_features": skipped_features,
+            "runtime_bindings": {
+                key: dict(value) for key, value in self.runtime.runtime_bindings.items()
+            },
         }
         with workspace.stage(
             "system.plan",
@@ -581,6 +586,7 @@ class Video2NotesPipeline:
             "source": request.source.model_dump(mode="json"),
             "auth": request.auth.model_dump(mode="json"),
             "policy": request.acquisition.model_dump(mode="json"),
+            "runtime": self.runtime.runtime_bindings.get("download.ytdlp"),
         }
         with workspace.stage(
             "source.acquire",
@@ -675,7 +681,10 @@ class Video2NotesPipeline:
         with workspace.stage(
             "media.probe",
             stage_version=self.STAGE_VERSIONS["media.probe"],
-            config={"ffprobe": self.runtime.ffprobe_path},
+            config={
+                "ffprobe": self.runtime.ffprobe_path,
+                "runtime": self.runtime.runtime_bindings.get("tool.ffprobe"),
+            },
             inputs=[media_ref],
         ) as stage:
             if stage.cached:
@@ -730,6 +739,8 @@ class Video2NotesPipeline:
                 "sampling_segments": compiled_payload,
                 "max_fixed_samples": int(execution_plan["max_fixed_samples"]),
                 "ffprobe": self.runtime.ffprobe_path,
+                "ffmpeg_runtime": self.runtime.runtime_bindings.get("tool.ffmpeg"),
+                "ffprobe_runtime": self.runtime.runtime_bindings.get("tool.ffprobe"),
             },
             inputs=[media_ref],
         ) as stage:
@@ -933,7 +944,11 @@ class Video2NotesPipeline:
         with workspace.stage(
             "audio.extract",
             stage_version=self.STAGE_VERSIONS["audio.extract"],
-            config={"sample_rate": 16_000, "channels": 1},
+            config={
+                "sample_rate": 16_000,
+                "channels": 1,
+                "runtime": self.runtime.runtime_bindings.get("tool.ffmpeg"),
+            },
             inputs=[media_ref],
         ) as stage:
             if stage.cached:
@@ -1505,6 +1520,11 @@ class Video2NotesPipeline:
                 "processing_scope": request.processing_scope.value,
                 "report_spec": resolved_report.model_dump(mode="json"),
                 "theme": "evidence-light-table-v1",
+                "pdf_runtime": (
+                    self.runtime.runtime_bindings.get("render.chromium_pdf")
+                    if generate_pdf
+                    else None
+                ),
             },
             inputs=[note_ref],
         ) as stage:

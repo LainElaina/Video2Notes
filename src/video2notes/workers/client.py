@@ -30,6 +30,7 @@ class RuntimeWorkerIdentity:
     manifest_sha256: str
     protocol_version: int
     instance_id: str
+    capability_id: str
 
     def as_dict(self) -> dict[str, str | int]:
         return {
@@ -39,6 +40,7 @@ class RuntimeWorkerIdentity:
             "manifest_sha256": self.manifest_sha256,
             "protocol_version": self.protocol_version,
             "instance_id": self.instance_id,
+            "capability_id": self.capability_id,
         }
 
 
@@ -80,6 +82,7 @@ class RuntimeWorkerClient:
             manifest_sha256=runtime_manifest_sha256(manifest),
             protocol_version=manifest.runtime_protocol_version,
             instance_id=instance_id,
+            capability_id=capability_id,
         )
         self._process: subprocess.Popen[str] | None = None
         self._responses: queue.Queue[str | None] = queue.Queue()

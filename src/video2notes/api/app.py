@@ -30,9 +30,31 @@ from video2notes.components import (
     ComponentManager,
     ComponentManagerError,
     ComponentNotReadyError,
+    FeatureAvailabilityState,
     PrepareResult,
+    RuntimeBinding,
+    RuntimePackageBindingError,
+    RuntimePackageBusyError,
+    RuntimePackageInstance,
+    RuntimePackageInventory,
+    RuntimePackageManager,
+    RuntimePackageManagerError,
+    RuntimePackageNotFoundError,
+    RuntimePackageOperation,
+    RuntimePackageOperationError,
+    RuntimePackageOwnershipError,
+    RuntimePackagePathError,
+    RuntimePackageRelease,
+    RuntimePreflightResult,
     TierRecommendation,
 )
+from video2notes.components.runtime_catalog import runtime_catalog_from_environment
+from video2notes.components.runtime_discovery import (
+    build_current_runtime_candidate,
+    find_pdf_browser,
+    load_packaged_runtime_catalog,
+)
+from video2notes.components.runtime_preflight import build_runtime_preflight
 from video2notes.domain import ArtifactManifest, ProcessingScope, SourceDescriptor
 from video2notes.jobs import (
     JobAlreadyRunningError,
@@ -77,6 +99,10 @@ from video2notes.providers import (
     provider_auth_headers,
 )
 from video2notes.runtime import build_pipeline_runtime
+from video2notes.runtime_packages import (
+    apply_runtime_package_snapshot,
+    close_runtime_workers,
+)
 from video2notes.sources import (
     AcquisitionPolicy,
     AuthSpec,
@@ -106,6 +132,7 @@ from video2notes.system import (
     recommend_hardware_tier,
     recommend_resources,
 )
+from video2notes.workers import RuntimeWorkerClient
 
 _SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)\b(api[_ -]?key|authorization|cookie|token|sessdata|auth_token)"
@@ -228,7 +255,51 @@ class ComponentPreparationResponse(ApiModel):
     hardware_tier: HardwareTier
     results: list[PrepareResult]
     activated: bool
+    activated_roles: list[str] = Field(default_factory=list)
+    blocked_roles: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     report: ComponentReport
+
+
+class RuntimeReleaseView(ApiModel):
+    package_id: str
+    version: str
+    display_name: str
+    capabilities: list[str]
+    supported_devices: list[str]
+    archive_file_name: str
+    source_url: str | None
+    download_size_bytes: int
+    installed_size_bytes: int
+    offline_only: bool
+    upstream_sources: list[str]
+    install_root: str
+
+
+class RuntimePackageReport(ApiModel):
+    inventory: RuntimePackageInventory
+    managed_root: str
+    releases: list[RuntimeReleaseView]
+
+
+class RuntimeInstallRequest(ApiModel):
+    package_id: str = Field(min_length=1, max_length=128)
+    version: str | None = Field(default=None, min_length=1, max_length=128)
+    bind_requirements: list[str] = Field(default_factory=list, max_length=16)
+
+
+class RuntimeBindingRequest(ApiModel):
+    requirement_id: str = Field(min_length=2, max_length=128)
+    instance_id: str = Field(min_length=1, max_length=300)
+    capability_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class RuntimeCustomRequest(ApiModel):
+    root: str = Field(min_length=1, max_length=32_768)
+
+
+class RuntimeUpgradeRequest(ApiModel):
+    version: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ProcessingEstimateRequest(ApiModel):
@@ -272,6 +343,7 @@ class ApiContext:
         pipeline: Video2NotesPipeline | None = None,
         pipeline_runtime: PipelineRuntime | None = None,
         component_manager: ComponentManager | None = None,
+        runtime_package_manager: RuntimePackageManager | None = None,
     ):
         if pipeline is not None and pipeline_runtime is not None:
             raise ValueError("provide pipeline or pipeline_runtime, not both")
@@ -305,6 +377,27 @@ class ApiContext:
             self.save_performance_settings(self.performance_settings)
         self.secret_store = secret_store or KeyringSecretStore()
         self.component_manager = component_manager or ComponentManager(self.data_root)
+        self.pdf_browser_path = find_pdf_browser()
+        if runtime_package_manager is None:
+            runtime_root = self.component_manager.runtime_root
+            catalog = load_packaged_runtime_catalog(runtime_root).merge(
+                runtime_catalog_from_environment()
+            )
+            current_candidate = build_current_runtime_candidate(
+                runtime_root,
+                ffmpeg_path=self.component_manager.binary_path("ffmpeg"),
+                ffprobe_path=self.component_manager.binary_path("ffprobe"),
+                pdf_browser_path=self.pdf_browser_path,
+            )
+            self.runtime_package_manager = RuntimePackageManager(
+                self.data_root,
+                catalog=catalog,
+                bundled_packages=(current_candidate,) if current_candidate is not None else (),
+            )
+            self._owns_runtime_package_manager = True
+        else:
+            self.runtime_package_manager = runtime_package_manager
+            self._owns_runtime_package_manager = False
         # One processing job at a time is the safe v1 default: local ASR/OCR
         # models are large, lazily loaded native engines and must not be
         # duplicated by two jobs that independently see the same GPU budget.
@@ -332,7 +425,9 @@ class ApiContext:
 
     def close(self) -> None:
         if self._owns_job_manager:
-            self.job_manager.shutdown(wait=False, cancel_pending=True)
+            self.job_manager.shutdown(wait=True, cancel_pending=True)
+        if self._owns_runtime_package_manager:
+            self.runtime_package_manager.close()
 
     def save_performance_settings(
         self,
@@ -400,6 +495,15 @@ class ApiContext:
                 resource_reserve=self.performance_settings.reserve,
                 performance_overrides=self.performance_settings.overrides,
                 acceleration_capabilities=detect_acceleration_capabilities(),
+                ffmpeg_path=str(
+                    self.component_manager.binary_path("ffmpeg") or "ffmpeg"
+                ),
+                ffprobe_path=str(
+                    self.component_manager.binary_path("ffprobe") or "ffprobe"
+                ),
+                pdf_browser_executable=(
+                    str(self.pdf_browser_path) if self.pdf_browser_path is not None else None
+                ),
             )
             self.pipeline = Video2NotesPipeline(
                 self.runs_root,
@@ -412,6 +516,59 @@ class ApiContext:
     def pipeline_snapshot(self) -> tuple[Video2NotesPipeline, tuple[str, ...]]:
         with self.configuration_lock:
             return self.pipeline, self.runtime_warnings
+
+    async def preflight(self, request: PipelineRequest) -> RuntimePreflightResult:
+        pipeline, _ = self.pipeline_snapshot()
+        fallback_runtime = getattr(pipeline, "runtime", None)
+        if self.pipeline_is_injected and fallback_runtime is None:
+            return RuntimePreflightResult(
+                state=FeatureAvailabilityState.READY,
+                requirements=(),
+            )
+        acceleration = detect_acceleration_capabilities()
+        return await build_runtime_preflight(
+            self.runtime_package_manager,
+            request,
+            source_registry=self.source_registry,
+            fallback_runtime=fallback_runtime,
+            prefer_cuda=acceleration.asr.cuda_available or acceleration.ocr.cuda_available,
+        )
+
+    def build_job_pipeline(
+        self,
+        registry: ModelRegistry,
+        performance: PerformanceSettings,
+        preflight: RuntimePreflightResult,
+    ) -> tuple[Video2NotesPipeline, tuple[str, ...], tuple[RuntimeWorkerClient, ...]]:
+        if self.pipeline_is_injected:
+            pipeline, warnings = self.pipeline_snapshot()
+            return pipeline, warnings, ()
+        result = build_pipeline_runtime(
+            registry,
+            secret_store=self.secret_store,
+            source_registry=self.source_registry,
+            hardware_disk_path=str(self.data_root),
+            experience_mode=performance.experience_mode,
+            resource_preference=performance.preference,
+            resource_reserve=performance.reserve,
+            performance_overrides=performance.overrides,
+            acceleration_capabilities=detect_acceleration_capabilities(),
+            ffmpeg_path=str(self.component_manager.binary_path("ffmpeg") or "ffmpeg"),
+            ffprobe_path=str(self.component_manager.binary_path("ffprobe") or "ffprobe"),
+            pdf_browser_executable=(
+                str(self.pdf_browser_path) if self.pdf_browser_path is not None else None
+            ),
+        )
+        runtime, clients = apply_runtime_package_snapshot(
+            result.runtime,
+            self.runtime_package_manager,
+            preflight.binding_snapshot,
+        )
+        return (
+            Video2NotesPipeline(self.runs_root, runtime=runtime),
+            tuple(_sanitize_message(item) for item in result.warnings),
+            clients,
+        )
 
     def store_result(self, result: PipelineOutcome) -> None:
         with self._results_lock:
@@ -603,13 +760,16 @@ def create_app(
                 for component_id in component_ids
             ]
             activated = False
-            inventory = context.component_manager.inventory(tier)
-            if (
-                request.activate
-                and inventory.capabilities.get("asr")
-                and inventory.capabilities.get("ocr")
-            ):
-                activated = _activate_managed_local_models(context, tier)
+            activated_roles: list[str] = []
+            blocked_roles: list[str] = []
+            activation_warnings: list[str] = []
+            if request.activate:
+                (
+                    activated_roles,
+                    blocked_roles,
+                    activation_warnings,
+                ) = _activate_managed_local_models(context, tier)
+                activated = bool(activated_roles)
             report = _component_report(context, tier=tier)
         except ComponentManagerError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
@@ -617,8 +777,141 @@ def create_app(
             hardware_tier=tier,
             results=results,
             activated=activated,
+            activated_roles=activated_roles,
+            blocked_roles=blocked_roles,
+            warnings=activation_warnings,
             report=report,
         )
+
+    @app.get(
+        "/api/runtime-packages",
+        response_model=RuntimePackageReport,
+        dependencies=protected,
+    )
+    def runtime_package_report() -> RuntimePackageReport:
+        return _runtime_package_report(context)
+
+    @app.post(
+        "/api/runtime-packages/discover",
+        response_model=RuntimePackageReport,
+        dependencies=protected,
+    )
+    def discover_runtime_packages() -> RuntimePackageReport:
+        context.runtime_package_manager.discover()
+        return _runtime_package_report(context)
+
+    @app.post(
+        "/api/runtime-packages/install",
+        response_model=RuntimePackageOperation,
+        status_code=202,
+        dependencies=protected,
+    )
+    def install_runtime_package(
+        request: RuntimeInstallRequest,
+    ) -> RuntimePackageOperation:
+        try:
+            return context.runtime_package_manager.install_async(
+                request.package_id,
+                request.version,
+                bind_requirements=request.bind_requirements,
+            )
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.get(
+        "/api/runtime-packages/operations/{operation_id}",
+        response_model=RuntimePackageOperation,
+        dependencies=protected,
+    )
+    def get_runtime_operation(operation_id: str) -> RuntimePackageOperation:
+        try:
+            return context.runtime_package_manager.operation(operation_id)
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.post(
+        "/api/runtime-packages/operations/{operation_id}/cancel",
+        response_model=RuntimePackageOperation,
+        dependencies=protected,
+    )
+    def cancel_runtime_operation(operation_id: str) -> RuntimePackageOperation:
+        try:
+            return context.runtime_package_manager.cancel(operation_id)
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.post(
+        "/api/runtime-packages/bindings",
+        response_model=RuntimeBinding,
+        dependencies=protected,
+    )
+    def bind_runtime_package(request: RuntimeBindingRequest) -> RuntimeBinding:
+        try:
+            return context.runtime_package_manager.bind(
+                request.requirement_id,
+                request.instance_id,
+                request.capability_id,
+            )
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.delete(
+        "/api/runtime-packages/bindings/{requirement_id}",
+        dependencies=protected,
+    )
+    def unbind_runtime_package(requirement_id: str) -> dict[str, bool]:
+        return {"removed": context.runtime_package_manager.unbind(requirement_id)}
+
+    @app.post(
+        "/api/runtime-packages/custom",
+        response_model=RuntimePackageInstance,
+        dependencies=protected,
+    )
+    def register_custom_runtime(request: RuntimeCustomRequest) -> RuntimePackageInstance:
+        try:
+            return context.runtime_package_manager.register_custom(request.root)
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.delete(
+        "/api/runtime-packages/custom/{instance_id}",
+        dependencies=protected,
+    )
+    def forget_custom_runtime(instance_id: str) -> dict[str, bool]:
+        try:
+            return {"removed": context.runtime_package_manager.forget_custom(instance_id)}
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.post(
+        "/api/runtime-packages/instances/{instance_id}/upgrade",
+        response_model=RuntimePackageOperation,
+        status_code=202,
+        dependencies=protected,
+    )
+    def upgrade_runtime_package(
+        instance_id: str,
+        request: RuntimeUpgradeRequest,
+    ) -> RuntimePackageOperation:
+        try:
+            return context.runtime_package_manager.upgrade_async(
+                instance_id,
+                request.version,
+            )
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.delete(
+        "/api/runtime-packages/instances/{instance_id}",
+        response_model=RuntimePackageOperation,
+        status_code=202,
+        dependencies=protected,
+    )
+    def uninstall_runtime_package(instance_id: str) -> RuntimePackageOperation:
+        try:
+            return context.runtime_package_manager.uninstall(instance_id)
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
 
     @app.get("/api/browser-profiles", dependencies=protected)
     def browser_profiles() -> list[dict[str, Any]]:
@@ -1110,13 +1403,33 @@ def create_app(
         return [_safe_job(item) for item in context.job_manager.list()]
 
     @app.post(
+        "/api/jobs/preflight",
+        response_model=RuntimePreflightResult,
+        dependencies=protected,
+    )
+    async def preflight_job(request: PipelineRequest) -> RuntimePreflightResult:
+        return await context.preflight(request)
+
+    @app.post(
         "/api/jobs",
         response_model=ProcessingRunResponse,
         status_code=202,
         dependencies=protected,
     )
-    def submit_job(request: PipelineRequest) -> ProcessingRunResponse:
+    async def submit_job(request: PipelineRequest) -> ProcessingRunResponse:
+        preflight = await context.preflight(request)
+        if preflight.state is FeatureAvailabilityState.BLOCKED:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_dependencies_missing",
+                    "preflight": preflight.model_dump(mode="json"),
+                },
+            )
         pipeline, runtime_warnings = context.pipeline_snapshot()
+        with context.configuration_lock:
+            registry_snapshot = context.model_registry.model_copy(deep=True)
+            performance_snapshot = context.performance_settings.model_copy(deep=True)
         try:
             workspace = pipeline.create_run(request)
             safe_warnings = [_sanitize_message(warning) for warning in runtime_warnings]
@@ -1125,13 +1438,29 @@ def create_app(
             submitted_manifest = _safe_manifest(workspace.manifest)
 
             def worker(cancel: CancellationToken, emit: EventEmitter) -> None:
-                result = pipeline.run(
-                    workspace,
-                    request,
-                    cancel=cancel,
-                    emit=emit,
+                leases = context.runtime_package_manager.acquire_snapshot_leases(
+                    preflight.binding_snapshot,
+                    owner=f"job:{workspace.manifest.run_id}",
                 )
-                context.store_result(result)
+                clients: tuple[RuntimeWorkerClient, ...] = ()
+                try:
+                    job_pipeline, job_warnings, clients = context.build_job_pipeline(
+                        registry_snapshot,
+                        performance_snapshot,
+                        preflight,
+                    )
+                    for warning in job_warnings:
+                        workspace.add_warning(warning)
+                    result = job_pipeline.run(
+                        workspace,
+                        request,
+                        cancel=cancel,
+                        emit=emit,
+                    )
+                    context.store_result(result)
+                finally:
+                    close_runtime_workers(clients)
+                    context.runtime_package_manager.release_leases(leases)
 
             snapshot = context.job_manager.submit(workspace.manifest.run_id, worker)
         except (FileExistsError, ValueError):
@@ -1264,16 +1593,90 @@ def _component_report(
     )
 
 
+def _runtime_package_report(context: ApiContext) -> RuntimePackageReport:
+    inventory = context.runtime_package_manager.inventory()
+    return RuntimePackageReport(
+        inventory=inventory,
+        managed_root=str(context.runtime_package_manager.managed_root),
+        releases=[
+            _runtime_release_view(context.runtime_package_manager, release)
+            for release in inventory.available_releases
+        ],
+    )
+
+
+def _runtime_release_view(
+    manager: RuntimePackageManager,
+    release: RuntimePackageRelease,
+) -> RuntimeReleaseView:
+    return RuntimeReleaseView(
+        package_id=release.package_id,
+        version=release.version,
+        display_name=release.display_name,
+        capabilities=list(release.manifest.capability_ids),
+        supported_devices=sorted(
+            {
+                device
+                for capability in release.capabilities
+                for device in capability.supported_devices
+            }
+        ),
+        archive_file_name=release.archive.file_name,
+        source_url=release.archive_url,
+        download_size_bytes=release.archive_size_bytes,
+        installed_size_bytes=release.installed_size_bytes,
+        offline_only=release.archive.offline_only,
+        upstream_sources=list(release.upstream_sources),
+        install_root=str(manager.managed_root / release.package_id / release.version),
+    )
+
+
+def _runtime_http_exception(error: RuntimePackageManagerError) -> HTTPException:
+    if isinstance(error, RuntimePackageNotFoundError):
+        status_code = 404
+    elif isinstance(
+        error,
+        (
+            RuntimePackageBusyError,
+            RuntimePackageOperationError,
+            RuntimePackageOwnershipError,
+        ),
+    ):
+        status_code = 409
+    elif isinstance(error, (RuntimePackageBindingError, RuntimePackagePathError)):
+        status_code = 422
+    else:
+        status_code = 422
+    return HTTPException(status_code=status_code, detail=str(error))
+
+
 def _activate_managed_local_models(
     context: ApiContext,
     tier: HardwareTier,
-) -> bool:
+) -> tuple[list[str], list[str], list[str]]:
+    asr_settings: tuple[
+        dict[str, str | int | float | bool],
+        dict[QualityMode, dict[str, str | int | float | bool]],
+    ] | None = None
+    ocr_settings: tuple[
+        dict[str, str | int | float | bool],
+        dict[QualityMode, dict[str, str | int | float | bool]],
+    ] | None = None
+    warnings: list[str] = []
     try:
-        settings = context.component_manager.local_adapter_settings(tier)
+        asr_settings = context.component_manager.local_asr_adapter_settings(tier)
     except ComponentNotReadyError:
-        raise ComponentManagerError(
-            "recommended local ASR/OCR model payloads are not complete"
-        ) from None
+        warnings.append("本地 ASR 模型尚未完整下载，因此没有激活语音识别角色。")
+    try:
+        ocr_settings = context.component_manager.local_ocr_adapter_settings(tier)
+    except ComponentNotReadyError:
+        warnings.append("本地 OCR 模型尚未完整下载，因此没有激活画面文字角色。")
+    if asr_settings is None and ocr_settings is None:
+        return (
+            [],
+            ["asr.primary", "ocr.primary", "vision.text_detector"],
+            warnings,
+        )
 
     with context.configuration_lock:
         registry = context.model_registry.model_copy(deep=True)
@@ -1288,10 +1691,18 @@ def _activate_managed_local_models(
         else:
             local_provider.enabled = True
 
-        for model_id, selected_settings, profile_settings in (
-            ("faster-whisper", settings.asr, settings.asr_profiles),
-            ("paddleocr", settings.ocr, settings.ocr_profiles),
-        ):
+        selected_models: list[
+            tuple[
+                str,
+                dict[str, str | int | float | bool],
+                dict[QualityMode, dict[str, str | int | float | bool]],
+            ]
+        ] = []
+        if asr_settings is not None:
+            selected_models.append(("faster-whisper", *asr_settings))
+        if ocr_settings is not None:
+            selected_models.append(("paddleocr", *ocr_settings))
+        for model_id, selected_settings, profile_settings in selected_models:
             default_model = defaults.models[model_id]
             model = registry.models.get(model_id)
             if model is None:
@@ -1311,11 +1722,17 @@ def _activate_managed_local_models(
             }
             model.enabled = True
 
-        for role, model_id in (
-            ("asr.primary", "faster-whisper"),
-            ("ocr.primary", "paddleocr"),
-            ("vision.text_detector", "paddleocr"),
-        ):
+        requested_roles: list[tuple[str, str]] = []
+        if asr_settings is not None:
+            requested_roles.append(("asr.primary", "faster-whisper"))
+        if ocr_settings is not None:
+            requested_roles.extend(
+                (
+                    ("ocr.primary", "paddleocr"),
+                    ("vision.text_detector", "paddleocr"),
+                )
+            )
+        for role, model_id in requested_roles:
             binding = registry.roles.get(role)
             if binding is None:
                 registry.bind(role, model_id)
@@ -1324,20 +1741,27 @@ def _activate_managed_local_models(
         validated.save(context.registry_path)
         context.model_registry = validated
         context.refresh_pipeline()
-        required_bindings = {
-            "asr.primary": "faster-whisper",
-            "ocr.primary": "paddleocr",
-            "vision.text_detector": "paddleocr",
-        }
-        bindings_active = all(
-            validated.roles.get(role) is not None
-            and validated.roles[role].primary_model_id == model_id
-            for role, model_id in required_bindings.items()
-        )
+        activated_roles = [
+            role
+            for role, model_id in requested_roles
+            if (
+                validated.roles.get(role) is not None
+                and validated.roles[role].primary_model_id == model_id
+            )
+        ]
+        blocked_roles = [
+            role
+            for role, _ in requested_roles
+            if role not in activated_roles
+        ]
+        if asr_settings is None:
+            blocked_roles.append("asr.primary")
+        if ocr_settings is None:
+            blocked_roles.extend(("ocr.primary", "vision.text_detector"))
         return (
-            bindings_active
-            and context.pipeline.runtime.asr_backend is not None
-            and context.pipeline.runtime.ocr_backend is not None
+            activated_roles,
+            list(dict.fromkeys(blocked_roles)),
+            warnings,
         )
 
 

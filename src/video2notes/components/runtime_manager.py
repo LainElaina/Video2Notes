@@ -35,6 +35,7 @@ from .runtime_models import (
     RUNTIME_PACKAGE_INSTALL_MARKER,
     RUNTIME_PACKAGE_MANIFEST,
     RuntimeBinding,
+    RuntimeBindingSnapshot,
     RuntimeCapabilitySpec,
     RuntimeCustomRegistration,
     RuntimeOperationKind,
@@ -339,6 +340,52 @@ class RuntimePackageManager:
             raise RuntimePackageBindingError("bound runtime capability is unavailable")
         return instance
 
+    def select(
+        self,
+        requirement_id: str,
+        capability_id: str | None = None,
+    ) -> RuntimePackageInstance:
+        """Resolve an explicit binding, otherwise select the first ready compatible source."""
+
+        inventory = self.inventory()
+        if requirement_id in inventory.bindings:
+            return self.resolve(requirement_id)
+        selected_capability = capability_id or requirement_id
+        instance = next(
+            (
+                item
+                for item in inventory.instances
+                if item.ready and selected_capability in item.capabilities
+            ),
+            None,
+        )
+        if instance is None:
+            raise RuntimePackageBindingError(
+                f"no ready runtime package provides {selected_capability}"
+            )
+        return instance
+
+    def manifest_for_instance(self, instance_id: str) -> RuntimePackageManifest:
+        instance = self._find_instance(instance_id)
+        root = Path(instance.root).expanduser().resolve()
+        manifest_path = root / RUNTIME_PACKAGE_MANIFEST
+        if manifest_path.is_file():
+            return validate_runtime_package_root(root, full_hash=False).manifest
+        for candidate in (*self._bundled_packages, *self._system_packages):
+            if candidate.manifest is None:
+                continue
+            candidate_root = Path(candidate.root).expanduser().resolve()
+            if (
+                candidate_root == root
+                and candidate.manifest.package_id == instance.package_id
+                and candidate.manifest.version == instance.version
+            ):
+                return candidate.manifest
+        raise RuntimePackageBindingError("runtime package manifest is unavailable")
+
+    def get_instance(self, instance_id: str) -> RuntimePackageInstance:
+        return self._find_instance(instance_id)
+
     def bind(
         self,
         requirement_id: str,
@@ -421,7 +468,10 @@ class RuntimePackageManager:
             raise RuntimePackageOwnershipError(
                 "custom packages cannot point into app-managed package storage"
             )
-        validation = validate_runtime_package_root(custom_root, full_hash=True)
+        try:
+            validation = validate_runtime_package_root(custom_root, full_hash=True)
+        except RuntimePackageIntegrityError as error:
+            raise RuntimePackagePathError(str(error)) from None
         if any(
             item.transport is RuntimeTransport.IN_PROCESS
             for item in validation.manifest.capabilities
@@ -507,6 +557,69 @@ class RuntimePackageManager:
             path.unlink()
             return True
 
+    def acquire_snapshot_leases(
+        self,
+        snapshot: dict[str, RuntimeBindingSnapshot],
+        *,
+        owner: str,
+    ) -> tuple[RuntimePackageLease, ...]:
+        """Atomically revalidate a preflight snapshot and lease its distinct instances."""
+
+        if not owner.strip():
+            raise ValueError("runtime lease owner cannot be empty")
+        if not snapshot:
+            return ()
+        with self._state_guard():
+            config = self._read_config()
+            instances = {
+                item.instance_id: item for item in self._discover_instances(config)
+            }
+            selected: dict[str, RuntimePackageInstance] = {}
+            for requirement_id, expected in snapshot.items():
+                if requirement_id != expected.requirement_id:
+                    raise RuntimePackageBindingError(
+                        "runtime preflight snapshot keys are inconsistent"
+                    )
+                instance = instances.get(expected.instance_id)
+                if (
+                    instance is None
+                    or not instance.ready
+                    or instance.source is not expected.source
+                    or instance.manifest_sha256 != expected.manifest_sha256
+                    or expected.capability_id not in instance.capabilities
+                ):
+                    raise RuntimePackageBindingError(
+                        "runtime package selection changed after preflight"
+                    )
+                self._assert_no_active_instance_operation(instance.instance_id)
+                selected[instance.instance_id] = instance
+
+            leases: list[RuntimePackageLease] = []
+            try:
+                for instance_id in sorted(selected):
+                    lease = RuntimePackageLease(
+                        lease_id=uuid.uuid4().hex,
+                        instance_id=instance_id,
+                        owner=owner.strip(),
+                        owner_pid=os.getpid(),
+                        created_at_utc=_utc_now(),
+                    )
+                    self._atomic_write_json(
+                        self._lease_path(lease.lease_id),
+                        lease.model_dump(mode="json"),
+                    )
+                    leases.append(lease)
+            except Exception:
+                for lease in leases:
+                    self._lease_path(lease.lease_id).unlink(missing_ok=True)
+                raise
+            return tuple(leases)
+
+    def release_leases(self, leases: Sequence[RuntimePackageLease]) -> None:
+        with self._state_guard():
+            for lease in leases:
+                self._lease_path(lease.lease_id).unlink(missing_ok=True)
+
     @contextmanager
     def lease(
         self,
@@ -529,6 +642,8 @@ class RuntimePackageManager:
         self,
         package_id: str,
         version: str | None = None,
+        *,
+        bind_requirements: Sequence[str] = (),
     ) -> RuntimePackageOperation:
         try:
             release = (
@@ -538,6 +653,8 @@ class RuntimePackageManager:
             )
         except KeyError as error:
             raise RuntimePackageNotFoundError(str(error)) from None
+        requested_bindings = tuple(dict.fromkeys(bind_requirements))
+        self._binding_capabilities(release.manifest, requested_bindings)
 
         with self._state_guard():
             existing = self._active_release_operation(
@@ -554,6 +671,12 @@ class RuntimePackageManager:
                 and ready_instance.manifest_sha256
                 == runtime_manifest_sha256(release.manifest)
             ):
+                self._bind_install_requirements(
+                    requested_bindings,
+                    ready_instance.instance_id,
+                    release.manifest,
+                    ready_instance.manifest_sha256,
+                )
                 operation = self._new_operation(
                     RuntimeOperationKind.INSTALL,
                     package_id=package_id,
@@ -566,6 +689,7 @@ class RuntimePackageManager:
                     target_root=str(
                         self._managed_target(release.package_id, release.version)
                     ),
+                    requested_bindings=requested_bindings,
                     result_instance_id=ready_instance.instance_id,
                     detail="Runtime package is already installed.",
                 )
@@ -579,6 +703,7 @@ class RuntimePackageManager:
                 expected_installed_bytes=release.installed_size_bytes,
                 resumable=True,
                 target_root=str(self._managed_target(package_id, release.version)),
+                requested_bindings=requested_bindings,
             )
         self._submit_install(operation, release, upgrade_source=None)
         return self.operation(operation.operation_id)
@@ -587,8 +712,14 @@ class RuntimePackageManager:
         self,
         package_id: str,
         version: str | None = None,
+        *,
+        bind_requirements: Sequence[str] = (),
     ) -> RuntimePackageOperation:
-        return self.install_async(package_id, version)
+        return self.install_async(
+            package_id,
+            version,
+            bind_requirements=bind_requirements,
+        )
 
     def upgrade_async(
         self,
@@ -632,6 +763,7 @@ class RuntimePackageManager:
                 target_root=str(
                     self._managed_target(source.package_id, release.version)
                 ),
+                requested_bindings=(),
             )
         self._submit_install(operation, release, upgrade_source=source.instance_id)
         return self.operation(operation.operation_id)
@@ -740,6 +872,7 @@ class RuntimePackageManager:
     ) -> None:
         staging = self._staging_path(operation_id)
         archive = self._download_path(release.archive_sha256)
+        requested_bindings = self.operation(operation_id).requested_bindings
         try:
             self._update_operation(
                 operation_id,
@@ -857,6 +990,12 @@ class RuntimePackageManager:
                         release.manifest,
                         validation.manifest_sha256,
                     )
+                self._bind_install_requirements(
+                    requested_bindings,
+                    target_instance_id,
+                    release.manifest,
+                    validation.manifest_sha256,
+                )
             archive.unlink(missing_ok=True)
             self._update_operation(
                 operation_id,
@@ -1260,6 +1399,49 @@ class RuntimePackageManager:
         del target_root  # The binding stores stable identity, never a machine path.
         self._write_config(config.model_copy(update={"bindings": updates}))
 
+    def _bind_install_requirements(
+        self,
+        requirements: Sequence[str],
+        instance_id: str,
+        manifest: RuntimePackageManifest,
+        manifest_sha256: str,
+    ) -> None:
+        selected = self._binding_capabilities(manifest, requirements)
+        if not selected:
+            return
+        config = self._read_config()
+        bindings = dict(config.bindings)
+        for requirement_id, capability_id in selected.items():
+            bindings[requirement_id] = RuntimeBinding(
+                requirement_id=requirement_id,
+                capability_id=capability_id,
+                instance_id=instance_id,
+                package_id=manifest.package_id,
+                package_version=manifest.version,
+                source=RuntimePackageSource.MANAGED,
+                manifest_sha256=manifest_sha256,
+                bound_at_utc=_utc_now(),
+            )
+        self._write_config(config.model_copy(update={"bindings": bindings}))
+
+    @staticmethod
+    def _binding_capabilities(
+        manifest: RuntimePackageManifest,
+        requirements: Sequence[str],
+    ) -> dict[str, str]:
+        capabilities = set(manifest.capability_ids)
+        selected: dict[str, str] = {}
+        for requirement_id in requirements:
+            if requirement_id in capabilities:
+                selected[requirement_id] = requirement_id
+            elif len(capabilities) == 1:
+                selected[requirement_id] = next(iter(capabilities))
+            else:
+                raise RuntimePackageBindingError(
+                    f"runtime package cannot infer a capability for {requirement_id}"
+                )
+        return selected
+
     def _validate_install_marker(
         self,
         root: Path,
@@ -1299,6 +1481,7 @@ class RuntimePackageManager:
         expected_installed_bytes: int | None = None,
         resumable: bool = False,
         target_root: str | None = None,
+        requested_bindings: tuple[str, ...] = (),
         result_instance_id: str | None = None,
         detail: str | None = None,
     ) -> RuntimePackageOperation:
@@ -1317,6 +1500,7 @@ class RuntimePackageManager:
             expected_installed_bytes=expected_installed_bytes,
             resumable=resumable,
             target_root=target_root,
+            requested_bindings=requested_bindings,
             created_at_utc=now,
             started_at_utc=now if status is RuntimeOperationStatus.SUCCEEDED else None,
             finished_at_utc=now if status is RuntimeOperationStatus.SUCCEEDED else None,

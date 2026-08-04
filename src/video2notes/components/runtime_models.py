@@ -378,6 +378,19 @@ class RuntimeBinding(RuntimeModel):
         return validate_sha256(str(value))
 
 
+class RuntimeBindingSnapshot(RuntimeModel):
+    requirement_id: str = Field(pattern=_REQUIREMENT_ID_PATTERN)
+    capability_id: str = Field(pattern=_CAPABILITY_ID_PATTERN)
+    instance_id: str = Field(min_length=1, max_length=300)
+    source: RuntimePackageSource
+    manifest_sha256: str
+
+    @field_validator("manifest_sha256", mode="before")
+    @classmethod
+    def validate_manifest_hash(cls, value: object) -> str:
+        return validate_sha256(str(value))
+
+
 class RuntimePackageConfig(RuntimeModel):
     schema_version: int = Field(default=1, ge=1, le=1)
     bindings: dict[str, RuntimeBinding] = Field(default_factory=dict)
@@ -431,6 +444,7 @@ class RuntimePackageOperation(RuntimeModel):
     eta_seconds: float | None = Field(default=None, ge=0)
     resumable: bool = False
     target_root: str | None = None
+    requested_bindings: tuple[str, ...] = ()
     cancel_requested: bool = False
     created_at_utc: str
     started_at_utc: str | None = None
@@ -439,6 +453,18 @@ class RuntimePackageOperation(RuntimeModel):
     result_instance_id: str | None = None
     detail: str | None = None
     error_code: str | None = None
+
+    @field_validator("requested_bindings", mode="before")
+    @classmethod
+    def validate_requested_bindings(cls, value: object) -> object:
+        if not isinstance(value, (tuple, list)):
+            return value
+        normalized = tuple(str(item).strip() for item in value)
+        if any(re.fullmatch(_REQUIREMENT_ID_PATTERN, item) is None for item in normalized):
+            raise ValueError("runtime binding requirements are invalid")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("runtime binding requirements must be unique")
+        return normalized
 
 
 class RuntimePackageLease(RuntimeModel):
@@ -465,3 +491,38 @@ class FeatureAvailability(RuntimeModel):
     missing_capabilities: tuple[str, ...] = ()
     selected_instances: dict[str, str] = Field(default_factory=dict)
     detail: str | None = None
+
+
+class RuntimeRequirementStatus(RuntimeModel):
+    requirement_id: str = Field(pattern=_REQUIREMENT_ID_PATTERN)
+    capability_id: str = Field(pattern=_CAPABILITY_ID_PATTERN)
+    required: bool
+    state: FeatureAvailabilityState
+    selected_instance_id: str | None = None
+    selected_source: RuntimePackageSource | None = None
+    detail: str | None = None
+
+
+class RuntimeInstallRecommendation(RuntimeModel):
+    package_id: str = Field(pattern=_PACKAGE_ID_PATTERN)
+    version: str = Field(pattern=_PACKAGE_ID_PATTERN)
+    display_name: str
+    requirement_ids: tuple[str, ...]
+    archive_file_name: str
+    source_url: str | None = None
+    download_size_bytes: int = Field(gt=0)
+    installed_size_bytes: int = Field(gt=0)
+    install_root: str
+    supported_devices: tuple[str, ...] = ()
+
+
+class RuntimePreflightResult(RuntimeModel):
+    state: FeatureAvailabilityState
+    requirements: tuple[RuntimeRequirementStatus, ...]
+    missing_required: tuple[str, ...] = ()
+    missing_optional: tuple[str, ...] = ()
+    selected_instances: dict[str, str] = Field(default_factory=dict)
+    binding_snapshot: dict[str, RuntimeBindingSnapshot] = Field(default_factory=dict)
+    recommended_actions: tuple[RuntimeInstallRecommendation, ...] = ()
+    estimated_download_bytes: int = Field(default=0, ge=0)
+    estimated_installed_bytes: int = Field(default=0, ge=0)

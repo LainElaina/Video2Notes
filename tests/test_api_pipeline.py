@@ -173,6 +173,23 @@ class ApiPipelineTests(unittest.TestCase):
         )
         self.assertEqual(note.text, "# Fake note")
 
+    def test_preflight_uses_the_same_authenticated_job_contract(self) -> None:
+        payload = self._payload()
+        self.assertEqual(
+            self.client.post("/api/jobs/preflight", json=payload).status_code,
+            401,
+        )
+
+        response = self.client.post(
+            "/api/jobs/preflight",
+            headers=self.headers,
+            json=payload,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["state"], "ready")
+        self.assertEqual(response.json()["missing_required"], [])
+
     def test_submit_accepts_and_persists_audio_only_scope(self) -> None:
         payload = self._payload()
         payload["processing_scope"] = "audio_only"

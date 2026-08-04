@@ -157,6 +157,18 @@ class ApiAppTests(unittest.TestCase):
         self.assertEqual(response.json()["performance"]["experience_mode"], "guided")
         self.assertIn("budget", response.json()["recommendation"])
 
+    def test_runtime_package_inventory_is_protected_and_self_describing(self) -> None:
+        self.assertEqual(self.client.get("/api/runtime-packages").status_code, 401)
+
+        response = self.client.get("/api/runtime-packages", headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["managed_root"].endswith("runtime-packages\\managed"))
+        self.assertIn("instances", payload["inventory"])
+        self.assertIn("operations", payload["inventory"])
+        self.assertIn("releases", payload)
+
     def test_system_report_exposes_engine_specific_acceleration_and_mixed_plan(
         self,
     ) -> None:

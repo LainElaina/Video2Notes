@@ -27,6 +27,7 @@ from video2notes.components.runtime_manager import (
 )
 from video2notes.components.runtime_models import (
     RUNTIME_PACKAGE_MANIFEST,
+    RuntimeBindingSnapshot,
     RuntimeOperationStatus,
     RuntimePackageCandidate,
     RuntimePackageManifest,
@@ -335,6 +336,40 @@ class RuntimePackageManagerTests(unittest.TestCase):
             reopened.operation(operation.operation_id).status,
             RuntimeOperationStatus.SUCCEEDED,
         )
+
+    def test_install_can_bind_and_snapshot_leases_are_atomic(self) -> None:
+        artifact = build_package(self.artifacts_root)
+        manager = self.manager((artifact,))
+
+        finished = manager.wait(
+            manager.install_async(
+                artifact.release.package_id,
+                bind_requirements=("asr.faster_whisper",),
+            ).operation_id,
+            timeout=5,
+        )
+        assert finished.result_instance_id is not None
+        binding = manager.inventory().bindings["asr.faster_whisper"]
+        snapshot = RuntimeBindingSnapshot(
+            requirement_id=binding.requirement_id,
+            capability_id=binding.capability_id,
+            instance_id=binding.instance_id,
+            source=binding.source,
+            manifest_sha256=binding.manifest_sha256,
+        )
+        leases = manager.acquire_snapshot_leases(
+            {snapshot.requirement_id: snapshot},
+            owner="test-job",
+        )
+
+        self.assertEqual(len(leases), 1)
+        self.assertTrue(manager.get_instance(binding.instance_id).ready)
+        manager.unbind(binding.requirement_id)
+        with self.assertRaises(RuntimePackageBusyError):
+            manager.uninstall(binding.instance_id)
+        manager.release_leases(leases)
+        removed = manager.wait(manager.uninstall(binding.instance_id).operation_id, timeout=5)
+        self.assertEqual(removed.status, RuntimeOperationStatus.SUCCEEDED)
 
     def test_archive_with_file_outside_catalog_never_publishes(self) -> None:
         artifact = build_package(self.artifacts_root, untrusted_extra_file=True)
