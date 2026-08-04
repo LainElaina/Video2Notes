@@ -1724,6 +1724,13 @@ def _backend_identity(backend: object | None) -> dict[str, Any] | None:
     config = getattr(backend, "config", None) or getattr(backend, "_config", None)
     if isinstance(config, BaseModel):
         identity["config"] = config.model_dump(mode="json")
+    runtime_identity = getattr(backend, "runtime_identity", None)
+    if isinstance(runtime_identity, Mapping):
+        identity["runtime"] = {
+            str(key): value
+            for key, value in runtime_identity.items()
+            if isinstance(value, (str, int, float, bool)) or value is None
+        }
     return identity
 
 
@@ -1761,6 +1768,10 @@ def _asr_backend_for_plan(
     backend: ASRBackend | None,
     plan: ExecutionPlan,
 ) -> ASRBackend | None:
+    plan_adapter = getattr(backend, "for_execution_plan", None)
+    if callable(plan_adapter):
+        adapted = plan_adapter(plan)
+        return adapted if hasattr(adapted, "transcribe") else backend
     if not isinstance(backend, FasterWhisperBackend):
         return backend
     return FasterWhisperBackend(
@@ -1779,6 +1790,10 @@ def _ocr_backend_for_plan(
     backend: OcrBackend | None,
     plan: ExecutionPlan,
 ) -> OcrBackend | None:
+    plan_adapter = getattr(backend, "for_execution_plan", None)
+    if callable(plan_adapter):
+        adapted = plan_adapter(plan)
+        return adapted if hasattr(adapted, "recognize") else backend
     if not isinstance(backend, PaddleOcrBackend):
         return backend
     device = "gpu:0" if plan.ocr_device == "cuda" else plan.ocr_device
