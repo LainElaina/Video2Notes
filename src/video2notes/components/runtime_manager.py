@@ -264,19 +264,30 @@ class RuntimePackageManager:
             for item in operations
             if item.status in _ACTIVE_OPERATION_STATUSES and item.source_instance_id is not None
         )
+        compatible_releases = tuple(
+            release
+            for release in self.catalog.releases
+            if _platform_compatible(release.manifest)[0]
+        )
+        compatible_release_ids = {
+            (release.package_id, release.version) for release in compatible_releases
+        }
 
         enriched: list[RuntimePackageInstance] = []
         for instance in instances:
             bound = tuple(sorted(bindings_by_instance.get(instance.instance_id, ())))
             leased = instance.instance_id in leased_instances
             available_version: str | None = None
-            try:
-                latest = self.catalog.latest(instance.package_id)
-            except KeyError:
-                pass
-            else:
-                if latest.version != instance.version:
-                    available_version = latest.version
+            latest = next(
+                (
+                    release
+                    for release in reversed(self.catalog.versions(instance.package_id))
+                    if (release.package_id, release.version) in compatible_release_ids
+                ),
+                None,
+            )
+            if latest is not None and latest.version != instance.version:
+                available_version = latest.version
             removable = (
                 instance.source is RuntimePackageSource.MANAGED
                 and instance.ready
@@ -313,7 +324,7 @@ class RuntimePackageManager:
             instances=tuple(enriched),
             bindings=dict(config.bindings),
             operations=operations,
-            available_releases=self.catalog.releases,
+            available_releases=compatible_releases,
         )
 
     def discover(self) -> RuntimePackageInventory:
@@ -653,6 +664,11 @@ class RuntimePackageManager:
             )
         except KeyError as error:
             raise RuntimePackageNotFoundError(str(error)) from None
+        compatible, compatibility_detail = _platform_compatible(release.manifest)
+        if not compatible:
+            raise RuntimePackageOperationError(
+                compatibility_detail or "runtime package is not compatible with this machine"
+            )
         requested_bindings = tuple(dict.fromkeys(bind_requirements))
         self._binding_capabilities(release.manifest, requested_bindings)
 
@@ -739,6 +755,11 @@ class RuntimePackageManager:
             )
         except KeyError as error:
             raise RuntimePackageNotFoundError(str(error)) from None
+        compatible, compatibility_detail = _platform_compatible(release.manifest)
+        if not compatible:
+            raise RuntimePackageOperationError(
+                compatibility_detail or "runtime package is not compatible with this machine"
+            )
         if release.version == source.version:
             raise RuntimePackageOperationError("runtime package is already at that version")
 

@@ -273,7 +273,7 @@ def _recommend_installations(
     remaining = set(requirement_ids)
     if not remaining:
         return ()
-    releases = _latest_releases(manager.inventory().available_releases)
+    releases = _latest_releases(manager)
     selected: list[RuntimeInstallRecommendation] = []
     while remaining:
         ranked: list[tuple[int, int, int, RuntimePackageRelease, set[str]]] = []
@@ -333,12 +333,24 @@ def _recommend_installations(
 
 
 def _latest_releases(
-    releases: tuple[RuntimePackageRelease, ...],
+    manager: RuntimePackageManager,
 ) -> tuple[RuntimePackageRelease, ...]:
-    latest: dict[str, RuntimePackageRelease] = {}
-    for release in releases:
-        latest[release.package_id] = release
-    return tuple(latest.values())
+    available = manager.inventory().available_releases
+    identities = {(item.package_id, item.version) for item in available}
+    selected: list[RuntimePackageRelease] = []
+    for package_id in sorted({item.package_id for item in available}):
+        versions = manager.catalog.versions(package_id)
+        latest = next(
+            (
+                item
+                for item in reversed(versions)
+                if (item.package_id, item.version) in identities
+            ),
+            None,
+        )
+        if latest is not None:
+            selected.append(latest)
+    return tuple(selected)
 
 
 def runtime_snapshot_identities(

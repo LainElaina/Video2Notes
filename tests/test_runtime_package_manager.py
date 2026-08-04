@@ -23,6 +23,7 @@ from video2notes.components.runtime_manager import (
     RuntimePackageBindingError,
     RuntimePackageBusyError,
     RuntimePackageManager,
+    RuntimePackageOperationError,
     RuntimePackageOwnershipError,
 )
 from video2notes.components.runtime_models import (
@@ -55,6 +56,13 @@ def host_target_triple() -> str:
     return f"{architecture}-unknown-linux-gnu"
 
 
+def incompatible_target_triple() -> str:
+    architecture = host_target_triple().split("-", maxsplit=1)[0]
+    if platform.system().casefold() == "windows":
+        return f"{architecture}-unknown-linux-gnu"
+    return f"{architecture}-pc-windows-msvc"
+
+
 @dataclass(frozen=True, slots=True)
 class PackageArtifact:
     root: Path
@@ -67,6 +75,7 @@ def build_package(
     *,
     package_id: str = "local-inference-test",
     version: str = "1.0.0",
+    target_triple: str | None = None,
     untrusted_extra_file: bool = False,
 ) -> PackageArtifact:
     package_root = parent / f"{package_id}-{version}-tree"
@@ -91,7 +100,7 @@ def build_package(
             "package_id": package_id,
             "version": version,
             "display_name": f"Test runtime {version}",
-            "target_triple": host_target_triple(),
+            "target_triple": target_triple or host_target_triple(),
             "runtime_protocol_version": 1,
             "capabilities": [
                 {
@@ -246,7 +255,7 @@ class RuntimePackageManagerTests(unittest.TestCase):
         manager = RuntimePackageManager(
             self.data_root,
             catalog=RuntimePackageCatalog(
-                releases=tuple(item.release for item in artifacts)
+                packages=tuple(item.release for item in artifacts)
             ),
             downloader=downloader or ArchiveDownloader(artifacts),  # type: ignore[arg-type]
             prober=prober or AllowingProber(),  # type: ignore[arg-type]
@@ -336,6 +345,64 @@ class RuntimePackageManagerTests(unittest.TestCase):
             reopened.operation(operation.operation_id).status,
             RuntimeOperationStatus.SUCCEEDED,
         )
+
+    def test_inventory_hides_incompatible_catalog_releases(self) -> None:
+        installed_release = build_package(
+            self.artifacts_root,
+            version="1.0.0",
+        )
+        latest_compatible = build_package(
+            self.artifacts_root,
+            version="2.0.0",
+        )
+        incompatible = build_package(
+            self.artifacts_root,
+            version="99.0.0",
+            target_triple=incompatible_target_triple(),
+        )
+        manager = self.manager((incompatible, installed_release, latest_compatible))
+        installed = manager.wait(
+            manager.install_async(
+                installed_release.release.package_id,
+                installed_release.release.version,
+            ).operation_id,
+            timeout=5,
+        )
+        assert installed.result_instance_id is not None
+
+        inventory = manager.inventory()
+        available = {
+            (item.package_id, item.version)
+            for item in inventory.available_releases
+        }
+        managed = next(
+            item for item in inventory.instances if item.instance_id == installed.result_instance_id
+        )
+
+        self.assertIn(
+            (latest_compatible.release.package_id, latest_compatible.release.version),
+            available,
+        )
+        self.assertNotIn(
+            (incompatible.release.package_id, incompatible.release.version),
+            available,
+        )
+        self.assertEqual(managed.available_version, latest_compatible.release.version)
+
+    def test_install_rejects_incompatible_release_before_download(self) -> None:
+        artifact = build_package(
+            self.artifacts_root,
+            target_triple=incompatible_target_triple(),
+        )
+        downloader = ArchiveDownloader((artifact,))
+        manager = self.manager((artifact,), downloader=downloader)
+
+        with self.assertRaisesRegex(RuntimePackageOperationError, "incompatible"):
+            manager.install_async(artifact.release.package_id, artifact.release.version)
+
+        self.assertEqual(downloader.calls, [])
+        self.assertEqual(manager.inventory().operations, ())
+        self.assertFalse(any(manager.managed_root.rglob(RUNTIME_PACKAGE_MANIFEST)))
 
     def test_install_can_bind_and_snapshot_leases_are_atomic(self) -> None:
         artifact = build_package(self.artifacts_root)
@@ -465,6 +532,32 @@ class RuntimePackageManagerTests(unittest.TestCase):
         self.assertNotIn(
             upgraded.result_instance_id,
             {item.instance_id for item in manager.inventory().instances},
+        )
+
+    def test_upgrade_rejects_incompatible_release_before_download(self) -> None:
+        first = build_package(self.artifacts_root, version="1.0.0")
+        second = build_package(
+            self.artifacts_root,
+            version="2.0.0",
+            target_triple=incompatible_target_triple(),
+        )
+        downloader = ArchiveDownloader((first, second))
+        manager = self.manager((first, second), downloader=downloader)
+        installed = manager.wait(
+            manager.install_async(first.release.package_id, first.release.version).operation_id,
+            timeout=5,
+        )
+        assert installed.result_instance_id is not None
+
+        with self.assertRaisesRegex(RuntimePackageOperationError, "incompatible"):
+            manager.upgrade_async(installed.result_instance_id, second.release.version)
+
+        self.assertEqual(
+            downloader.calls,
+            [(first.release.package_id, first.release.version)],
+        )
+        self.assertFalse(
+            (manager.managed_root / second.release.package_id / second.release.version).exists()
         )
 
     def test_changed_custom_manifest_invalidates_binding_without_deleting_files(self) -> None:

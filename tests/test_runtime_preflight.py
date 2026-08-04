@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import platform
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from video2notes.components.runtime_models import (
     FeatureAvailabilityState,
     RuntimePackageCandidate,
     RuntimePackageManifest,
+    RuntimePackageRelease,
     RuntimePackageSource,
 )
 from video2notes.components.runtime_preflight import build_runtime_preflight
@@ -29,6 +31,80 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _host_target_triple() -> str:
+    machine = platform.machine().casefold()
+    architecture = "aarch64" if machine in {"aarch64", "arm64"} else "x86_64"
+    system = platform.system().casefold()
+    if system == "windows":
+        return f"{architecture}-pc-windows-msvc"
+    if system == "darwin":
+        return f"{architecture}-apple-darwin"
+    return f"{architecture}-unknown-linux-gnu"
+
+
+def _incompatible_target_triple() -> str:
+    architecture = _host_target_triple().split("-", maxsplit=1)[0]
+    if platform.system().casefold() == "windows":
+        return f"{architecture}-unknown-linux-gnu"
+    return f"{architecture}-pc-windows-msvc"
+
+
+def _catalog_release(*, version: str, target_triple: str) -> RuntimePackageRelease:
+    package_id = "test-pdf-runtime"
+    return RuntimePackageRelease.model_validate(
+        {
+            "schema": 1,
+            "package_id": package_id,
+            "version": version,
+            "display_name": f"Test PDF runtime {version}",
+            "target_triple": target_triple,
+            "runtime_protocol_version": 1,
+            "capabilities": [
+                {
+                    "capability_id": "render.chromium_pdf",
+                    "engine_id": "test-pdf-worker",
+                    "protocol_version": 1,
+                    "transport": "worker",
+                    "entrypoint": "runtime-worker.exe",
+                    "supported_devices": ["cpu"],
+                }
+            ],
+            "archive": {
+                "file_name": f"{package_id}-{version}.zip",
+                "source_url": None,
+                "size_bytes": 100,
+                "sha256": "3" * 64,
+                "offline_only": True,
+            },
+            "installed_size_bytes": 60,
+            "files": [
+                {
+                    "relative_path": "runtime-package.json",
+                    "size_bytes": 10,
+                    "sha256": "0" * 64,
+                },
+                {
+                    "relative_path": "runtime-worker.exe",
+                    "size_bytes": 20,
+                    "sha256": "1" * 64,
+                },
+                {
+                    "relative_path": "THIRD_PARTY_NOTICES.md",
+                    "size_bytes": 30,
+                    "sha256": "2" * 64,
+                },
+            ],
+            "licenses": [
+                {
+                    "name": "Test notices",
+                    "relative_path": "THIRD_PARTY_NOTICES.md",
+                }
+            ],
+            "upstream_sources": ["https://example.invalid/test-pdf-worker"],
+        }
+    )
+
+
 def _bundled_candidate(root: Path) -> RuntimePackageCandidate:
     marker = root / "NOTICE.txt"
     marker.write_text("test runtime\n", encoding="utf-8")
@@ -38,7 +114,7 @@ def _bundled_candidate(root: Path) -> RuntimePackageCandidate:
             "package_id": "test-current-runtime",
             "version": "1.0.0",
             "display_name": "Test current runtime",
-            "target_triple": "x86_64-pc-windows-msvc",
+            "target_triple": _host_target_triple(),
             "runtime_protocol_version": 1,
             "capabilities": [
                 {
@@ -152,6 +228,47 @@ class RuntimePreflightTests(unittest.TestCase):
         self.assertEqual(visual_result.missing_optional, ("ocr.paddleocr",))
         self.assertEqual(pdf_result.state, FeatureAvailabilityState.BLOCKED)
         self.assertIn("render.chromium_pdf", pdf_result.missing_required)
+
+    def test_recommendation_selects_latest_compatible_release_from_unsorted_catalog(
+        self,
+    ) -> None:
+        latest_compatible = _catalog_release(
+            version="10.0.0",
+            target_triple=_host_target_triple(),
+        )
+        incompatible = _catalog_release(
+            version="99.0.0",
+            target_triple=_incompatible_target_triple(),
+        )
+        older_compatible = _catalog_release(
+            version="2.0.0",
+            target_triple=_host_target_triple(),
+        )
+        self.manager.catalog = RuntimePackageCatalog(
+            packages=(latest_compatible, incompatible, older_compatible)
+        )
+        request = PipelineRequest(
+            source=SourceInput.local("sample.mp4"),
+            processing_scope=ProcessingScope.AUDIO_ONLY,
+            report_spec=ReportSpec(
+                output_formats={OutputFormat.MARKDOWN, OutputFormat.PDF}
+            ),
+        )
+
+        result = asyncio.run(
+            build_runtime_preflight(
+                self.manager,
+                request,
+                source_registry=SourceRegistry.default(),
+                fallback_runtime=self.runtime,
+            )
+        )
+
+        self.assertEqual(len(result.recommended_actions), 1)
+        recommendation = result.recommended_actions[0]
+        self.assertEqual(recommendation.package_id, latest_compatible.package_id)
+        self.assertEqual(recommendation.version, latest_compatible.version)
+        self.assertNotEqual(recommendation.version, incompatible.version)
 
 
 if __name__ == "__main__":
