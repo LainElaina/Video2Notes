@@ -46,7 +46,7 @@ def main() -> int:
                 else None,
             )
             page.goto(args.base_url, wait_until="networkidle")
-            page.get_by_text("后端 0.1.0", exact=True).wait_for(timeout=15_000)
+            page.get_by_text("后端 0.2.0", exact=True).wait_for(timeout=15_000)
             page.get_by_role("button", name="新建任务", exact=True).click()
             # The processing profile is part of the source probe policy because it
             # can change the exact media format we require.  Select it before the
