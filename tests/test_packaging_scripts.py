@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+import tempfile
 import tomllib
 import unittest
+import zipfile
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -81,15 +86,24 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn("Uninstall-PythonDistribution", bootstrap)
         self.assertIn("Get-PythonDistributionVersion", bootstrap)
 
-    def test_sidecar_defaults_to_full_and_freezes_all_inference_runtimes(self) -> None:
+    def test_sidecar_supports_core_profiles_and_legacy_full_runtime(self) -> None:
         script = self.read("scripts/build_sidecar.ps1")
 
         self.assertIn('[switch]$CoreOnly', script)
-        self.assertIn('$RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }', script)
+        self.assertIn(
+            '[string]$ReleaseProfile = "legacy_full"',
+            script,
+        )
+        self.assertIn('Get-Video2NotesReleaseProfile', script)
+        self.assertIn('$BuildCoreSidecar =', script)
+        self.assertIn(
+            '$IncludedPythonComponentIds = @("yt-dlp", "psutil", "huggingface-hub")',
+            script,
+        )
         for module in ("faster_whisper", "ctranslate2", "huggingface_hub", "paddleocr"):
             self.assertIn(f'"--collect-all", "{module}"', script)
         self.assertIn('"--hidden-import", "paddle"', script)
-        self.assertIn('"--exclude-module", "huggingface_hub"', script)
+        self.assertNotIn('"--exclude-module", "huggingface_hub"', script)
         self.assertIn('callable(getattr(module, "snapshot_download", None))', script)
         self.assertNotIn('"--collect-all", "paddle"', script)
         self.assertIn('"--collect-data", "paddlex"', script)
@@ -117,6 +131,8 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('source_fingerprint_sha256 = $SourceFingerprintAfterBuild', script)
         self.assertIn('Get-Video2NotesSidecarSourceFingerprint', script)
         self.assertIn('user_model_weights_included = $false', script)
+        self.assertIn('compatible_release_profiles = if ($BuildCoreSidecar)', script)
+        self.assertIn('runtime_package_catalog = [ordered]@{', script)
         self.assertIn('Where-Object { $_.FullName -ne $BackendManifestPath }', script)
 
     def test_full_sidecar_bundles_and_verifies_nvidia_cuda_runtime(self) -> None:
@@ -215,11 +231,16 @@ class PackagingScriptContractTests(unittest.TestCase):
         script = self.read("scripts/build_portable.ps1")
 
         self.assertIn('[switch]$CoreOnly', script)
+        self.assertIn('[string]$ReleaseProfile = "legacy_full"', script)
+        self.assertIn('[string]$OfflineRuntimePackDirectory = ""', script)
+        self.assertIn('Stage-OfflineRuntimePacks', script)
         self.assertIn("cannot use a", script)
         self.assertIn('-SkipHealthSmoke', script)
-        self.assertIn('-CoreOnly:$CoreOnly', script)
+        self.assertIn('-CoreOnly:$UseCoreSidecar', script)
         self.assertIn('runtime_components = $StagedBackendManifest.components', script)
         self.assertIn('runtime_flavor = $RuntimeFlavor', script)
+        self.assertIn('release_profile = $EffectiveReleaseProfile', script)
+        self.assertIn('managed_runtime_packages = $StagedOfflineRuntimePackages', script)
         self.assertIn('ExpectedSourceFingerprint', script)
         self.assertIn('sidecar_source_fingerprint_sha256', script)
         self.assertIn('Rebuild without -ReuseSidecar', script)
@@ -265,7 +286,7 @@ class PackagingScriptContractTests(unittest.TestCase):
         )
         self.assertEqual(
             staging_validation.strip(),
-            "Assert-PortableLayout $safeStaging $RuntimeFlavor",
+            "Assert-PortableLayout $safeStaging $RuntimeFlavor $EffectiveReleaseProfile",
         )
         self.assertEqual(
             script.count("-AllowPreNvidiaFullRuntimeBackend"),
@@ -365,6 +386,8 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('scripts\\build_sidecar.ps1', script)
         self.assertIn('scripts\\pyinstaller_runtime_hook.py', script)
         self.assertIn('scripts\\sidecar_entry.py', script)
+        self.assertIn('packaging\\runtime-packs\\catalog.json', script)
+        self.assertIn('packaging\\runtime-packs\\release-profiles.json', script)
         self.assertIn('Get-Video2NotesFileSha256', script)
         self.assertIn('[IO.File]::OpenRead', script)
         self.assertNotIn('Get-FileHash', script)
@@ -386,6 +409,185 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('@("ffmpeg", "ffprobe")', script)
         self.assertIn('VIDEO2NOTES_RUNTIME_PROBE', script)
         self.assertIn('importable -ne $true', script)
+
+    def test_runtime_pack_catalog_and_release_profiles_are_explicit(self) -> None:
+        catalog = json.loads(
+            self.read("packaging/runtime-packs/catalog.json")
+        )
+        profiles = json.loads(
+            self.read("packaging/runtime-packs/release-profiles.json")
+        )
+
+        self.assertEqual(catalog["schema"], 1)
+        self.assertEqual(catalog["packages"], [])
+        runtime_catalog_module = (
+            REPOSITORY_ROOT
+            / "src"
+            / "video2notes"
+            / "components"
+            / "runtime_catalog.py"
+        )
+        if runtime_catalog_module.exists():
+            from video2notes.components.runtime_catalog import RuntimePackageCatalog
+
+            parsed_catalog = RuntimePackageCatalog.model_validate(catalog)
+            self.assertEqual(parsed_catalog.releases, ())
+        self.assertEqual(profiles["default_profile"], "core")
+        by_id = {profile["id"]: profile for profile in profiles["profiles"]}
+        self.assertEqual(
+            set(by_id),
+            {"core", "cpu", "nvidia_asr", "full_gpu", "legacy_full"},
+        )
+        for profile_id in ("core", "cpu", "nvidia_asr", "full_gpu"):
+            self.assertEqual(by_id[profile_id]["sidecar_flavor"], "core-only")
+            self.assertFalse(by_id[profile_id]["monolithic"])
+        self.assertEqual(by_id["legacy_full"]["sidecar_flavor"], "full")
+        self.assertTrue(by_id["legacy_full"]["monolithic"])
+        self.assertEqual(by_id["core"]["runtime_package_ids"], [])
+        for profile_id in ("cpu", "nvidia_asr", "full_gpu"):
+            self.assertEqual(len(by_id[profile_id]["runtime_package_ids"]), 1)
+
+    def test_runtime_pack_recipes_use_worker_protocol_and_official_sources(self) -> None:
+        recipe_root = REPOSITORY_ROOT / "packaging" / "runtime-packs" / "recipes"
+        recipe_paths = sorted(recipe_root.glob("*.json"))
+        self.assertEqual(len(recipe_paths), 3)
+        expected_capabilities = {"asr.faster_whisper", "ocr.paddleocr"}
+        for recipe_path in recipe_paths:
+            recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+            self.assertEqual(recipe["schema"], 1)
+            self.assertEqual(recipe["runtime_protocol_version"], 1)
+            self.assertEqual(
+                {item["capability_id"] for item in recipe["capabilities"]},
+                expected_capabilities,
+            )
+            for capability in recipe["capabilities"]:
+                self.assertEqual(capability["transport"], "worker")
+                self.assertEqual(capability["entrypoint"], "runtime-worker.exe")
+                self.assertEqual(capability["protocol_version"], 1)
+            for source in recipe["upstream_sources"]:
+                self.assertTrue(source.startswith("https://"))
+
+    def test_runtime_pack_scripts_never_install_python_packages_at_runtime(self) -> None:
+        build = self.read("scripts/build_runtime_pack.ps1")
+        verify = self.read("scripts/test_runtime_pack.ps1")
+
+        for forbidden in ("pip install", "--target", "PYTHONPATH", "site-packages"):
+            self.assertNotIn(forbidden, build)
+            self.assertNotIn(forbidden, verify)
+        self.assertIn("CreateFromDirectory", build)
+        self.assertIn("Get-Video2NotesFileSha256", build)
+        self.assertIn('source_url = if ($SourceUrl)', build)
+        self.assertIn('offline_only = [bool](-not $SourceUrl)', build)
+        self.assertIn("ExtractToDirectory", verify)
+        self.assertIn("ReparsePoint", build)
+        self.assertIn("ReparsePoint", verify)
+        self.assertIn('user_model_weights_included = $false', build)
+
+    @unittest.skipUnless(shutil.which("powershell"), "Windows PowerShell is required")
+    def test_tiny_offline_runtime_pack_builds_and_verifies(self) -> None:
+        build_script = REPOSITORY_ROOT / "scripts" / "build_runtime_pack.ps1"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / "payload"
+            output = root / "output"
+            (payload / "licenses").mkdir(parents=True)
+            (payload / "runtime-worker.exe").write_bytes(b"worker-placeholder")
+            (payload / "licenses" / "THIRD_PARTY_NOTICES.md").write_text(
+                "test notice\n",
+                encoding="utf-8",
+            )
+            recipe = {
+                "schema": 1,
+                "package_id": "test-runtime-win-x64",
+                "version": "1.0.0",
+                "display_name": "Test Runtime",
+                "target_triple": "x86_64-pc-windows-msvc",
+                "runtime_protocol_version": 1,
+                "capabilities": [
+                    {
+                        "capability_id": "asr.faster_whisper",
+                        "engine_id": "test-engine",
+                        "protocol_version": 1,
+                        "transport": "worker",
+                        "entrypoint": "runtime-worker.exe",
+                        "supported_devices": ["cpu"],
+                    }
+                ],
+                "licenses": [
+                    {
+                        "name": "Test notices",
+                        "relative_path": "licenses/THIRD_PARTY_NOTICES.md",
+                    }
+                ],
+                "upstream_sources": ["https://example.invalid/source"],
+            }
+            recipe_path = root / "recipe.json"
+            recipe_path.write_text(json.dumps(recipe), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(build_script),
+                    "-RecipePath",
+                    str(recipe_path),
+                    "-PayloadRoot",
+                    str(payload),
+                    "-OutputDirectory",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            archives = list(output.glob("*.zip"))
+            entries = list(output.glob("*.zip.catalog-entry.json"))
+            self.assertEqual(len(archives), 1)
+            self.assertEqual(len(entries), 1)
+            entry = json.loads(entries[0].read_text(encoding="utf-8"))
+            self.assertTrue(entry["archive"]["offline_only"])
+            self.assertIsNone(entry["archive"]["source_url"])
+            self.assertGreater(entry["archive"]["size_bytes"], 0)
+            self.assertGreater(entry["installed_size_bytes"], 0)
+            runtime_models_module = (
+                REPOSITORY_ROOT
+                / "src"
+                / "video2notes"
+                / "components"
+                / "runtime_models.py"
+            )
+            if runtime_models_module.exists():
+                from video2notes.components.runtime_catalog import RuntimePackageCatalog
+                from video2notes.components.runtime_models import (
+                    RUNTIME_PACKAGE_MANIFEST,
+                    RuntimePackageManifest,
+                    RuntimePackageRelease,
+                )
+
+                release = RuntimePackageRelease.model_validate(entry)
+                catalog = RuntimePackageCatalog.model_validate(
+                    {
+                        "schema": 1,
+                        "catalog_id": "test-catalog",
+                        "target_triple": entry["target_triple"],
+                        "runtime_protocol_version": entry["runtime_protocol_version"],
+                        "packages": [entry],
+                    }
+                )
+                with zipfile.ZipFile(archives[0]) as archive:
+                    manifest = RuntimePackageManifest.model_validate_json(
+                        archive.read(RUNTIME_PACKAGE_MANIFEST)
+                    )
+                self.assertEqual(release.package_id, manifest.package_id)
+                self.assertEqual(release.version, manifest.version)
+                self.assertEqual(catalog.releases, (release,))
 
     def test_generated_data_cleanup_is_dry_run_first_and_protects_deliverables(self) -> None:
         script = self.read("scripts/cleanup_generated.ps1")

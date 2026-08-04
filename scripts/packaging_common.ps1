@@ -20,6 +20,39 @@ function Get-Video2NotesFileSha256 {
     }
 }
 
+function Get-Video2NotesReleaseProfile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$ProfileId
+    )
+
+    $catalogPath = Join-Path `
+        ([IO.Path]::GetFullPath($RepositoryRoot)) `
+        "packaging\runtime-packs\release-profiles.json"
+    if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) {
+        throw "Release profile catalog was not found at '$catalogPath'."
+    }
+    $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
+    if ($catalog.schema -ne 1 -or -not $catalog.profiles) {
+        throw "Release profile catalog '$catalogPath' is unsupported or empty."
+    }
+    $matches = @($catalog.profiles | Where-Object { $_.id -eq $ProfileId })
+    if ($matches.Count -ne 1) {
+        throw "Release profile '$ProfileId' must resolve to exactly one catalog entry."
+    }
+    $profile = $matches[0]
+    if ($profile.sidecar_flavor -notin @("core-only", "full")) {
+        throw "Release profile '$ProfileId' has an unsupported sidecar flavor."
+    }
+    if ($null -eq $profile.runtime_package_ids) {
+        throw "Release profile '$ProfileId' does not declare runtime_package_ids."
+    }
+    return $profile
+}
+
 function Get-Video2NotesSidecarSourceFingerprint {
     [CmdletBinding()]
     param(
@@ -45,6 +78,8 @@ function Get-Video2NotesSidecarSourceFingerprint {
     )
     $packagingFiles = @(
         "pyproject.toml",
+        "packaging\runtime-packs\catalog.json",
+        "packaging\runtime-packs\release-profiles.json",
         "scripts\build_sidecar.ps1",
         "scripts\packaging_common.ps1",
         "scripts\pyinstaller_runtime_hook.py",

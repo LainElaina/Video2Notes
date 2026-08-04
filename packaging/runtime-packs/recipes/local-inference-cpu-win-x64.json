@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "package_id": "local-inference-cpu-win-x64",
+  "version": "0.1.0-dev",
+  "display_name": "Local Inference CPU",
+  "target_triple": "x86_64-pc-windows-msvc",
+  "runtime_protocol_version": 1,
+  "capabilities": [
+    {
+      "capability_id": "asr.faster_whisper",
+      "engine_id": "faster-whisper",
+      "protocol_version": 1,
+      "transport": "worker",
+      "entrypoint": "runtime-worker.exe",
+      "supported_devices": [
+        "cpu"
+      ]
+    },
+    {
+      "capability_id": "ocr.paddleocr",
+      "engine_id": "paddleocr",
+      "protocol_version": 1,
+      "transport": "worker",
+      "entrypoint": "runtime-worker.exe",
+      "supported_devices": [
+        "cpu"
+      ]
+    }
+  ],
+  "licenses": [
+    {
+      "name": "Runtime pack third-party notices",
+      "relative_path": "licenses/THIRD_PARTY_NOTICES.md"
+    }
+  ],
+  "allowed_runtime_assets": [
+    "_internal/faster_whisper/assets/silero_vad_v6.onnx"
+  ],
+  "upstream_sources": [
+    "https://github.com/SYSTRAN/faster-whisper",
+    "https://github.com/OpenNMT/CTranslate2",
+    "https://github.com/PaddlePaddle/PaddleOCR",
+    "https://github.com/PaddlePaddle/Paddle"
+  ]
+}

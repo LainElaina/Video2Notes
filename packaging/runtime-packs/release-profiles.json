@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "default_profile": "core",
+  "legacy_compatibility_profile": "legacy_full",
+  "profiles": [
+    {
+      "id": "core",
+      "display_name": "Core",
+      "sidecar_flavor": "core-only",
+      "runtime_package_ids": [],
+      "offline": false,
+      "monolithic": false,
+      "estimated_extracted_bytes_min": 429496730,
+      "estimated_extracted_bytes_max": 644245094,
+      "description": "小体积主程序；本地推理运行时按需安装。"
+    },
+    {
+      "id": "cpu",
+      "display_name": "CPU Offline",
+      "sidecar_flavor": "core-only",
+      "runtime_package_ids": [
+        "local-inference-cpu-win-x64"
+      ],
+      "offline": true,
+      "monolithic": false,
+      "estimated_extracted_bytes_min": 1932735283,
+      "estimated_extracted_bytes_max": 2469606195,
+      "description": "Core 加可移除的 CPU ASR/OCR 离线运行时包。"
+    },
+    {
+      "id": "nvidia_asr",
+      "display_name": "NVIDIA ASR Offline",
+      "sidecar_flavor": "core-only",
+      "runtime_package_ids": [
+        "local-inference-nvidia-asr-cu129-win-x64"
+      ],
+      "offline": true,
+      "monolithic": false,
+      "estimated_extracted_bytes_min": 4080218931,
+      "estimated_extracted_bytes_max": 4617089843,
+      "description": "Core 加 CUDA ASR、CPU OCR 的可移除离线运行时包。"
+    },
+    {
+      "id": "full_gpu",
+      "display_name": "Full GPU Offline",
+      "sidecar_flavor": "core-only",
+      "runtime_package_ids": [
+        "local-inference-nvidia-full-cu129-win-x64"
+      ],
+      "offline": true,
+      "monolithic": false,
+      "estimated_extracted_bytes_min": 5153960755,
+      "estimated_extracted_bytes_max": 5690831667,
+      "description": "Core 加 CUDA ASR/OCR 的可移除离线运行时包。"
+    },
+    {
+      "id": "legacy_full",
+      "display_name": "Legacy Monolithic Full",
+      "sidecar_flavor": "full",
+      "runtime_package_ids": [],
+      "offline": true,
+      "monolithic": true,
+      "estimated_extracted_bytes_min": 5368709120,
+      "estimated_extracted_bytes_max": 5905580032,
+      "description": "兼容现有 5.165 GiB 单体便携版；不能单独移除内嵌推理库。"
+    }
+  ]
+}

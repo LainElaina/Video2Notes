@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "packaging_common.ps1")
 if (-not $Executable) {
     $Executable = Join-Path $RepoRoot "apps\desktop\src-tauri\resources\backend\video2notes.exe"
 }
@@ -89,6 +90,15 @@ if ($Manifest.schema -ne 2 -or $Manifest.runtime_flavor -ne $ExpectedRuntimeFlav
 if ($Manifest.user_model_weights_included -ne $false) {
     throw "The backend manifest does not explicitly exclude user model weights."
 }
+if (-not $Manifest.compatible_release_profiles -or -not $Manifest.runtime_package_catalog) {
+    throw "The backend manifest does not declare release-profile or runtime-package compatibility."
+}
+$RuntimeCatalogPath = Join-Path $BackendRoot ([string]$Manifest.runtime_package_catalog.relative_path -replace "/", "\")
+Require-File $RuntimeCatalogPath "Trusted runtime package catalog"
+$RuntimeCatalogHash = (Get-Video2NotesFileSha256 -Path $RuntimeCatalogPath).ToLowerInvariant()
+if ($RuntimeCatalogHash -ne ([string]$Manifest.runtime_package_catalog.sha256).ToLowerInvariant()) {
+    throw "The trusted runtime package catalog hash differs from the backend manifest."
+}
 
 $NvidiaRuntimeSpecs = @(
     [ordered]@{ id = "nvidia-cublas-cu12"; directory = "cublas"; dll = "cublas64_12.dll" },
@@ -107,10 +117,10 @@ if (-not $CoreOnly -and $PaddleComponent.distribution -eq "paddlepaddle-gpu") {
     )
 }
 $FullInferenceIds = @(
-    "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle"
+    "faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle"
     $NvidiaRuntimeSpecs | ForEach-Object { [string]$_.id }
 )
-$RequiredPythonIds = @("yt-dlp", "psutil")
+$RequiredPythonIds = @("yt-dlp", "psutil", "huggingface-hub")
 if (-not $CoreOnly) { $RequiredPythonIds += $FullInferenceIds }
 foreach ($componentId in $RequiredPythonIds) {
     $component = Get-ManifestComponent $Manifest $componentId

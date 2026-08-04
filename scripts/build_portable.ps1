@@ -3,9 +3,13 @@ param(
     # Reuse the already frozen canonical sidecar for faster UI/Rust iteration.
     # Its complete manifest is still verified before it enters the portable tree.
     [switch]$ReuseSidecar,
-    # Development-only fast path. Default portable output always includes the
-    # complete ASR/OCR inference runtime.
+    [ValidateSet("core", "cpu", "nvidia_asr", "full_gpu", "legacy_full")]
+    [string]$ReleaseProfile = "legacy_full",
+    # Backward-compatible alias for existing development commands.
     [switch]$CoreOnly,
+    # Directory containing ZIP + .zip.catalog-entry.json pairs created by
+    # build_runtime_pack.ps1 for an offline release profile.
+    [string]$OfflineRuntimePackDirectory = "",
     [switch]$SkipSidecarSmoke,
     [switch]$Zip,
     # Keep the immediately previous portable directory after a successful
@@ -31,7 +35,20 @@ $PortableBackup = Join-Path $PortableParent (
         [guid]::NewGuid().ToString("N")
 )
 $PortableMarkerName = ".video2notes-portable.json"
-$RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }
+$EffectiveReleaseProfile = if ($CoreOnly) { "core" } else { $ReleaseProfile }
+if (
+    $CoreOnly -and
+    $PSBoundParameters.ContainsKey("ReleaseProfile") -and
+    $ReleaseProfile -ne "core"
+) {
+    throw "-CoreOnly is an alias for -ReleaseProfile core and cannot be combined with '$ReleaseProfile'."
+}
+$ReleaseProfileDefinition = Get-Video2NotesReleaseProfile $RepoRoot $EffectiveReleaseProfile
+$UseCoreSidecar = $ReleaseProfileDefinition.sidecar_flavor -eq "core-only"
+$RuntimeFlavor = [string]$ReleaseProfileDefinition.sidecar_flavor
+$ExpectedRuntimePackageIds = @(
+    $ReleaseProfileDefinition.runtime_package_ids | ForEach-Object { [string]$_ }
+)
 
 function Assert-LastExitCode {
     param([string]$Step)
@@ -45,6 +62,95 @@ function Require-File {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "$Purpose was not found at '$Path'."
     }
+}
+
+function Write-JsonFile {
+    param([string]$Path, [object]$Value)
+    $json = $Value | ConvertTo-Json -Depth 12
+    [IO.File]::WriteAllText($Path, "$json`n", [Text.UTF8Encoding]::new($false))
+}
+
+function Stage-OfflineRuntimePacks {
+    param(
+        [AllowEmptyString()][string]$SourceDirectory,
+        [string]$DestinationDirectory,
+        [string]$ProfileId,
+        [string[]]$ExpectedPackageIds
+    )
+
+    New-Item -ItemType Directory -Path $DestinationDirectory | Out-Null
+    $offlineRoot = Join-Path $DestinationDirectory "offline"
+    New-Item -ItemType Directory -Path $offlineRoot | Out-Null
+    $trustedCatalog = Join-Path $RepoRoot "packaging\runtime-packs\catalog.json"
+    $releaseProfiles = Join-Path $RepoRoot "packaging\runtime-packs\release-profiles.json"
+    Require-File $trustedCatalog "Trusted runtime package catalog"
+    Require-File $releaseProfiles "Runtime release profile catalog"
+    Copy-Item -LiteralPath $trustedCatalog -Destination (Join-Path $DestinationDirectory "catalog.json")
+    Copy-Item -LiteralPath $releaseProfiles -Destination (Join-Path $DestinationDirectory "release-profiles.json")
+
+    if ($ExpectedPackageIds.Count -eq 0) {
+        if ($SourceDirectory) {
+            throw "Release profile '$ProfileId' does not accept offline runtime pack archives."
+        }
+        $entries = @()
+    }
+    else {
+        if (-not $SourceDirectory) {
+            throw "Release profile '$ProfileId' requires an -OfflineRuntimePackDirectory containing: $($ExpectedPackageIds -join ', ')."
+        }
+        $resolvedSource = [IO.Path]::GetFullPath($SourceDirectory)
+        if (-not (Test-Path -LiteralPath $resolvedSource -PathType Container)) {
+            throw "Offline runtime pack directory was not found at '$resolvedSource'."
+        }
+        $entryFiles = @(Get-ChildItem -LiteralPath $resolvedSource -Filter "*.zip.catalog-entry.json" -File)
+        $entries = @(
+            foreach ($entryFile in $entryFiles) {
+                $entry = Get-Content -LiteralPath $entryFile.FullName -Raw | ConvertFrom-Json
+                if ($entry.schema -ne 1 -or -not $entry.package_id -or -not $entry.archive.file_name) {
+                    throw "Offline runtime catalog entry '$($entryFile.FullName)' is unsupported."
+                }
+                $archiveFileName = [string]$entry.archive.file_name
+                if ($archiveFileName -ne [IO.Path]::GetFileName($archiveFileName)) {
+                    throw "Offline runtime catalog entry '$($entryFile.FullName)' contains an unsafe archive filename."
+                }
+                $archivePath = Join-Path $resolvedSource $archiveFileName
+                Require-File $archivePath "Offline runtime pack archive"
+                & (Join-Path $PSScriptRoot "test_runtime_pack.ps1") `
+                    -ArchivePath $archivePath `
+                    -CatalogEntryPath $entryFile.FullName
+                Copy-Item -LiteralPath $archivePath -Destination (Join-Path $offlineRoot ([IO.Path]::GetFileName($archivePath)))
+                Copy-Item -LiteralPath $entryFile.FullName -Destination (Join-Path $offlineRoot $entryFile.Name)
+                $entry
+            }
+        )
+        $actualIds = @($entries | ForEach-Object { [string]$_.package_id })
+        $duplicateIds = @(
+            $actualIds | Group-Object | Where-Object { $_.Count -ne 1 } | ForEach-Object { $_.Name }
+        )
+        $missingIds = @($ExpectedPackageIds | Where-Object { $_ -notin $actualIds })
+        $unexpectedIds = @($actualIds | Where-Object { $_ -notin $ExpectedPackageIds })
+        if ($duplicateIds.Count -gt 0 -or $missingIds.Count -gt 0 -or $unexpectedIds.Count -gt 0) {
+            throw "Offline runtime pack set does not match release profile '$ProfileId'. Missing: $($missingIds -join ', '); unexpected: $($unexpectedIds -join ', '); duplicate: $($duplicateIds -join ', ')."
+        }
+    }
+
+    $offlineCatalog = [ordered]@{
+        schema = 1
+        release_profile = $ProfileId
+        packages = @($entries)
+    }
+    Write-JsonFile (Join-Path $DestinationDirectory "offline-catalog.json") $offlineCatalog
+    return @(
+        $entries | ForEach-Object {
+            [ordered]@{
+                package_id = [string]$_.package_id
+                version = [string]$_.version
+                archive_file_name = [string]$_.archive.file_name
+                archive_size_bytes = [long]$_.archive.size_bytes
+                installed_size_bytes = [long]$_.installed_size_bytes
+            }
+        }
+    )
 }
 
 function Assert-ManagedPortablePath {
@@ -119,6 +225,7 @@ function Assert-BackendManifest {
     param(
         [string]$BackendRoot,
         [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
+        [AllowEmptyString()][string]$ExpectedReleaseProfile = "",
         [AllowEmptyString()][string]$ExpectedSourceFingerprint = "",
         [switch]$AllowLegacy,
         [switch]$AllowPreNvidiaFullRuntime
@@ -138,7 +245,13 @@ function Assert-BackendManifest {
             throw "The frozen backend manifest has an invalid runtime flavor."
         }
         if ($ExpectedRuntimeFlavor -and $manifest.runtime_flavor -ne $ExpectedRuntimeFlavor) {
-            throw "Portable runtime '$ExpectedRuntimeFlavor' cannot use a '$($manifest.runtime_flavor)' sidecar. Rebuild it or pass the matching -CoreOnly option."
+            throw "Portable runtime '$ExpectedRuntimeFlavor' cannot use a '$($manifest.runtime_flavor)' sidecar. Rebuild it for the selected -ReleaseProfile."
+        }
+        if (
+            $ExpectedReleaseProfile -and
+            $ExpectedReleaseProfile -notin @($manifest.compatible_release_profiles)
+        ) {
+            throw "Frozen backend is not compatible with release profile '$ExpectedReleaseProfile'."
         }
         if (
             $ExpectedSourceFingerprint -and
@@ -154,7 +267,7 @@ function Assert-BackendManifest {
             throw "The frozen backend manifest does not explicitly exclude user model weights."
         }
         $baseFullInferenceIds = @(
-            "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle"
+            "faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle"
         )
         $ctranslateNvidiaInferenceIds = @(
             "nvidia-cublas-cu12",
@@ -202,7 +315,7 @@ function Assert-BackendManifest {
                     Where-Object { $_.id -in $nvidiaInferenceIds }
             ).Count -eq 0
         )
-        $requiredIds = @("yt-dlp", "psutil", "ffmpeg", "ffprobe")
+        $requiredIds = @("yt-dlp", "psutil", "huggingface-hub", "ffmpeg", "ffprobe")
         if ($manifest.runtime_flavor -eq "full") {
             $requiredIds += $baseFullInferenceIds
             $requiredIds += $requiredNvidiaInferenceIds
@@ -348,6 +461,7 @@ function Assert-PortableLayout {
     param(
         [string]$PortableRoot,
         [AllowEmptyString()][string]$ExpectedRuntimeFlavor = "",
+        [AllowEmptyString()][string]$ExpectedReleaseProfile = "",
         [switch]$AllowLegacyBackend,
         [switch]$AllowPreNvidiaFullRuntimeBackend
     )
@@ -356,6 +470,7 @@ function Assert-PortableLayout {
         "backend",
         "demo",
         "licenses",
+        "runtime-packs",
         $PortableMarkerName,
         "BUILD_INFO.json",
         "PORTABLE_README.txt",
@@ -380,6 +495,22 @@ function Assert-PortableLayout {
             throw "Portable resource directory '$directoryName' is missing."
         }
     }
+    $runtimePacksRoot = Join-Path $PortableRoot "runtime-packs"
+    if (Test-Path -LiteralPath $runtimePacksRoot -PathType Container) {
+        foreach ($metadataName in @("catalog.json", "release-profiles.json", "offline-catalog.json")) {
+            Require-File (Join-Path $runtimePacksRoot $metadataName) "Portable runtime package metadata"
+        }
+        $offlineCatalog = Get-Content -LiteralPath (Join-Path $runtimePacksRoot "offline-catalog.json") -Raw | ConvertFrom-Json
+        if (
+            $offlineCatalog.schema -ne 1 -or
+            ($ExpectedReleaseProfile -and $offlineCatalog.release_profile -ne $ExpectedReleaseProfile)
+        ) {
+            throw "Portable offline runtime package catalog does not match the release profile."
+        }
+    }
+    elseif (-not $AllowLegacyBackend) {
+        throw "Portable runtime-packs directory is missing."
+    }
 
     $demoEntries = @(Get-ChildItem -LiteralPath (Join-Path $PortableRoot "demo") -Recurse -Force)
     if (
@@ -402,6 +533,7 @@ function Assert-PortableLayout {
     $null = Assert-BackendManifest `
         (Join-Path $PortableRoot "backend") `
         $ExpectedRuntimeFlavor `
+        $ExpectedReleaseProfile `
         -AllowLegacy:$AllowLegacyBackend `
         -AllowPreNvidiaFullRuntime:$AllowPreNvidiaFullRuntimeBackend
 }
@@ -472,9 +604,8 @@ function Assert-PortableChecksums {
 Push-Location $RepoRoot
 try {
     if (-not $ReuseSidecar) {
-        $sidecarArguments = @()
+        $sidecarArguments = @("-ReleaseProfile", $EffectiveReleaseProfile)
         if ($SkipSidecarSmoke) { $sidecarArguments += "-SkipSmoke" }
-        if ($CoreOnly) { $sidecarArguments += "-CoreOnly" }
         if ($FfmpegDirectory) { $sidecarArguments += @("-FfmpegDirectory", $FfmpegDirectory) }
         if ($FfmpegLicensePath) { $sidecarArguments += @("-FfmpegLicensePath", $FfmpegLicensePath) }
         & (Join-Path $PSScriptRoot "build_sidecar.ps1") @sidecarArguments
@@ -488,6 +619,7 @@ try {
     $null = Assert-BackendManifest `
         $CanonicalBackendRoot `
         $RuntimeFlavor `
+        $EffectiveReleaseProfile `
         -ExpectedSourceFingerprint $ExpectedSidecarSourceFingerprint
 
     if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
@@ -513,14 +645,22 @@ try {
     Copy-Item -LiteralPath (Join-Path $RepoRoot "samples\evidence-demo.mp4") -Destination (Join-Path $safeStaging "demo\evidence-demo.mp4")
     Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination (Join-Path $safeStaging "licenses\VIDEO2NOTES_LICENSE.txt")
     Copy-Item -LiteralPath (Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $safeStaging "licenses\THIRD_PARTY_NOTICES.md")
+    $StagedOfflineRuntimePackages = @(
+        Stage-OfflineRuntimePacks `
+            -SourceDirectory $OfflineRuntimePackDirectory `
+            -DestinationDirectory (Join-Path $safeStaging "runtime-packs") `
+            -ProfileId $EffectiveReleaseProfile `
+            -ExpectedPackageIds $ExpectedRuntimePackageIds
+    )
 
     $StagedBackendManifest = Assert-BackendManifest `
         (Join-Path $safeStaging "backend") `
         $RuntimeFlavor `
+        $EffectiveReleaseProfile `
         -ExpectedSourceFingerprint $ExpectedSidecarSourceFingerprint
     & (Join-Path $PSScriptRoot "test_sidecar.ps1") `
         -Executable (Join-Path $safeStaging "backend\video2notes.exe") `
-        -CoreOnly:$CoreOnly `
+        -CoreOnly:$UseCoreSidecar `
         -SkipHealthSmoke
     Assert-LastExitCode "Validating the portable backend runtime imports and bundled tools"
     Assert-NoPrivatePayload $safeStaging
@@ -547,6 +687,8 @@ try {
         portable = $true
         sidecar_reused = [bool]$ReuseSidecar
         runtime_flavor = $RuntimeFlavor
+        release_profile = $EffectiveReleaseProfile
+        managed_runtime_packages = $StagedOfflineRuntimePackages
         sidecar_source_fingerprint_sha256 = $ExpectedSidecarSourceFingerprint
         user_model_weights_included = $false
         packaged_runtime_assets = $StagedBackendManifest.packaged_runtime_assets
@@ -560,9 +702,10 @@ try {
         product = "Video2Notes"
         portable = $true
         runtime_flavor = $RuntimeFlavor
+        release_profile = $EffectiveReleaseProfile
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $safeStaging $PortableMarkerName) -Encoding utf8
 
-    $StagedPaddleDistribution = if ($CoreOnly) {
+    $StagedPaddleDistribution = if ($UseCoreSidecar) {
         ""
     }
     else {
@@ -571,8 +714,17 @@ try {
                 Where-Object { $_.id -eq "paddlepaddle" }
         )[0].distribution
     }
-    $PortableRuntimeNote = if ($CoreOnly) {
-        "这是仅供开发快速迭代的 core-only 构建，不包含本地 faster-whisper/PaddleOCR 推理运行时。"
+    $PortableRuntimeNote = if ($EffectiveReleaseProfile -eq "core") {
+        "这是小体积 Core 构建；模型下载能力保留，本地 ASR/OCR 推理运行时由应用按需安装。"
+    }
+    elseif ($EffectiveReleaseProfile -eq "cpu") {
+        "这是 CPU 离线构建；附带的 CPU ASR/OCR ZIP 使用与在线安装相同的受管运行时包格式。"
+    }
+    elseif ($EffectiveReleaseProfile -eq "nvidia_asr") {
+        "这是 NVIDIA ASR 离线构建；CUDA ASR 与 CPU OCR 运行时作为可升级、可移除的受管包提供。"
+    }
+    elseif ($EffectiveReleaseProfile -eq "full_gpu") {
+        "这是 Full GPU 离线构建；CUDA ASR/OCR 运行时作为可升级、可移除的受管包提供。"
     }
     elseif ($StagedPaddleDistribution -eq "paddlepaddle-gpu") {
         "这是默认 full GPU 构建，已经包含本地 faster-whisper、CTranslate2、PaddleOCR、PaddlePaddle GPU 与完整 NVIDIA CUDA 12.9 推理运行库。"
@@ -581,21 +733,22 @@ try {
         "这是默认 full CPU OCR 构建，已经包含本地 faster-whisper、CTranslate2、PaddleOCR、PaddlePaddle CPU 与 ASR 所需的 NVIDIA CUDA 12.9 运行库。"
     }
     @"
-Video2Notes 免安装版（runtime=$RuntimeFlavor）
+Video2Notes 免安装版（profile=$EffectiveReleaseProfile; runtime=$RuntimeFlavor）
 
-直接双击 Video2Notes.exe。backend、demo、licenses 三个目录必须与主程序一起保留。
+直接双击 Video2Notes.exe。backend、demo、licenses、runtime-packs 四个目录必须与主程序一起保留。
 本版本不会创建安装项或卸载项。任务、配置和 WebView 状态默认保存在 Windows 用户 AppData，
 因此覆盖 current 程序目录不会删除既有任务。API 密钥仍保存在 Windows Credential Manager。
 $PortableRuntimeNote
-用户无需安装 Python、FFmpeg、yt-dlp 或推理 Python 包。ASR/OCR 的具体模型权重不随程序分发，
-后续由应用内模型管理器负责下载、校验、选择和复用。
+用户无需手动安装 Python、FFmpeg、yt-dlp 或推理 Python 包。受管运行时和 ASR/OCR 模型权重
+由应用负责显示来源与大小、下载、校验、安装、绑定、升级和移除。
 
-完整构建：.\scripts\build_portable.ps1
+兼容单体构建：.\scripts\build_portable.ps1 -ReleaseProfile legacy_full
+小体积 Core：.\scripts\build_portable.ps1 -ReleaseProfile core
 快速复用后端：.\scripts\build_portable.ps1 -ReuseSidecar（仅当前 Python/打包源码指纹一致时允许）
-开发 core-only：.\scripts\build_portable.ps1 -CoreOnly
+旧命令别名：.\scripts\build_portable.ps1 -CoreOnly
 "@ | Set-Content -LiteralPath (Join-Path $safeStaging "PORTABLE_README.txt") -Encoding utf8
     Write-Sha256Sums $safeStaging
-    Assert-PortableLayout $safeStaging $RuntimeFlavor
+    Assert-PortableLayout $safeStaging $RuntimeFlavor $EffectiveReleaseProfile
     Assert-PortableChecksums $safeStaging
 
     Assert-PortableNotRunning $PortableCurrent
@@ -622,7 +775,7 @@ $PortableRuntimeNote
             Assert-NoPrivatePayload $safeBackup
         }
         Move-Item -LiteralPath $safeStaging -Destination $safeCurrent
-        Assert-PortableLayout $safeCurrent $RuntimeFlavor
+        Assert-PortableLayout $safeCurrent $RuntimeFlavor $EffectiveReleaseProfile
         Assert-PortableChecksums $safeCurrent
         Assert-NoPrivatePayload $safeCurrent
     }
@@ -662,7 +815,7 @@ $PortableRuntimeNote
     }
 
     $portableBytes = (Get-ChildItem -LiteralPath $safeCurrent -Recurse -File | Measure-Object -Property Length -Sum).Sum
-    Write-Host ("Portable app is ready: {0} ({1:N1} MiB; runtime={2})" -f (Join-Path $safeCurrent "Video2Notes.exe"), ($portableBytes / 1MB), $RuntimeFlavor) -ForegroundColor Green
+    Write-Host ("Portable app is ready: {0} ({1:N1} MiB; profile={2}; runtime={3})" -f (Join-Path $safeCurrent "Video2Notes.exe"), ($portableBytes / 1MB), $EffectiveReleaseProfile, $RuntimeFlavor) -ForegroundColor Green
 }
 catch {
     if (Test-Path -LiteralPath $PortableStaging -PathType Container) {

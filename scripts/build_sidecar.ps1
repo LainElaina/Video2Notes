@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$SkipSmoke,
-    # Development escape hatch only. Release and portable builds default to the
-    # complete local ASR/OCR runtime.
+    [ValidateSet("core", "cpu", "nvidia_asr", "full_gpu", "legacy_full")]
+    [string]$ReleaseProfile = "legacy_full",
+    # Backward-compatible alias for existing development commands.
     [switch]$CoreOnly,
     [string]$FfmpegDirectory = "",
     [string]$FfmpegLicensePath = ""
@@ -15,13 +16,26 @@ $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $DesktopTauriRoot = Join-Path $RepoRoot "apps\desktop\src-tauri"
 $ResourceRoot = Join-Path $DesktopTauriRoot "resources\backend"
 $ToolRoot = Join-Path $ResourceRoot "tools"
+$RuntimePackageMetadataRoot = Join-Path $ResourceRoot "runtime-packs"
+$TrustedRuntimeCatalogPath = Join-Path $RepoRoot "packaging\runtime-packs\catalog.json"
+$ReleaseProfilesPath = Join-Path $RepoRoot "packaging\runtime-packs\release-profiles.json"
 $BuildRoot = Join-Path $RepoRoot "artifacts\build\sidecar"
 $DistRoot = Join-Path $BuildRoot "dist"
 $SpecRoot = Join-Path $BuildRoot "spec"
 $WorkRoot = Join-Path $BuildRoot "work"
 $SidecarPath = Join-Path $ResourceRoot "video2notes.exe"
 $BackendManifestPath = Join-Path $ResourceRoot "manifest.json"
-$RuntimeFlavor = if ($CoreOnly) { "core-only" } else { "full" }
+$EffectiveReleaseProfile = if ($CoreOnly) { "core" } else { $ReleaseProfile }
+if (
+    $CoreOnly -and
+    $PSBoundParameters.ContainsKey("ReleaseProfile") -and
+    $ReleaseProfile -ne "core"
+) {
+    throw "-CoreOnly is an alias for -ReleaseProfile core and cannot be combined with '$ReleaseProfile'."
+}
+$ReleaseProfileDefinition = Get-Video2NotesReleaseProfile $RepoRoot $EffectiveReleaseProfile
+$BuildCoreSidecar = $ReleaseProfileDefinition.sidecar_flavor -eq "core-only"
+$RuntimeFlavor = [string]$ReleaseProfileDefinition.sidecar_flavor
 $SourceFingerprintBeforeBuild = Get-Video2NotesSidecarSourceFingerprint $RepoRoot
 $PythonComponentSpecs = @(
     [ordered]@{ id = "yt-dlp"; distribution = "yt-dlp"; module = "yt_dlp" },
@@ -43,10 +57,10 @@ $PythonComponentSpecs = @(
     [ordered]@{ id = "nvidia-cusparse-cu12"; distribution = "nvidia-cusparse-cu12"; module = "nvidia.cusparse"; runtime_directory = "cusparse"; sentinel_dll = "cusparse64_12.dll" },
     [ordered]@{ id = "nvidia-nvjitlink-cu12"; distribution = "nvidia-nvjitlink-cu12"; module = "nvidia.nvjitlink"; runtime_directory = "nvjitlink"; sentinel_dll = "nvJitLink_120_0.dll" }
 )
-$IncludedPythonComponentIds = @("yt-dlp", "psutil")
-if (-not $CoreOnly) {
+$IncludedPythonComponentIds = @("yt-dlp", "psutil", "huggingface-hub")
+if (-not $BuildCoreSidecar) {
     $IncludedPythonComponentIds += @(
-        "faster-whisper", "ctranslate2", "huggingface-hub", "paddleocr", "paddlepaddle",
+        "faster-whisper", "ctranslate2", "paddleocr", "paddlepaddle",
         "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu12", "nvidia-cudnn-cu12",
         "nvidia-nvjitlink-cu12"
     )
@@ -165,7 +179,7 @@ print(json.dumps(inventory, separators=(",", ":")))
             if ($_.selection_error) { "$($_.id): $($_.selection_error)" }
             else { "$($_.id) ($($_.module))" }
         }
-        throw "Runtime flavor '$RuntimeFlavor' requires one coherent set of installed packages in .venv: $($details -join ', '). Run .\scripts\bootstrap.ps1 -WithAsr with either -WithOcr or -WithOcrGpu before a full release build, or pass -CoreOnly only for fast development iteration."
+        throw "Release profile '$EffectiveReleaseProfile' requires one coherent set of installed packages in .venv: $($details -join ', '). Prepare the matching build environment before freezing this sidecar."
     }
     return $inventory
 }
@@ -299,17 +313,19 @@ if (-not (Test-Path -LiteralPath $VenvPython)) {
     throw "Python environment is missing. Run .\scripts\bootstrap.ps1 first."
 }
 Require-File (Join-Path $DesktopTauriRoot "tauri.conf.json") "Tauri configuration"
+Require-File $TrustedRuntimeCatalogPath "Trusted runtime package catalog"
+Require-File $ReleaseProfilesPath "Runtime release profile catalog"
 & $VenvPython -c "import PyInstaller"
 Assert-LastExitCode "Checking the pinned PyInstaller build dependency"
 $PythonInventory = @(
     Get-PythonRuntimeInventory $VenvPython $PythonComponentSpecs $IncludedPythonComponentIds
 )
 $PaddleInventory = @($PythonInventory | Where-Object { $_.id -eq "paddlepaddle" })
-if (-not $CoreOnly -and $PaddleInventory.Count -ne 1) {
+if (-not $BuildCoreSidecar -and $PaddleInventory.Count -ne 1) {
     throw "The full runtime inventory did not resolve exactly one PaddlePaddle component."
 }
-$PaddleDistribution = if ($CoreOnly) { "paddlepaddle" } else { [string]$PaddleInventory[0].distribution }
-if (-not $CoreOnly -and $PaddleDistribution -eq "paddlepaddle-gpu") {
+$PaddleDistribution = if ($BuildCoreSidecar) { "" } else { [string]$PaddleInventory[0].distribution }
+if (-not $BuildCoreSidecar -and $PaddleDistribution -eq "paddlepaddle-gpu") {
     $IncludedPythonComponentIds += @(
         "nvidia-cuda-runtime-cu12", "nvidia-cufft-cu12", "nvidia-curand-cu12",
         "nvidia-cusolver-cu12", "nvidia-cusparse-cu12"
@@ -326,7 +342,7 @@ $IncludedNvidiaRuntimeComponents = @(
     }
 )
 $PaddleMetadataDistributions = @()
-if (-not $CoreOnly) {
+if (-not $BuildCoreSidecar) {
     $PaddleMetadataDistributions = @(Get-PaddleMetadataDistributions $VenvPython)
 }
 $FfmpegSource = Get-ToolDirectory $FfmpegDirectory
@@ -415,16 +431,19 @@ $PyInstallerArguments = @(
     "--collect-all", "yt_dlp",
     "--copy-metadata", "yt-dlp",
     "--collect-all", "psutil",
-    "--copy-metadata", "psutil"
+    "--copy-metadata", "psutil",
+    # Core keeps model download support even when local inference workers are
+    # installed later as managed runtime packs.
+    "--collect-all", "huggingface_hub",
+    "--copy-metadata", "huggingface-hub"
 )
-if ($CoreOnly) {
+if ($BuildCoreSidecar) {
     $PyInstallerArguments += @(
         "--exclude-module", "paddle",
         "--exclude-module", "paddleocr",
         "--exclude-module", "paddlex",
         "--exclude-module", "faster_whisper",
         "--exclude-module", "ctranslate2",
-        "--exclude-module", "huggingface_hub",
         "--exclude-module", "nvidia",
         "--exclude-module", "torch"
     )
@@ -438,7 +457,6 @@ else {
     $PyInstallerArguments += @(
         "--collect-all", "faster_whisper",
         "--collect-all", "ctranslate2",
-        "--collect-all", "huggingface_hub",
         "--collect-all", "paddleocr",
         "--hidden-import", "paddle",
         "--collect-data", "paddlex",
@@ -447,7 +465,6 @@ else {
         "--copy-metadata", "paddlex",
         "--copy-metadata", "faster-whisper",
         "--copy-metadata", "ctranslate2",
-        "--copy-metadata", "huggingface-hub",
         "--copy-metadata", $PaddleDistribution
     )
     foreach ($runtime in $IncludedNvidiaRuntimeComponents) {
@@ -503,7 +520,7 @@ if (Test-Path -LiteralPath $safeResourceRoot) {
     # tool, log, or interrupted copy can never leak into the next installer.
     Remove-Item -LiteralPath $safeResourceRoot -Recurse -Force
 }
-New-Item -ItemType Directory -Force -Path $ResourceRoot, $ToolRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $ResourceRoot, $ToolRoot, $RuntimePackageMetadataRoot | Out-Null
 $PlaceholderPath = Join-Path $ResourceRoot ".gitkeep"
 [IO.File]::WriteAllText(
     $PlaceholderPath,
@@ -511,7 +528,7 @@ $PlaceholderPath = Join-Path $ResourceRoot ".gitkeep"
     [Text.UTF8Encoding]::new($false)
 )
 Get-ChildItem -LiteralPath $BuiltSidecarDirectory -Force | Copy-Item -Destination $ResourceRoot -Recurse -Force
-if (-not $CoreOnly) {
+if (-not $BuildCoreSidecar) {
     foreach ($runtime in $IncludedNvidiaRuntimeComponents) {
         $cudaRuntimeFile = Join-Path `
             "_internal\nvidia\$([string]$runtime.runtime_directory)\bin" `
@@ -544,6 +561,8 @@ if (-not $CoreOnly) {
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffmpeg.exe") -Destination (Join-Path $ToolRoot "ffmpeg.exe") -Force
 Copy-Item -LiteralPath (Join-Path $FfmpegSource "ffprobe.exe") -Destination (Join-Path $ToolRoot "ffprobe.exe") -Force
 Copy-Item -LiteralPath $FfmpegLicenseSource -Destination (Join-Path $ToolRoot "FFMPEG_LICENSE.txt") -Force
+Copy-Item -LiteralPath $TrustedRuntimeCatalogPath -Destination (Join-Path $RuntimePackageMetadataRoot "catalog.json") -Force
+Copy-Item -LiteralPath $ReleaseProfilesPath -Destination (Join-Path $RuntimePackageMetadataRoot "release-profiles.json") -Force
 
 $FfmpegVersionOutput = (& (Join-Path $FfmpegSource "ffmpeg.exe") -version 2>&1 | Out-String).Trim()
 Assert-LastExitCode "Reading bundled FFmpeg build information"
@@ -577,7 +596,7 @@ if ($UnexpectedToolEntries.Count -gt 0) {
     throw "The backend tool output contains unexpected entries: $($UnexpectedToolEntries.Name -join ', ')"
 }
 
-$AllowedTopLevelEntries = @(".gitkeep", "_internal", "tools", "video2notes.exe")
+$AllowedTopLevelEntries = @(".gitkeep", "_internal", "runtime-packs", "tools", "video2notes.exe")
 $UnexpectedTopLevelEntries = @(
     Get-ChildItem -LiteralPath $ResourceRoot -Force |
         Where-Object { $_.Name -notin $AllowedTopLevelEntries }
@@ -632,7 +651,7 @@ $RuntimeComponents = @(
             status = if ($included) {
                 "bundled"
             }
-            elseif ($CoreOnly) {
+            elseif ($BuildCoreSidecar) {
                 "excluded-core-only"
             }
             else {
@@ -674,10 +693,22 @@ $Manifest = [ordered]@{
     target_triple = (& rustc --print host-tuple).Trim()
     pyinstaller_version = (& $VenvPython -c "import PyInstaller; print(PyInstaller.__version__)").Trim()
     runtime_flavor = $RuntimeFlavor
+    requested_release_profile = $EffectiveReleaseProfile
+    compatible_release_profiles = if ($BuildCoreSidecar) {
+        @("core", "cpu", "nvidia_asr", "full_gpu")
+    }
+    else {
+        @("legacy_full")
+    }
+    runtime_package_ids = @($ReleaseProfileDefinition.runtime_package_ids)
+    runtime_package_catalog = [ordered]@{
+        relative_path = "runtime-packs/catalog.json"
+        sha256 = (Get-Sha256 (Join-Path $RuntimePackageMetadataRoot "catalog.json"))
+    }
     source_fingerprint_schema = 1
     source_fingerprint_sha256 = $SourceFingerprintAfterBuild
     user_model_weights_included = $false
-    packaged_runtime_assets = if ($CoreOnly) {
+    packaged_runtime_assets = if ($BuildCoreSidecar) {
         @()
     }
     else {
@@ -700,7 +731,7 @@ $Manifest = [ordered]@{
 $Manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $BackendManifestPath -Encoding utf8
 
 if (-not $SkipSmoke) {
-    & (Join-Path $PSScriptRoot "test_sidecar.ps1") -Executable $SidecarPath -CoreOnly:$CoreOnly
+    & (Join-Path $PSScriptRoot "test_sidecar.ps1") -Executable $SidecarPath -CoreOnly:$BuildCoreSidecar
     Assert-LastExitCode "Running the packaged backend health smoke"
 }
 
