@@ -77,7 +77,9 @@ artifacts\portable\current\Video2Notes.exe
 4. 先在“新建任务”里运行内置 9 秒样例，确认下载器、视觉、OCR、导出和本地后端工作正常。
 5. 再粘贴视频链接或选择本地视频，选择处理范围与档位后开始任务。
 
-`v0.2.0` 的正式发行以小体积 `core` 为基础，把本地推理库拆成可检测、绑定、安装、升级和移除的独立运行时包。GitHub Release 同时提供免安装 ZIP、Core NSIS `.exe`、Core MSI，以及 CPU、NVIDIA ASR、Full GPU 三档运行时资产。普通用户不需要手动配置 Python、CUDA Toolkit、FFmpeg 或命令行环境；仓库里的 `artifacts\portable\current` 只是本机最近一次构建结果，不应当作为固定下载地址。
+[`v0.2.0` GitHub Release](https://github.com/LainElaina/Video2Notes/releases/tag/v0.2.0) 以小体积 `core` 为基础，把本地推理库拆成可检测、绑定、安装、升级和移除的独立运行时包。Release 同时提供免安装 ZIP、Core NSIS `.exe`、Core MSI，以及 CPU、NVIDIA ASR、Full GPU 三档运行时资产。普通用户不需要手动配置 Python、CUDA Toolkit、FFmpeg 或命令行环境；仓库里的 `artifacts\portable\current` 只是本机最近一次构建结果，不应当作为固定下载地址。
+
+本次验证并发布的 Core 免安装 ZIP 为 `179.5 MiB`，NSIS 安装 EXE 为 `129.7 MiB`，MSI 为 `174.6 MiB`。免安装 ZIP 解压后约 `420.9 MiB`，其中已经包含桌面程序、本地后端、yt-dlp、FFmpeg/FFprobe 和依赖管理能力，但不内嵌数 GiB 的本地推理运行时或模型权重。
 
 PDF 是唯一仍依赖系统浏览器的输出：程序会调用已安装的 Edge、Chrome 或 Chromium 打印同一份 HTML。没有可用浏览器时，Markdown 和 HTML 仍会正常生成。
 
@@ -382,7 +384,7 @@ runs/<run-id>/
 
 另一个容易误判的原因是 `apps/desktop/node_modules` 中有 684 个 pnpm junction，它们都指向仓库内部的 pnpm store。会跟随 junction 或按每个链接重复统计目标的磁盘工具，可能再次显示 `50 GB+` 的表观大小；这不代表磁盘上又存在 684 份依赖。判断仓库占用时应关闭“跟随符号链接/junction”，或使用项目清理脚本采用的口径。
 
-当前顶层组成约为：
+该次审计完成时的顶层组成约为：
 
 | 顶层目录 | 逻辑大小约 | 说明 |
 | --- | ---: | --- |
@@ -390,11 +392,11 @@ runs/<run-id>/
 | `.venv` | 5.410 GiB | 源码开发、测试、PyInstaller 打包环境 |
 | `apps` | 0.150 GiB | 不跟随 pnpm junction 后的 React/Tauri 源码与少量本地文件 |
 
-其中以下大目录是有明确用途的保留内容，不能仅因为体积大就当垃圾删除：
+该次审计当时，以下大目录都有明确用途，不能仅因为体积大就当垃圾删除：
 
 | 内容 | 大小约 | 为什么保留 |
 | --- | ---: | --- |
-| `artifacts/portable/current` | 5.17 GiB | 当前可直接双击的 full GPU 便携版 |
+| `artifacts/portable/current` | 5.17 GiB | 审计当时可直接双击的 legacy full GPU 便携版；`v0.2.0` Core 已降至约 420.9 MiB |
 | `.venv` | 5.41 GiB | 源码开发、测试和重新打包环境 |
 | `artifacts/benchmarks` | 1.78 GiB | 三档完整基准与回归证据 |
 | `artifacts/models` | 0.57 GiB | 已下载的本地模型 |
@@ -410,6 +412,9 @@ runs/<run-id>/
 
 # 另外删除 current 的重复 ZIP；不会删除可运行目录
 .\scripts\cleanup_generated.ps1 -IncludePortableZip -Execute
+
+# GitHub Release 和 SHA-256 已复核后，删除本地发行副本与运行时归档；保留可信 JSON 元数据
+.\scripts\cleanup_generated.ps1 -IncludePublishedArchives -Execute
 ```
 
 便携构建现在只在替换过程中临时保留旧 `current` 用于失败回滚；新版本验证成功后会默认删除临时备份。如确实需要保留上一版，构建时显式使用 `-KeepPreviousPortable`。

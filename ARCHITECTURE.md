@@ -729,9 +729,9 @@ stage_name
 - benchmark；
 - verification 和临时 run。
 
-仓库的 [`scripts/cleanup_generated.ps1`](scripts/cleanup_generated.ps1) 会校验路径边界和 reparse point，默认 dry-run，并保护 `.venv`、模型、正式 benchmark 和 `portable/current`。
+仓库的 [`scripts/cleanup_generated.ps1`](scripts/cleanup_generated.ps1) 会校验路径边界和 reparse point，默认 dry-run，并保护 `.venv`、模型、正式 benchmark 和 `portable/current`。只有显式传入 `-IncludePublishedArchives` 时，它才会选择本地 `artifacts/release` 副本和运行时 ZIP/分片；运行时的可信 catalog-entry、parts JSON 仍被保留，执行前必须先核对远端 Release 的字节数与 SHA-256。
 
-2026-08-04 按不跟随 reparse point/junction 的口径，仓库逻辑大小是 `13.163 GiB`。`apps/desktop/node_modules` 内有 684 个指向仓库内部 pnpm store 的 junction；会递归跟随并对每个链接重复统计的工具可能显示 `50 GB+`，但那不是 684 份物理副本。当前主要占用是 `artifacts 7.530 GiB`、`.venv 5.410 GiB`、`apps 0.150 GiB`。`portable/current`、开发 `.venv`、正式 benchmark 和模型都有明确用途，清理器必须继续保护它们，除非用户显式选择舍弃对应能力或证据。
+2026-08-04 按不跟随 reparse point/junction 的口径，仓库逻辑大小是 `13.163 GiB`。`apps/desktop/node_modules` 内有 684 个指向仓库内部 pnpm store 的 junction；会递归跟随并对每个链接重复统计的工具可能显示 `50 GB+`，但那不是 684 份物理副本。该次审计的主要占用是 `artifacts 7.530 GiB`、`.venv 5.410 GiB`、`apps 0.150 GiB`。`portable/current`、开发 `.venv`、正式 benchmark 和模型都有明确用途，清理器必须继续保护它们，除非用户显式选择舍弃对应能力或证据。
 
 当前产品没有 run 删除 API、保留期限或自动垃圾回收。这是已知产品闭环缺口，不是存储层已经解决的功能。
 

@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [switch]$Execute,
-    [switch]$IncludePortableZip
+    [switch]$IncludePortableZip,
+    # Use only after the matching GitHub Release assets and hashes have been
+    # verified. Trusted catalog-entry and parts metadata remain available.
+    [switch]$IncludePublishedArchives
 )
 
 Set-StrictMode -Version Latest
@@ -185,6 +188,25 @@ if ($IncludePortableZip) {
     Add-FileTarget -Targets $targets -Path (Resolve-RepoPath "artifacts\portable\Video2Notes-portable-current.zip.sha256") -Reason "checksum for rebuildable portable ZIP"
 }
 
+if ($IncludePublishedArchives) {
+    Add-DirectoryTarget `
+        -Targets $targets `
+        -Path (Resolve-RepoPath "artifacts\release") `
+        -Reason "local copies of published release assets"
+
+    $runtimePackRoot = Resolve-RepoPath "artifacts\runtime-packs"
+    if (Test-Path -LiteralPath $runtimePackRoot) {
+        foreach ($archive in Get-ChildItem -LiteralPath $runtimePackRoot -Recurse -File -Force) {
+            if ($archive.Name -match "\.zip(?:\.part\d{3})?$") {
+                Add-FileTarget `
+                    -Targets $targets `
+                    -Path $archive.FullName `
+                    -Reason "published runtime archive; trusted JSON metadata is retained"
+            }
+        }
+    }
+}
+
 $portableRoot = Resolve-RepoPath "artifacts\portable"
 if (Test-Path -LiteralPath $portableRoot) {
     foreach ($backup in Get-ChildItem -LiteralPath $portableRoot -Force -Directory -Filter ".backup-*") {
@@ -228,6 +250,9 @@ Write-Host ("Mode: {0}" -f $(if ($Execute) { "EXECUTE" } else { "DRY RUN" }))
 Write-Host "Protected by design: root .venv, node_modules, artifacts/models, canonical benchmarks, and portable/current."
 if (-not $IncludePortableZip) {
     Write-Host "Portable ZIP is protected unless -IncludePortableZip is supplied."
+}
+if (-not $IncludePublishedArchives) {
+    Write-Host "Published release archives are protected unless -IncludePublishedArchives is supplied."
 }
 Write-Host ""
 
