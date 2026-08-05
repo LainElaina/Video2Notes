@@ -1,0 +1,658 @@
+/*
+ * Solid Glass visual layer
+ *
+ * This file intentionally contains only the final visual language. Layout and
+ * business-specific rules remain in styles.css so the theme can evolve without
+ * changing the React component contract. Surfaces are mostly opaque: blur is
+ * reserved for the top chrome and transient overlays to keep WebView2 cheap.
+ */
+
+:root {
+  --font-body:
+    "Noto Sans SC Variable", "Segoe UI Variable Text", "Microsoft YaHei UI", system-ui,
+    sans-serif;
+  --font-display:
+    "Noto Sans SC Variable", "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body :is(h1, h2, h3, h4, h5, h6, strong, small, button, label, .eyebrow, .section-kicker) {
+  letter-spacing: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--lens) 72%, white);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--lens) 22%, white);
+  color: var(--ink);
+}
+
+/* Keep scrollbars quiet without creating another compositing layer. */
+* {
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 32%, transparent);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--lens) 48%, transparent);
+  background-clip: padding-box;
+}
+
+.app-shell {
+  background: var(--desk);
+}
+
+.top-navigation {
+  border-color: color-mix(in srgb, var(--glass-outline) 78%, white);
+}
+
+.topbar-brand,
+.top-navigation-button,
+.workspace-mode-switch,
+.theme-preset-control,
+.topbar-backend {
+  -webkit-backdrop-filter: none;
+}
+
+.topbar-brand:hover {
+  background: rgb(255 255 255 / 34%);
+}
+
+.top-navigation-button {
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.top-navigation-button[aria-current="page"]::after {
+  box-shadow: 0 0 10px color-mix(in srgb, var(--lens) 55%, transparent);
+}
+
+.workspace-mode-switch,
+.theme-preset-control,
+.topbar-backend {
+  border-color: var(--glass-outline);
+  background: color-mix(in srgb, var(--glass-solid) 64%, transparent);
+}
+
+.workspace-mode-switch button,
+.theme-preset-control,
+.topbar-backend {
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.workspace-mode-switch button:hover,
+.theme-preset-control:hover,
+.topbar-backend:hover {
+  transform: translateY(-1px);
+}
+
+.context-panel {
+  border-color: var(--glass-outline);
+  background: var(--glass-panel);
+}
+
+.context-header {
+  border-bottom-color: var(--glass-outline);
+}
+
+.context-body {
+  padding: 15px;
+}
+
+.context-search,
+.reader-search,
+.compact-search {
+  border-color: var(--glass-outline);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--glass-solid) 70%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-emphasized);
+}
+
+.context-search:focus-within,
+.reader-search:focus-within,
+.compact-search:focus-within {
+  border-color: color-mix(in srgb, var(--lens) 58%, var(--glass-outline));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--lens) 10%, transparent),
+    inset 0 1px 0 var(--glass-highlight);
+  transform: translateY(-1px);
+}
+
+.context-task {
+  border-color: transparent;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--glass-solid) 60%, transparent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 52%);
+}
+
+.context-task:hover {
+  border-color: var(--glass-outline);
+  background: var(--glass-solid);
+  box-shadow: var(--shadow-control);
+  transform: translateY(-1px);
+}
+
+.context-task.is-active {
+  border-color: color-mix(in srgb, var(--lens) 54%, var(--glass-outline));
+  background: color-mix(in srgb, var(--lens-soft) 72%, var(--glass-solid));
+  box-shadow:
+    inset 3px 0 0 var(--lens),
+    inset 0 1px 0 rgb(255 255 255 / 68%);
+}
+
+.contents-list button,
+.provider-context-list button {
+  border-color: transparent;
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
+}
+
+.contents-list button:hover,
+.provider-context-list button:hover,
+.provider-context-list button.is-active {
+  border-color: var(--glass-outline);
+  background: var(--glass-solid);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  transform: translateX(2px);
+}
+
+.workspace {
+  border-color: var(--glass-outline);
+  background: var(--workspace-canvas);
+}
+
+.workspace-header {
+  border-bottom-color: var(--glass-outline);
+}
+
+.workspace-main {
+  background: var(--workspace-canvas);
+}
+
+.workspace-main > * {
+  animation: solid-glass-enter 220ms var(--ease-emphasized) both;
+}
+
+.notice-bar {
+  margin: 10px 14px 0;
+  border: 1px solid color-mix(in srgb, var(--lens) 28%, var(--glass-outline));
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%);
+}
+
+.context-expand {
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    background-color var(--motion-fast) var(--ease-standard);
+}
+
+.context-expand:hover {
+  transform: translateY(-1px);
+}
+
+/* Shared controls: rounded, tactile, and still cheap to paint. */
+.button {
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 42%);
+}
+
+.button-primary {
+  box-shadow:
+    0 7px 16px color-mix(in srgb, var(--lens) 19%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 24%);
+}
+
+.button-primary:not(:disabled):hover,
+.button-secondary:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.button-secondary {
+  border-color: var(--glass-outline);
+  background: var(--glass-solid);
+  box-shadow: var(--shadow-control);
+}
+
+.button-quiet {
+  border-radius: var(--radius-control);
+}
+
+.icon-button {
+  border-color: var(--glass-outline);
+  background: color-mix(in srgb, var(--glass-solid) 60%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.icon-button:hover {
+  border-color: color-mix(in srgb, var(--lens) 32%, var(--glass-outline));
+  background: var(--glass-solid);
+  box-shadow: var(--shadow-control);
+  transform: translateY(-1px);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select,
+textarea {
+  border-radius: var(--radius-control);
+  border-color: var(--glass-outline);
+  background-color: color-mix(in srgb, var(--glass-solid) 88%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+select {
+  color: var(--ink);
+}
+
+textarea {
+  resize: vertical;
+}
+
+/* Page surfaces. Repeated list rows stay flat to avoid a card-in-card feel. */
+.source-composer,
+.source-manifest,
+.benchmark-guide,
+.processing-scope,
+.run-summary,
+.stage-rail,
+.stage-inspector,
+.live-sample,
+.run-evidence,
+.reader-toolbar,
+.note-paper,
+.evidence-dock,
+.models-surface,
+.provider-card,
+.provider-add-panel,
+.provider-editor,
+.model-catalog,
+.role-routing,
+.performance-panel,
+.runtime-packages-panel,
+.workbench-drawer,
+.dependency-dialog {
+  border-color: var(--glass-outline);
+  border-radius: var(--radius-panel);
+  background: var(--glass-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+.source-composer,
+.source-manifest,
+.run-summary,
+.models-surface,
+.provider-card,
+.provider-add-panel,
+.provider-editor,
+.model-catalog,
+.role-routing,
+.performance-panel,
+.runtime-packages-panel {
+  overflow: clip;
+}
+
+.source-composer {
+  margin-top: 28px;
+  padding: 15px;
+}
+
+.source-composer-icon,
+.mode-icon,
+.processing-scope-icon,
+.section-heading-icon,
+.runtime-operation-icon,
+.managed-model-icon,
+.provider-logo,
+.model-icon {
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 66%);
+}
+
+.source-composer-icon {
+  border-color: var(--glass-outline);
+  background: var(--glass-solid);
+}
+
+.source-manifest {
+  padding: 17px;
+}
+
+.manifest-thumb,
+.video-console,
+.fixture-diagram {
+  border-radius: 13px;
+}
+
+.mode-section {
+  margin-top: 28px;
+}
+
+.mode-option {
+  border-color: var(--glass-outline);
+  border-radius: var(--radius-panel);
+  background: var(--glass-solid);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard);
+}
+
+.mode-option:hover {
+  border-color: color-mix(in srgb, var(--lens) 34%, var(--glass-outline));
+  box-shadow: var(--shadow-control);
+  transform: translateY(-2px);
+}
+
+.mode-option.is-selected {
+  box-shadow:
+    inset 3px 0 0 var(--lens),
+    inset 0 1px 0 rgb(255 255 255 / 72%),
+    0 8px 18px color-mix(in srgb, var(--lens) 7%, transparent);
+}
+
+.advanced-options {
+  border-color: var(--glass-outline);
+}
+
+.advanced-options summary {
+  cursor: pointer;
+}
+
+.advanced-grid select,
+.role-select select,
+.professional-selects select,
+.runtime-binding-row select {
+  border-radius: var(--radius-control);
+}
+
+.processing-scope {
+  background: color-mix(in srgb, var(--glass-panel) 84%, var(--lens-soft));
+}
+
+.processing-scope-options label {
+  border-color: var(--glass-outline);
+  border-radius: var(--radius-control);
+  background: var(--glass-solid);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+
+.processing-scope-options label:hover {
+  box-shadow: var(--shadow-control);
+}
+
+.processing-scope-options label.is-selected {
+  box-shadow:
+    inset 3px 0 0 var(--lens),
+    inset 0 1px 0 rgb(255 255 255 / 72%);
+}
+
+.run-page,
+.create-page,
+.models-workspace {
+  padding-top: 30px;
+}
+
+.create-intro h2 {
+  max-width: 680px;
+  font-size: 38px;
+  letter-spacing: 0;
+}
+
+.run-summary,
+.stage-rail,
+.run-evidence,
+.live-sample,
+.stage-inspector {
+  background: var(--glass-solid);
+}
+
+.run-summary:hover,
+.stage-inspector:hover,
+.live-sample:hover,
+.run-evidence:hover {
+  box-shadow: var(--shadow-panel), inset 0 1px 0 rgb(255 255 255 / 74%);
+}
+
+.progress-track,
+.video-scrubber {
+  border-radius: 999px;
+}
+
+.reader-toolbar {
+  background: color-mix(in srgb, var(--glass-panel) 88%, transparent);
+}
+
+.note-paper {
+  background: var(--glass-solid);
+}
+
+.note-title-block h1 {
+  max-width: 18ch;
+  font-size: 36px;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.note-section,
+.note-overview,
+.evidence-inspector,
+.claim-evidence,
+.selected-evidence {
+  border-radius: var(--radius-control);
+}
+
+.evidence-dock,
+.evidence-dock button,
+.rail-legend,
+.evidence-tabs {
+  color: var(--muted);
+}
+
+.evidence-dock strong,
+.evidence-dock [aria-pressed="true"],
+.evidence-dock .is-selected,
+.evidence-tabs button[aria-selected="true"] {
+  color: var(--ink);
+}
+
+.frame-image,
+.frame-content,
+.video-stage {
+  border-radius: 14px;
+  overflow: clip;
+}
+
+.workbench-scrim,
+.dependency-dialog-backdrop {
+  background: rgb(16 32 24 / 34%);
+}
+
+.workbench-drawer,
+.dependency-dialog {
+  background: var(--glass-solid);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.workbench-drawer-header,
+.workbench-drawer-footer,
+.dependency-dialog > header,
+.dependency-dialog > footer {
+  border-color: var(--glass-outline);
+  background: color-mix(in srgb, var(--glass-panel) 82%, transparent);
+}
+
+.models-hero h1 {
+  letter-spacing: 0;
+}
+
+.models-surface > header,
+.provider-card > header,
+.provider-editor > header,
+.runtime-packages-heading {
+  border-color: var(--glass-outline);
+}
+
+.managed-model-card,
+.role-row,
+.runtime-instance,
+.runtime-binding-row,
+.runtime-operation,
+.component-tier-card,
+.recommendation-card,
+.headroom-card,
+.preference-check {
+  border-color: var(--glass-outline);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--glass-solid) 78%, transparent);
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    border-color var(--motion-fast) var(--ease-standard);
+}
+
+.managed-model-card:hover,
+.role-row:hover,
+.runtime-instance:hover,
+.runtime-binding-row:hover,
+.component-tier-card:hover,
+.recommendation-card:hover,
+.headroom-card:hover,
+.preference-check:hover {
+  border-color: color-mix(in srgb, var(--lens) 30%, var(--glass-outline));
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-control);
+  transform: translateY(-1px);
+}
+
+@supports not ((backdrop-filter: blur(1px))) {
+  .top-navigation,
+  .workbench-drawer,
+  .dependency-dialog {
+    background: var(--glass-solid);
+  }
+
+  .workbench-scrim,
+  .dependency-dialog-backdrop {
+    background: rgb(16 32 24 / 48%);
+  }
+}
+
+@keyframes solid-glass-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .top-navigation,
+  .workspace {
+    border-radius: 16px;
+  }
+
+  .create-intro h2 {
+    font-size: 32px;
+  }
+}
+
+@media (max-width: 820px) {
+  .reader-toolbar {
+    display: grid;
+    min-height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 9px;
+  }
+
+  .reader-search,
+  .reader-toolbar-actions {
+    width: 100%;
+  }
+
+  .reader-toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .reader-toolbar-actions .button {
+    min-width: 0;
+    padding-inline: 7px;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    gap: 0;
+    padding: 0;
+  }
+
+  .top-navigation,
+  .workspace {
+    border-radius: 0;
+  }
+
+  .create-intro h2 {
+    font-size: 30px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-main > * {
+    animation: none;
+  }
+}

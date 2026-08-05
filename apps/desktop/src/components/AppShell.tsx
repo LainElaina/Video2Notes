@@ -42,7 +42,7 @@ function BrandMark() {
 }
 
 const themeOptions: Array<{ value: ThemePreset; label: string }> = [
-  { value: 'precision-light', label: '精确亮色' },
+  { value: 'precision-light', label: '矿物玻璃' },
   { value: 'paper-light', label: '纸张亮色' },
   { value: 'studio-graphite', label: '工作室石墨' },
 ]
@@ -221,11 +221,11 @@ function TaskList() {
 }
 
 function ReaderContents() {
-  const tasks = useStudioStore(state => state.tasks)
-  const activeTaskId = useStudioStore(state => state.activeTaskId)
   const setCurrentTime = useStudioStore(state => state.setCurrentTime)
-  const task = tasks.find(item => item.id === activeTaskId)
-  const completedTask = task?.note ? task : tasks.find(item => item.note)
+  const completedTask = useStudioStore(state => {
+    const task = state.tasks.find(item => item.id === state.activeTaskId)
+    return task?.note ? task : state.tasks.find(item => item.note)
+  })
   const note = completedTask?.note
 
   if (!note) return <p className="context-helper">完成一个任务后，这里会显示笔记目录。</p>
@@ -296,7 +296,9 @@ function ProviderList() {
 
 function ContextPanel() {
   const view = useStudioStore(state => state.view)
-  const tasks = useStudioStore(state => state.tasks)
+  const runningTaskCount = useStudioStore(
+    state => state.tasks.filter(task => task.status === 'running').length,
+  )
   const toggleContext = useStudioStore(state => state.toggleContext)
 
   const metadata: Record<ViewId, { eyebrow: string; title: string; description: string }> = {
@@ -308,7 +310,7 @@ function ContextPanel() {
     tasks: {
       eyebrow: 'RUN QUEUE',
       title: '任务队列',
-      description: `${tasks.filter(task => task.status === 'running').length} 个任务正在运行`,
+      description: `${runningTaskCount} 个任务正在运行`,
     },
     reader: {
       eyebrow: 'CONTENTS',
@@ -358,14 +360,17 @@ function ContextPanel() {
 function WorkspaceHeader() {
   const machine = useStudioStore(state => state.machine)
   const view = useStudioStore(state => state.view)
-  const tasks = useStudioStore(state => state.tasks)
-  const activeTaskId = useStudioStore(state => state.activeTaskId)
-  const activeTask = tasks.find(task => task.id === activeTaskId)
+  const activeTask = useStudioStore(state =>
+    state.tasks.find(task => task.id === state.activeTaskId),
+  )
+  const fallbackNoteTitle = useStudioStore(
+    state => state.tasks.find(task => task.note)?.note?.title,
+  )
 
   const viewTitle: Record<ViewId, string> = {
     create: '新建任务',
     tasks: activeTask?.source.title ?? '任务运行',
-    reader: activeTask?.note?.title ?? tasks.find(task => task.note)?.note?.title ?? '笔记阅读',
+    reader: activeTask?.note?.title ?? fallbackNoteTitle ?? '笔记阅读',
     models: '模型与角色路由',
   }
 

@@ -7,45 +7,57 @@
   font-size: 16px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --desk: #f4f6f3;
-  --paper: #ffffff;
-  --ink: #1c2420;
-  --muted: #5f6b64;
-  --lens: #167457;
-  --playhead: #167457;
-  --rule: rgb(28 36 32 / 12%);
-  --rule-strong: rgb(28 36 32 / 21%);
+  --desk: #e9eeeb;
+  --paper: #fbfcfb;
+  --ink: #17221c;
+  --muted: #647169;
+  --lens: #147a5b;
+  --playhead: #147a5b;
+  --rule: rgb(26 47 37 / 10%);
+  --rule-strong: rgb(26 47 37 / 18%);
   --line: var(--rule);
   --line-strong: var(--rule-strong);
-  --lens-soft: rgb(22 116 87 / 10%);
-  --playhead-soft: rgb(22 116 87 / 10%);
-  --success: #167457;
+  --lens-soft: rgb(20 122 91 / 10%);
+  --playhead-soft: rgb(20 122 91 / 10%);
+  --success: #147a5b;
   --warning: #9a671d;
   --danger: #b74431;
-  --shadow-float: 0 20px 48px rgb(36 57 47 / 12%);
+  --shadow-float: 0 24px 58px rgb(31 55 43 / 13%);
   --on-accent: #ffffff;
-  --accent-hover: #105f47;
-  --chrome-bg: rgb(255 255 255 / 94%);
-  --chrome-ink: #1c2420;
-  --chrome-muted: rgb(28 36 32 / 62%);
-  --chrome-rule: rgb(28 36 32 / 11%);
-  --chrome-hover: rgb(22 116 87 / 7%);
-  --chrome-active: rgb(22 116 87 / 11%);
-  --surface-tint: rgb(255 255 255 / 64%);
-  --workspace-header-bg: rgb(255 255 255 / 94%);
+  --accent-hover: #0f654a;
+  --chrome-bg: rgb(252 254 253 / 90%);
+  --chrome-ink: #17221c;
+  --chrome-muted: rgb(23 34 28 / 62%);
+  --chrome-rule: rgb(26 47 37 / 9%);
+  --chrome-hover: rgb(255 255 255 / 66%);
+  --chrome-active: rgb(255 255 255 / 90%);
+  --surface-tint: rgb(255 255 255 / 68%);
+  --workspace-header-bg: rgb(250 252 251 / 88%);
+  --workspace-canvas: #f5f7f6;
+  --glass-chrome: rgb(252 254 253 / 90%);
+  --glass-panel: rgb(248 251 249 / 88%);
+  --glass-solid: rgb(255 255 255 / 94%);
+  --glass-outline: rgb(20 54 39 / 9%);
+  --glass-highlight: rgb(255 255 255 / 88%);
+  --shadow-shell:
+    0 16px 38px rgb(28 50 39 / 9%), inset 0 1px 0 var(--glass-highlight);
+  --shadow-panel:
+    0 10px 26px rgb(28 50 39 / 7%), inset 0 1px 0 var(--glass-highlight);
+  --shadow-control:
+    0 4px 12px rgb(28 50 39 / 7%), inset 0 1px 0 rgb(255 255 255 / 86%);
   --inverse-bg: #18231e;
   --inverse-ink: #f5f7f5;
   --font-display:
     "Segoe UI Variable Display", "Noto Sans SC Variable", "Microsoft YaHei UI", sans-serif;
   --font-data: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
-  --radius-shell: 20px;
-  --radius-panel: 16px;
-  --radius-control: 11px;
-  --radius-compact: 8px;
-  --motion-fast: 140ms;
-  --motion-base: 220ms;
-  --motion-slow: 320ms;
-  --ease-standard: cubic-bezier(0.2, 0.75, 0.25, 1);
+  --radius-shell: 22px;
+  --radius-panel: 17px;
+  --radius-control: 12px;
+  --radius-compact: 9px;
+  --motion-fast: 160ms;
+  --motion-base: 240ms;
+  --motion-slow: 360ms;
+  --ease-standard: cubic-bezier(0.22, 0.72, 0.24, 1);
   --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -73,6 +85,18 @@
   --chrome-active: rgb(36 118 87 / 9%);
   --surface-tint: rgb(255 253 248 / 68%);
   --workspace-header-bg: rgb(255 253 248 / 95%);
+  --workspace-canvas: #f7f4ed;
+  --glass-chrome: rgb(255 253 248 / 92%);
+  --glass-panel: rgb(250 247 239 / 90%);
+  --glass-solid: rgb(255 253 248 / 96%);
+  --glass-outline: rgb(63 53 35 / 10%);
+  --glass-highlight: rgb(255 255 255 / 78%);
+  --shadow-shell:
+    0 16px 38px rgb(62 52 35 / 9%), inset 0 1px 0 var(--glass-highlight);
+  --shadow-panel:
+    0 10px 26px rgb(62 52 35 / 7%), inset 0 1px 0 var(--glass-highlight);
+  --shadow-control:
+    0 4px 12px rgb(62 52 35 / 7%), inset 0 1px 0 rgb(255 255 255 / 80%);
   --inverse-bg: #211f1a;
   --inverse-ink: #fffdf8;
 }
@@ -104,6 +128,18 @@
   --chrome-active: rgb(240 243 240 / 10%);
   --surface-tint: rgb(240 243 240 / 4%);
   --workspace-header-bg: rgb(30 34 32 / 95%);
+  --workspace-canvas: #1a1e1c;
+  --glass-chrome: rgb(21 25 23 / 92%);
+  --glass-panel: rgb(28 33 30 / 90%);
+  --glass-solid: rgb(34 39 36 / 96%);
+  --glass-outline: rgb(240 243 240 / 10%);
+  --glass-highlight: rgb(255 255 255 / 8%);
+  --shadow-shell:
+    0 18px 44px rgb(0 0 0 / 28%), inset 0 1px 0 var(--glass-highlight);
+  --shadow-panel:
+    0 12px 30px rgb(0 0 0 / 22%), inset 0 1px 0 var(--glass-highlight);
+  --shadow-control:
+    0 5px 14px rgb(0 0 0 / 20%), inset 0 1px 0 rgb(255 255 255 / 7%);
 }
 
 * {
@@ -187,12 +223,15 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
-  grid-template-rows: 64px minmax(0, 1fr);
+  grid-template-columns: 282px minmax(0, 1fr);
+  grid-template-rows: 62px minmax(0, 1fr);
+  gap: 10px;
   width: 100%;
   height: 100dvh;
   overflow: hidden;
+  padding: 10px;
   background: var(--desk);
+  isolation: isolate;
 }
 
 .app-shell.context-is-collapsed {
@@ -214,12 +253,14 @@ button:disabled {
   min-height: 0;
   grid-column: 1 / -1;
   grid-row: 1;
-  grid-template-columns: 228px minmax(360px, 1fr) auto;
-  border-bottom: 1px solid var(--chrome-rule);
-  background: var(--chrome-bg);
-  box-shadow: 0 8px 28px rgb(36 57 47 / 7%);
+  grid-template-columns: 220px minmax(360px, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--glass-outline);
+  border-radius: 18px;
+  background: var(--glass-chrome);
+  box-shadow: var(--shadow-shell);
   color: var(--chrome-ink);
-  backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.12);
 }
 
 .topbar-brand {
@@ -228,9 +269,8 @@ button:disabled {
   height: 100%;
   align-items: center;
   gap: 11px;
-  padding: 0 18px;
+  padding: 0 17px;
   border: 0;
-  border-right: 1px solid var(--chrome-rule);
   background: transparent;
   color: inherit;
   text-align: left;
@@ -255,7 +295,7 @@ button:disabled {
   font-family: var(--font-display);
   font-size: 15px;
   font-weight: 720;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -264,7 +304,7 @@ button:disabled {
   color: var(--chrome-muted);
   font-family: var(--font-data);
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0;
 }
 
 .brand-mark {
@@ -279,7 +319,7 @@ button:disabled {
   width: 17px;
   height: 17px;
   border: 1.5px solid currentColor;
-  border-radius: 5px;
+  border-radius: 7px;
 }
 
 .brand-frame-back {
@@ -308,20 +348,22 @@ button:disabled {
   display: flex;
   min-width: 0;
   height: 100%;
-  align-items: stretch;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
 }
 
 .top-navigation-button {
   position: relative;
   display: flex;
   min-width: 88px;
-  height: 100%;
+  height: 42px;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 17px;
-  border: 0;
-  border-right: 1px solid var(--chrome-rule);
+  padding: 0 15px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--chrome-muted);
   transition:
@@ -337,8 +379,10 @@ button:disabled {
 }
 
 .top-navigation-button:hover {
+  border-color: var(--glass-outline);
   background: var(--chrome-hover);
   color: var(--chrome-ink);
+  transform: translateY(-1px);
 }
 
 .top-navigation-button:active {
@@ -346,16 +390,19 @@ button:disabled {
 }
 
 .top-navigation-button[aria-current="page"] {
+  border-color: var(--glass-outline);
   background: var(--chrome-active);
+  box-shadow: var(--shadow-control);
   color: var(--chrome-ink);
 }
 
 .top-navigation-button[aria-current="page"]::after {
   position: absolute;
-  right: 12px;
-  bottom: -1px;
-  left: 12px;
-  height: 3px;
+  right: 18px;
+  bottom: 4px;
+  left: 18px;
+  height: 2px;
+  border-radius: 999px;
   background: var(--playhead);
   content: "";
 }
@@ -366,15 +413,15 @@ button:disabled {
   height: 100%;
   align-items: center;
   justify-content: flex-end;
-  gap: 9px;
-  padding: 0 14px;
-  border-left: 1px solid var(--chrome-rule);
+  gap: 8px;
+  padding: 0 12px;
 }
 
 .workspace-mode-switch {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  overflow: hidden;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--chrome-rule);
   border-radius: var(--radius-control);
   background: var(--chrome-hover);
@@ -382,10 +429,10 @@ button:disabled {
 
 .workspace-mode-switch button {
   min-width: 76px;
-  height: 34px;
+  height: 30px;
   padding: 0 12px;
   border: 0;
-  border-right: 1px solid var(--chrome-rule);
+  border-radius: 9px;
   background: transparent;
   color: var(--chrome-muted);
   font-size: 12px;
@@ -405,7 +452,8 @@ button:disabled {
 }
 
 .workspace-mode-switch button[aria-pressed="true"] {
-  background: var(--chrome-active);
+  background: var(--glass-solid);
+  box-shadow: var(--shadow-control);
   color: var(--chrome-ink);
   font-weight: 680;
 }
@@ -439,7 +487,8 @@ button:disabled {
   min-width: 0;
   border: 0;
   outline: 0;
-  background: transparent;
+  background: rgb(255 255 255 / 44%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: inherit;
   font-size: 12px;
 }
@@ -460,6 +509,8 @@ button:disabled {
   border: 1px solid var(--chrome-rule);
   border-radius: var(--radius-control);
   color: var(--chrome-muted);
+  background: rgb(255 255 255 / 44%);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   font-family: var(--font-data);
   font-size: 11px;
   white-space: nowrap;
@@ -482,13 +533,16 @@ button:disabled {
   flex-direction: column;
   grid-column: 1;
   grid-row: 2;
-  border-right: 1px solid var(--rule);
-  background: var(--desk);
+  overflow: hidden;
+  border: 1px solid var(--glass-outline);
+  border-radius: var(--radius-shell);
+  background: var(--glass-panel);
+  box-shadow: var(--shadow-shell);
 }
 
 .context-header {
   display: flex;
-  min-height: 134px;
+  min-height: 126px;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
@@ -633,7 +687,7 @@ button:disabled {
   display: grid;
   width: 32px;
   height: 32px;
-  border-radius: 5px;
+  border-radius: 10px;
   background: var(--inverse-bg);
   color: var(--inverse-ink);
   font-family: var(--font-display);
@@ -718,7 +772,7 @@ button:disabled {
   gap: 10px;
   padding: 9px 10px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 10px;
   background: transparent;
   text-align: left;
 }
@@ -801,7 +855,11 @@ button:disabled {
   flex-direction: column;
   grid-column: 2;
   grid-row: 2;
-  background: var(--paper);
+  overflow: hidden;
+  border: 1px solid var(--glass-outline);
+  border-radius: var(--radius-shell);
+  background: var(--workspace-canvas);
+  box-shadow: var(--shadow-shell);
 }
 
 .app-shell.context-is-collapsed .workspace {
@@ -810,7 +868,7 @@ button:disabled {
 
 .workspace-header {
   display: flex;
-  min-height: 64px;
+  min-height: 66px;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
@@ -895,9 +953,9 @@ button:disabled {
   gap: 6px;
   padding: 7px 9px;
   border: 1px solid var(--rule);
-  border-radius: 5px;
-  background: var(--paper);
-  box-shadow: 0 4px 16px rgb(23 33 37 / 8%);
+  border-radius: var(--radius-control);
+  background: var(--glass-solid);
+  box-shadow: var(--shadow-control);
   color: var(--muted);
   font-size: 10px;
 }
@@ -935,7 +993,7 @@ button:disabled {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  background: var(--paper);
+  background: var(--workspace-canvas);
 }
 
 .workspace-main:has(.reader-page) {

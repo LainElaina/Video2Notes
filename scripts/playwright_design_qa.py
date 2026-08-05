@@ -35,7 +35,7 @@ def main() -> int:
             page.goto(f"{args.base_url.rstrip('/')}/?demo=1")
             page.wait_for_load_state("networkidle")
             page.get_by_role("button", name="笔记阅读").click()
-            page.get_by_role("button", name="详细视图").click()
+            page.get_by_role("button", name="数据工作室").click()
             page.get_by_text("EVIDENCE TIMELINE", exact=True).wait_for()
             page.screenshot(
                 path=str(screenshot_root / "06-reader-detailed-1440x900.png"),

@@ -1,4 +1,11 @@
-import { useMemo, useState } from 'react'
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from 'react'
 import {
   Activity,
   AudioLines,
@@ -20,6 +27,11 @@ import type {
   TelemetryValue,
 } from '../domain'
 import { formatTime } from '../domain'
+import {
+  bucketEvidenceByPixel,
+  pickEvidenceAtTime,
+  type EvidencePixelBucket,
+} from './evidenceTimeline'
 import { SynchronizedVideo } from './SynchronizedVideo'
 
 interface DetailedEvidenceStudioProps {
@@ -43,6 +55,8 @@ const trackMeta: Record<
   visual: { label: '视觉变化', shortLabel: 'VISUAL', icon: Image },
 }
 
+const timelineKinds = Object.keys(trackMeta) as TimelineKind[]
+
 const clamp = (value: number, lower: number, upper: number) =>
   Math.min(upper, Math.max(lower, value))
 
@@ -60,7 +74,7 @@ const displayMetric = (value: TelemetryValue): string => {
 }
 
 const buildDensity = (evidence: EvidenceItem[], durationSeconds: number, buckets = 56) => {
-  const values = Array.from({ length: buckets }, () => 0)
+  const deltas = Array.from({ length: buckets + 1 }, () => 0)
   evidence.forEach(item => {
     const start = clamp(
       Math.floor((item.startSeconds / Math.max(1, durationSeconds)) * buckets),
@@ -72,11 +86,86 @@ const buildDensity = (evidence: EvidenceItem[], durationSeconds: number, buckets
       start + 1,
       buckets,
     )
-    for (let index = start; index < end; index += 1) values[index] += 1
+    deltas[start] += 1
+    deltas[end] -= 1
+  })
+  let active = 0
+  const values = deltas.slice(0, buckets).map(delta => {
+    active += delta
+    return active
   })
   const maximum = Math.max(1, ...values)
   return values.map(value => 0.18 + (value / maximum) * 0.82)
 }
+
+const bucketCountForWidth = (width: number) => {
+  const availableWidth = Math.max(0, width - 108)
+  return Math.min(220, Math.max(48, Math.floor(availableWidth / 7)))
+}
+
+interface TimelineEventLayerProps {
+  buckets: EvidencePixelBucket[]
+  durationSeconds: number
+  kind: TimelineKind
+  onSelectEvidence: DetailedEvidenceStudioProps['onSelectEvidence']
+}
+
+const TimelineEventLayer = memo(function TimelineEventLayer({
+  buckets,
+  durationSeconds,
+  kind,
+  onSelectEvidence,
+}: TimelineEventLayerProps) {
+  const selectBucketEvidence = (
+    event: MouseEvent<HTMLButtonElement>,
+    bucket: EvidencePixelBucket,
+  ) => {
+    const bounds = event.currentTarget.parentElement?.getBoundingClientRect()
+    const hasPointerPosition = Boolean(bounds && bounds.width > 0 && event.detail > 0)
+    const pointerSeconds =
+      hasPointerPosition && bounds
+        ? ((event.clientX - bounds.left) / bounds.width) * Math.max(1, durationSeconds)
+        : bucket.displayItem.startSeconds
+    const item = hasPointerPosition
+      ? pickEvidenceAtTime(bucket.items, pointerSeconds)
+      : (bucket.selectedItem ?? bucket.displayItem)
+    onSelectEvidence(item.id, item.startSeconds)
+  }
+
+  return (
+    <>
+      {buckets.map(bucket => {
+        const item = bucket.displayItem
+        const grouped = bucket.items.length > 1
+        const leftSeconds = grouped && !bucket.selectedItem ? bucket.windowStartSeconds : item.startSeconds
+        const widthSeconds =
+          grouped && !bucket.selectedItem
+            ? bucket.windowEndSeconds - bucket.windowStartSeconds
+            : Math.max(0.5, item.endSeconds - item.startSeconds)
+        const groupDescription = grouped
+          ? `，同一时间像素桶内共 ${bucket.items.length} 条证据，范围 ${formatTime(bucket.evidenceStartSeconds)} 至 ${formatTime(bucket.evidenceEndSeconds)}`
+          : ''
+
+        return (
+          <button
+            type="button"
+            className={bucket.selectedItem ? 'is-selected' : ''}
+            key={`${kind}-${bucket.index}`}
+            title={`${item.label} · ${Math.round(item.confidence * 100)}%${grouped ? ` · 聚合 ${bucket.items.length} 条` : ''}`}
+            aria-label={`${trackMeta[kind].label} ${item.id}，${formatTime(item.startSeconds)}，${item.label}${groupDescription}`}
+            style={{
+              left: percentAt(leftSeconds, durationSeconds),
+              width: `max(5px, ${percentAt(widthSeconds, durationSeconds)})`,
+            }}
+            onClick={event => selectBucketEvidence(event, bucket)}
+          >
+            <span>{item.rawText}</span>
+          </button>
+        )
+      })}
+    </>
+  )
+})
 
 export function DetailedEvidenceStudio({
   task,
@@ -89,11 +178,34 @@ export function DetailedEvidenceStudio({
 }: DetailedEvidenceStudioProps) {
   const duration = Math.max(1, task.source.durationSeconds)
   const [enabledKinds, setEnabledKinds] = useState<Set<TimelineKind>>(
-    new Set(['asr', 'ocr', 'visual']),
+    () => new Set(['asr', 'ocr', 'visual']),
   )
   const [confidenceFloor, setConfidenceFloor] = useState(0.7)
   const [rangeStart, setRangeStart] = useState(Math.min(duration * 0.1, 600))
   const [rangeEnd, setRangeEnd] = useState(Math.min(duration * 0.2, 1_200))
+  const timelineTracksRef = useRef<HTMLDivElement>(null)
+  const [timelineBucketCount, setTimelineBucketCount] = useState(168)
+
+  useEffect(() => {
+    const element = timelineTracksRef.current
+    if (!element) return
+
+    const updateBucketCount = (width: number) => {
+      if (width <= 0) return
+      const next = bucketCountForWidth(width)
+      setTimelineBucketCount(current => (current === next ? current : next))
+    }
+
+    updateBucketCount(element.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0]
+      if (entry) updateBucketCount(entry.contentRect.width)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   const evidence = useMemo(
     () =>
@@ -105,23 +217,56 @@ export function DetailedEvidenceStudio({
       ),
     [confidenceFloor, enabledKinds, task.evidence],
   )
+  const evidenceBucketsByKind = useMemo(() => {
+    const grouped = Object.fromEntries(
+      timelineKinds.map(kind => [
+        kind,
+        bucketEvidenceByPixel(
+          evidence.filter(item => item.kind === kind),
+          duration,
+          timelineBucketCount,
+          selectedEvidenceId,
+        ),
+      ]),
+    )
+    return grouped as Record<TimelineKind, EvidencePixelBucket[]>
+  }, [duration, evidence, selectedEvidenceId, timelineBucketCount])
   const density = useMemo(
     () => buildDensity(task.evidence.filter(item => item.kind !== 'chapter'), duration),
     [duration, task.evidence],
   )
-  const recentTelemetry = task.telemetry.slice(-7)
-  const metrics = task.stages
-    .flatMap(stage =>
-      Object.entries(stage.metrics).map(([key, value]) => ({
-        id: `${stage.id}:${key}`,
-        stage: stage.label,
-        key,
-        value,
-      })),
-    )
-    .slice(-6)
-  const warnings = [...task.runtimeWarnings, ...(task.warnings ?? [])].filter(
-    (item, index, all) => all.indexOf(item) === index,
+  const recentTelemetry = useMemo(() => task.telemetry.slice(-7), [task.telemetry])
+  const metrics = useMemo(
+    () =>
+      task.stages
+        .flatMap(stage =>
+          Object.entries(stage.metrics).map(([key, value]) => ({
+            id: `${stage.id}:${key}`,
+            stage: stage.label,
+            key,
+            value,
+          })),
+        )
+        .slice(-6),
+    [task.stages],
+  )
+  const warnings = useMemo(
+    () =>
+      [...task.runtimeWarnings, ...(task.warnings ?? [])].filter(
+        (item, index, all) => all.indexOf(item) === index,
+      ),
+    [task.runtimeWarnings, task.warnings],
+  )
+  const evidenceCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        timelineKinds.map(kind => [kind, task.evidence.filter(item => item.kind === kind).length]),
+      ) as Record<TimelineKind, number>,
+    [task.evidence],
+  )
+  const ocrConfidence = useMemo(
+    () => task.evidence.find(item => item.kind === 'ocr')?.confidence,
+    [task.evidence],
   )
 
   const setRangeBoundary = (boundary: 'start' | 'end', value: number) => {
@@ -241,7 +386,7 @@ export function DetailedEvidenceStudio({
             currentTimeSeconds={currentTimeSeconds}
             onSeek={onSeek}
             src={task.mediaUrl}
-            ocrConfidence={task.evidence.find(item => item.kind === 'ocr')?.confidence}
+            ocrConfidence={ocrConfidence}
           />
         </div>
 
@@ -284,7 +429,7 @@ export function DetailedEvidenceStudio({
               <strong>{evidence.length} 个可见证据区间</strong>
             </div>
             <div className="timeline-filters">
-              {(Object.keys(trackMeta) as TimelineKind[]).map(kind => (
+              {timelineKinds.map(kind => (
                 <label key={kind}>
                   <input
                     type="checkbox"
@@ -303,8 +448,8 @@ export function DetailedEvidenceStudio({
               </span>
             ))}
           </div>
-          <div className="timeline-tracks">
-            {(Object.keys(trackMeta) as TimelineKind[]).map(kind => {
+          <div className="timeline-tracks" ref={timelineTracksRef}>
+            {timelineKinds.map(kind => {
               const Icon = trackMeta[kind].icon
               return (
                 <div className={`timeline-track track-${kind}`} key={kind}>
@@ -316,26 +461,12 @@ export function DetailedEvidenceStudio({
                     </span>
                   </div>
                   <div className="timeline-track-canvas">
-                    {evidence
-                      .filter(item => item.kind === kind)
-                      .map(item => (
-                        <button
-                          type="button"
-                          className={item.id === selectedEvidenceId ? 'is-selected' : ''}
-                          key={item.id}
-                          title={`${item.label} · ${Math.round(item.confidence * 100)}%`}
-                          style={{
-                            left: percentAt(item.startSeconds, duration),
-                            width: `max(5px, ${percentAt(
-                              Math.max(0.5, item.endSeconds - item.startSeconds),
-                              duration,
-                            )})`,
-                          }}
-                          onClick={() => onSelectEvidence(item.id, item.startSeconds)}
-                        >
-                          <span>{item.rawText}</span>
-                        </button>
-                      ))}
+                    <TimelineEventLayer
+                      buckets={evidenceBucketsByKind[kind]}
+                      durationSeconds={duration}
+                      kind={kind}
+                      onSelectEvidence={onSelectEvidence}
+                    />
                     <span
                       className="timeline-playhead"
                       style={{ left: percentAt(currentTimeSeconds, duration) }}
@@ -444,10 +575,10 @@ export function DetailedEvidenceStudio({
             />
           </label>
           <div className="filter-counts">
-            {(Object.keys(trackMeta) as TimelineKind[]).map(kind => (
+            {timelineKinds.map(kind => (
               <span key={kind}>
                 {trackMeta[kind].label}
-                <strong>{task.evidence.filter(item => item.kind === kind).length}</strong>
+                <strong>{evidenceCounts[kind]}</strong>
               </span>
             ))}
           </div>

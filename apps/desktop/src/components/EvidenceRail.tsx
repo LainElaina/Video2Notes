@@ -1,6 +1,11 @@
-import type { CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import type { EvidenceItem, EvidenceKind } from '../domain'
 import { formatTime } from '../domain'
+import {
+  bucketEvidenceByPixel,
+  pickEvidenceAtTime,
+  type EvidencePixelBucket,
+} from './evidenceTimeline'
 
 interface EvidenceRailProps {
   evidence: EvidenceItem[]
@@ -22,6 +27,79 @@ const tracks: Array<{ kind: EvidenceKind; short: string; label: string }> = [
 const percent = (value: number, duration: number) =>
   Math.min(100, Math.max(0, (value / Math.max(1, duration)) * 100))
 
+const bucketCountForWidth = (width: number, compact: boolean) => {
+  const availableWidth = Math.max(0, width - 31)
+  const pixelsPerBucket = compact ? 7 : 6
+  return Math.min(220, Math.max(40, Math.floor(availableWidth / pixelsPerBucket)))
+}
+
+interface RailEventLayerProps {
+  buckets: EvidencePixelBucket[]
+  durationSeconds: number
+  track: (typeof tracks)[number]
+  onSelect: EvidenceRailProps['onSelect']
+}
+
+const RailEventLayer = memo(function RailEventLayer({
+  buckets,
+  durationSeconds,
+  track,
+  onSelect,
+}: RailEventLayerProps) {
+  const selectBucketEvidence = (
+    event: MouseEvent<HTMLButtonElement>,
+    bucket: EvidencePixelBucket,
+  ) => {
+    const bounds = event.currentTarget.parentElement?.getBoundingClientRect()
+    const hasPointerPosition = Boolean(bounds && bounds.width > 0 && event.detail > 0)
+    const pointerSeconds =
+      hasPointerPosition && bounds
+        ? ((event.clientX - bounds.left) / bounds.width) * Math.max(1, durationSeconds)
+        : bucket.displayItem.startSeconds
+    const item = hasPointerPosition
+      ? pickEvidenceAtTime(bucket.items, pointerSeconds)
+      : (bucket.selectedItem ?? bucket.displayItem)
+    onSelect(item.id, item.startSeconds)
+  }
+
+  return (
+    <>
+      {buckets.map(bucket => {
+        const item = bucket.displayItem
+        const grouped = bucket.items.length > 1
+        const leftSeconds = grouped && !bucket.selectedItem ? bucket.windowStartSeconds : item.startSeconds
+        const widthSeconds =
+          grouped && !bucket.selectedItem
+            ? bucket.windowEndSeconds - bucket.windowStartSeconds
+            : item.endSeconds - item.startSeconds
+        const width =
+          item.kind === 'visual' ? 0 : Math.max(1.2, percent(widthSeconds, durationSeconds))
+        const style = {
+          '--event-left': `${percent(leftSeconds, durationSeconds)}%`,
+          '--event-width': `${width}%`,
+        } as CSSProperties
+        const groupDescription = grouped
+          ? `，同一时间像素桶内共 ${bucket.items.length} 条证据，范围 ${formatTime(bucket.evidenceStartSeconds)} 至 ${formatTime(bucket.evidenceEndSeconds)}`
+          : ''
+
+        return (
+          <button
+            type="button"
+            className={`rail-event ${bucket.selectedItem ? 'is-selected' : ''}`}
+            style={style}
+            key={`${track.kind}-${bucket.index}`}
+            title={`${item.id} · ${item.label}${grouped ? ` · 聚合 ${bucket.items.length} 条` : ''}`}
+            aria-label={`${track.label}证据 ${item.id}，${formatTime(item.startSeconds)}，${item.label}${groupDescription}`}
+            onClick={event => selectBucketEvidence(event, bucket)}
+          >
+            <span className="sr-only">{item.label}</span>
+          </button>
+        )
+      })}
+    </>
+  )
+})
+
 export function EvidenceRail({
   evidence,
   durationSeconds,
@@ -31,6 +109,45 @@ export function EvidenceRail({
   onSelect,
   compact = false,
 }: EvidenceRailProps) {
+  const tracksRef = useRef<HTMLDivElement>(null)
+  const [bucketCount, setBucketCount] = useState(compact ? 96 : 144)
+
+  useEffect(() => {
+    const element = tracksRef.current
+    if (!element) return
+
+    const updateBucketCount = (width: number) => {
+      if (width <= 0) return
+      const next = bucketCountForWidth(width, compact)
+      setBucketCount(current => (current === next ? current : next))
+    }
+
+    updateBucketCount(element.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0]
+      if (entry) updateBucketCount(entry.contentRect.width)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [compact])
+
+  const bucketsByKind = useMemo(() => {
+    const grouped = Object.fromEntries(
+      tracks.map(track => [
+        track.kind,
+        bucketEvidenceByPixel(
+          evidence.filter(item => item.kind === track.kind),
+          durationSeconds,
+          bucketCount,
+          selectedEvidenceId,
+        ),
+      ]),
+    )
+    return grouped as Record<EvidenceKind, EvidencePixelBucket[]>
+  }, [bucketCount, durationSeconds, evidence, selectedEvidenceId])
+
   return (
     <section className={`evidence-rail ${compact ? 'is-compact' : ''}`} aria-label="证据时间轨">
       <div className="rail-ticks" aria-hidden="true">
@@ -40,39 +157,19 @@ export function EvidenceRail({
           </span>
         ))}
       </div>
-      <div className="rail-tracks">
+      <div className="rail-tracks" ref={tracksRef}>
         {tracks.map(track => (
           <div className={`rail-track track-${track.kind}`} key={track.kind}>
             <span className="rail-track-label" title={track.label}>
               {track.short}
             </span>
             <div className="rail-track-line">
-              {evidence
-                .filter(item => item.kind === track.kind)
-                .map(item => {
-                  const left = percent(item.startSeconds, durationSeconds)
-                  const width =
-                    item.kind === 'visual'
-                      ? 0
-                      : Math.max(1.2, percent(item.endSeconds - item.startSeconds, durationSeconds))
-                  const style = {
-                    '--event-left': `${left}%`,
-                    '--event-width': `${width}%`,
-                  } as CSSProperties
-                  return (
-                    <button
-                      type="button"
-                      className={`rail-event ${selectedEvidenceId === item.id ? 'is-selected' : ''}`}
-                      style={style}
-                      key={item.id}
-                      title={`${item.id} · ${item.label}`}
-                      aria-label={`${track.label}证据 ${item.id}，${formatTime(item.startSeconds)}，${item.label}`}
-                      onClick={() => onSelect(item.id, item.startSeconds)}
-                    >
-                      <span className="sr-only">{item.label}</span>
-                    </button>
-                  )
-                })}
+              <RailEventLayer
+                buckets={bucketsByKind[track.kind]}
+                durationSeconds={durationSeconds}
+                track={track}
+                onSelect={onSelect}
+              />
             </div>
           </div>
         ))}

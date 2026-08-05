@@ -313,6 +313,7 @@ let pollInFlight = false
 const sourceByRun = new Map<string, SourceManifest>()
 const submissionByRun = new Map<string, PipelineSubmission>()
 const objectUrls = new Map<string, string>()
+const taskHydrationInFlight = new Map<string, Promise<ProcessingTask>>()
 let demoMaterialSequence = 0
 let demoOperationSequence = 0
 let samplingOverrideSequence = 0
@@ -2539,6 +2540,17 @@ const hydrateTask = async (task: ProcessingTask): Promise<ProcessingTask> => {
   }
 }
 
+const hydrateTaskOnce = (task: ProcessingTask): Promise<ProcessingTask> => {
+  const inFlight = taskHydrationInFlight.get(task.id)
+  if (inFlight) return inFlight
+
+  const hydration = hydrateTask(task).finally(() => {
+    taskHydrationInFlight.delete(task.id)
+  })
+  taskHydrationInFlight.set(task.id, hydration)
+  return hydration
+}
+
 const loadRevisionNote = async (
   client: Video2NotesApi,
   taskId: string,
@@ -2635,9 +2647,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         )
         const systemReport = mapSystemReport(system, performancePayload)
         const componentReport = mapComponentReport(componentPayload)
-        const tasks = await Promise.all(
-          runs.map(run => hydrateTask(taskFromRun(run))),
-        )
+        const tasks = runs.map(run => taskFromRun(run))
         const warnings = runtime.warnings
         set({
           ...presentation,
@@ -2734,6 +2744,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         )
         const jobById = new Map(jobs.map(job => [job.run_id, job]))
         const existing = get().tasks
+        const existingById = new Map(existing.map(task => [task.id, task]))
         const merged = existing.map(task => {
           const response = responseById.get(task.id)
           const job = jobById.get(task.id)
@@ -2780,9 +2791,14 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           }
         }
         const hydrated = await Promise.all(
-          merged.map(task =>
-            task.status === 'completed' && !task.note ? hydrateTask(task) : Promise.resolve(task),
-          ),
+          merged.map(task => {
+            const previous = existingById.get(task.id)
+            const justCompleted =
+              task.status === 'completed' && previous?.status !== 'completed'
+            return justCompleted && !task.note
+              ? hydrateTaskOnce(task)
+              : Promise.resolve(task)
+          }),
         )
         set({ tasks: hydrated })
       } catch (error) {
@@ -2810,7 +2826,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     })
     const task = get().tasks.find(item => item.id === taskId)
     if (task?.realBackend && (task.status === 'completed' || task.artifactPaths?.media)) {
-      void hydrateTask(task).then(hydrated =>
+      void hydrateTaskOnce(task).then(hydrated =>
         set(state => ({
           tasks: state.tasks.map(item => (item.id === taskId ? hydrated : item)),
         })),
@@ -3421,6 +3437,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       return
     }
     if (get().backend.mode !== 'demo') return
+    if (!get().tasks.some(task => task.status === 'running')) return
     set(state => ({
       tasks: state.tasks.map(task => {
         if (task.status !== 'running') return task
@@ -5332,6 +5349,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     submissionSequence += 1
     sourceByRun.clear()
     submissionByRun.clear()
+    taskHydrationInFlight.clear()
     for (const url of objectUrls.values()) URL.revokeObjectURL(url)
     objectUrls.clear()
     set(initialData(true))

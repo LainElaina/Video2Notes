@@ -11,6 +11,10 @@ export default function App() {
   const view = useStudioStore(state => state.view)
   const advanceTasks = useStudioStore(state => state.advanceTasks)
   const initializeBackend = useStudioStore(state => state.initializeBackend)
+  const backendMode = useStudioStore(state => state.backend.mode)
+  const hasActiveTasks = useStudioStore(state =>
+    state.tasks.some(task => task.status === 'running'),
+  )
   const themePreset = useUiPreferences(state => state.themePreset)
   const workspaceMode = useUiPreferences(state => state.workspaceMode)
 
@@ -30,9 +34,38 @@ export default function App() {
   }, [initializeBackend])
 
   useEffect(() => {
-    const timer = window.setInterval(advanceTasks, 1000)
-    return () => window.clearInterval(timer)
-  }, [advanceTasks])
+    let timer: number | undefined
+
+    const schedule = () => {
+      const delay =
+        document.visibilityState === 'hidden'
+          ? 10_000
+          : hasActiveTasks
+            ? 1_000
+            : backendMode === 'real'
+              ? 5_000
+              : 0
+
+      if (delay === 0) return
+      timer = window.setTimeout(() => {
+        advanceTasks()
+        schedule()
+      }, delay)
+    }
+
+    const reschedule = () => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = undefined
+      schedule()
+    }
+
+    schedule()
+    document.addEventListener('visibilitychange', reschedule)
+    return () => {
+      document.removeEventListener('visibilitychange', reschedule)
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [advanceTasks, backendMode, hasActiveTasks])
 
   useEffect(() => {
     document.querySelector<HTMLElement>('.workspace-main')?.scrollTo({ top: 0 })

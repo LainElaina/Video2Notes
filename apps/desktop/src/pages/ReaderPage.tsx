@@ -358,6 +358,8 @@ export function ReaderPage() {
                       className="frame-image"
                       src={section.screenshotUrl}
                       alt={section.screenshotCaption || `精选关键帧：${section.title}`}
+                      loading="lazy"
+                      decoding="async"
                     />
                   ) : (
                     <span className="frame-content">
