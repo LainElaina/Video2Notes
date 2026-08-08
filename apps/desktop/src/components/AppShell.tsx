@@ -17,8 +17,10 @@ import {
 } from 'lucide-react'
 import type { ViewId } from '../domain'
 import { formatTime, platformLabel, statusLabel } from '../domain'
+import { preferredScrollBehavior } from '../motion'
 import { useStudioStore } from '../store'
 import { useUiPreferences, type ThemePreset } from '../stores/uiPreferences'
+import { MotionPresence } from './MotionPresence'
 
 const navItems: Array<{
   view: ViewId
@@ -46,13 +48,6 @@ const themeOptions: Array<{ value: ThemePreset; label: string }> = [
   { value: 'paper-light', label: '纸张亮色' },
   { value: 'studio-graphite', label: '工作室石墨' },
 ]
-
-const preferredScrollBehavior = (): ScrollBehavior =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    ? 'auto'
-    : 'smooth'
 
 function TopNavigation() {
   const view = useStudioStore(state => state.view)
@@ -430,7 +425,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             展开侧栏
           </button>
         )}
-        {notice && (
+        <MotionPresence
+          show={Boolean(notice)}
+          className="motion-presence-notice"
+          exitMs={120}
+        >
           <div className="notice-bar" role="status">
             <CircleDot size={14} aria-hidden="true" />
             <span>{notice}</span>
@@ -438,7 +437,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <X size={15} aria-hidden="true" />
             </button>
           </div>
-        )}
+        </MotionPresence>
         <main className="workspace-main">{children}</main>
       </section>
     </div>

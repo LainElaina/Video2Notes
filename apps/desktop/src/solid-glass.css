@@ -112,18 +112,17 @@ summary:focus-visible {
 }
 
 .workspace-mode-switch button,
-.theme-preset-control,
-.topbar-backend {
+.theme-preset-control {
   transition:
     transform var(--motion-fast) var(--ease-emphasized),
     background-color var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard);
 }
 
-.workspace-mode-switch button:hover,
-.theme-preset-control:hover,
-.topbar-backend:hover {
-  transform: translateY(-1px);
+.topbar-backend {
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
 
 .context-panel {
@@ -148,8 +147,7 @@ summary:focus-visible {
   box-shadow: inset 0 1px 0 var(--glass-highlight);
   transition:
     border-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-emphasized);
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .context-search:focus-within,
@@ -159,7 +157,6 @@ summary:focus-visible {
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--lens) 10%, transparent),
     inset 0 1px 0 var(--glass-highlight);
-  transform: translateY(-1px);
 }
 
 .context-task {
@@ -172,8 +169,6 @@ summary:focus-visible {
 .context-task:hover {
   border-color: var(--glass-outline);
   background: var(--glass-solid);
-  box-shadow: var(--shadow-control);
-  transform: translateY(-1px);
 }
 
 .context-task.is-active {
@@ -199,7 +194,6 @@ summary:focus-visible {
   border-color: var(--glass-outline);
   background: var(--glass-solid);
   box-shadow: inset 0 1px 0 var(--glass-highlight);
-  transform: translateX(2px);
 }
 
 .workspace {
@@ -215,10 +209,6 @@ summary:focus-visible {
   background: var(--workspace-canvas);
 }
 
-.workspace-main > * {
-  animation: solid-glass-enter 220ms var(--ease-emphasized) both;
-}
-
 .notice-bar {
   margin: 10px 14px 0;
   border: 1px solid color-mix(in srgb, var(--lens) 28%, var(--glass-outline));
@@ -232,10 +222,6 @@ summary:focus-visible {
     background-color var(--motion-fast) var(--ease-standard);
 }
 
-.context-expand:hover {
-  transform: translateY(-1px);
-}
-
 /* Shared controls: rounded, tactile, and still cheap to paint. */
 .button {
   border-radius: var(--radius-control);
@@ -246,11 +232,6 @@ summary:focus-visible {
   box-shadow:
     0 7px 16px color-mix(in srgb, var(--lens) 19%, transparent),
     inset 0 1px 0 rgb(255 255 255 / 24%);
-}
-
-.button-primary:not(:disabled):hover,
-.button-secondary:not(:disabled):hover {
-  transform: translateY(-1px);
 }
 
 .button-secondary {
@@ -273,7 +254,6 @@ summary:focus-visible {
   border-color: color-mix(in srgb, var(--lens) 32%, var(--glass-outline));
   background: var(--glass-solid);
   box-shadow: var(--shadow-control);
-  transform: translateY(-1px);
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
@@ -385,8 +365,6 @@ textarea {
 
 .mode-option:hover {
   border-color: color-mix(in srgb, var(--lens) 34%, var(--glass-outline));
-  box-shadow: var(--shadow-control);
-  transform: translateY(-2px);
 }
 
 .mode-option.is-selected {
@@ -450,13 +428,6 @@ textarea {
 .live-sample,
 .stage-inspector {
   background: var(--glass-solid);
-}
-
-.run-summary:hover,
-.stage-inspector:hover,
-.live-sample:hover,
-.run-evidence:hover {
-  box-shadow: var(--shadow-panel), inset 0 1px 0 rgb(255 255 255 / 74%);
 }
 
 .progress-track,
@@ -551,22 +522,12 @@ textarea {
   border-color: var(--glass-outline);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--glass-solid) 78%, transparent);
-  transition:
-    transform var(--motion-fast) var(--ease-emphasized),
-    border-color var(--motion-fast) var(--ease-standard);
+  transition: border-color var(--motion-fast) var(--ease-standard);
 }
 
-.managed-model-card:hover,
-.role-row:hover,
-.runtime-instance:hover,
-.runtime-binding-row:hover,
-.component-tier-card:hover,
-.recommendation-card:hover,
-.headroom-card:hover,
 .preference-check:hover {
   border-color: color-mix(in srgb, var(--lens) 30%, var(--glass-outline));
   box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-control);
-  transform: translateY(-1px);
 }
 
 @supports not ((backdrop-filter: blur(1px))) {
@@ -579,17 +540,6 @@ textarea {
   .workbench-scrim,
   .dependency-dialog-backdrop {
     background: rgb(16 32 24 / 48%);
-  }
-}
-
-@keyframes solid-glass-enter {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -651,8 +601,291 @@ textarea {
   }
 }
 
+/* Motion language: short, interruptible, and limited to composited properties. */
+.reader-mode-surface {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+@starting-style {
+  .reader-mode-surface {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.motion-presence-overlay,
+.motion-presence-modal {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.motion-presence-overlay {
+  z-index: 80;
+}
+
+.motion-presence-modal {
+  z-index: 96;
+}
+
+.motion-presence-overlay > .workbench-overlay,
+.motion-presence-modal > .dependency-dialog-backdrop {
+  pointer-events: auto;
+}
+
+.motion-presence[data-motion-state="exiting"] {
+  pointer-events: none;
+}
+
+.motion-presence-overlay .workbench-scrim {
+  opacity: 1;
+  transition: opacity var(--motion-surface) var(--ease-out);
+}
+
+.motion-presence-overlay .workbench-drawer {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity var(--motion-surface) var(--ease-out),
+    transform var(--motion-base) var(--ease-drawer);
+}
+
+.motion-presence-overlay[data-motion-state="entering"] .workbench-scrim,
+.motion-presence-overlay[data-motion-state="exiting"] .workbench-scrim {
+  opacity: 0;
+}
+
+.motion-presence-overlay[data-motion-state="entering"] .workbench-drawer,
+.motion-presence-overlay[data-motion-state="exiting"] .workbench-drawer {
+  opacity: 0;
+  transform: translateX(20px);
+}
+
+.motion-presence-overlay[data-motion-state="exiting"] .workbench-scrim,
+.motion-presence-modal[data-motion-state="exiting"] .dependency-dialog-backdrop,
+.motion-presence-popover[data-motion-state="exiting"] .export-menu,
+.motion-presence-notice[data-motion-state="exiting"] .notice-bar,
+.motion-presence-collapse[data-motion-state="exiting"] .artifact-list {
+  transition-duration: var(--motion-press);
+}
+
+.motion-presence-overlay[data-motion-state="exiting"] .workbench-drawer,
+.motion-presence-modal[data-motion-state="exiting"] .dependency-dialog {
+  transition-duration: var(--motion-exit);
+}
+
+.motion-presence-modal .dependency-dialog-backdrop {
+  opacity: 1;
+  transition: opacity var(--motion-surface) var(--ease-out);
+}
+
+.motion-presence-modal .dependency-dialog {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity var(--motion-surface) var(--ease-out),
+    transform var(--motion-surface) var(--ease-out);
+}
+
+.motion-presence-modal[data-motion-state="entering"] .dependency-dialog-backdrop,
+.motion-presence-modal[data-motion-state="exiting"] .dependency-dialog-backdrop {
+  opacity: 0;
+}
+
+.motion-presence-modal[data-motion-state="entering"] .dependency-dialog,
+.motion-presence-modal[data-motion-state="exiting"] .dependency-dialog {
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+}
+
+.motion-presence-popover {
+  position: relative;
+}
+
+.motion-presence-popover .export-menu {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: top right;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.motion-presence-popover[data-motion-state="entering"] .export-menu,
+.motion-presence-popover[data-motion-state="exiting"] .export-menu {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.95);
+}
+
+.motion-presence-notice {
+  display: flow-root;
+  flex: 0 0 auto;
+}
+
+.motion-presence-notice .notice-bar {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.motion-presence-notice[data-motion-state="entering"] .notice-bar,
+.motion-presence-notice[data-motion-state="exiting"] .notice-bar {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.motion-presence-collapse {
+  overflow: hidden;
+}
+
+.motion-presence-collapse .artifact-list {
+  opacity: 1;
+  transform: translateY(0);
+  transform-origin: top;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.motion-presence-collapse[data-motion-state="entering"] .artifact-list,
+.motion-presence-collapse[data-motion-state="exiting"] .artifact-list {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.provider-editor {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+/* Small command surfaces outside the shared button primitive. */
+.export-menu button,
+.workbench-drawer-header > button,
+.drawer-section-heading > button,
+.dependency-dialog > header > button,
+.notice-bar button {
+  transition:
+    transform var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+@starting-style {
+  .provider-editor {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* Positional hover is meaningful only with a fine pointer. */
+.top-navigation-button:hover {
+  transform: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .top-navigation-button:hover:not(:active),
+  .workspace-mode-switch button:hover:not(:active),
+  .context-expand:hover:not(:active),
+  .button-primary:not(:disabled):hover:not(:active),
+  .button-secondary:not(:disabled):hover:not(:active),
+  .icon-button:hover:not(:active) {
+    transform: translateY(-1px);
+  }
+
+  .mode-option:hover:not(.is-selected),
+  .context-task:hover,
+  .contents-list button:hover,
+  .provider-context-list button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-control);
+  }
+
+  .mode-option:hover:not(.is-selected) {
+    transform: translateY(-2px);
+  }
+
+  .processing-scope-options label:hover,
+  .preference-check:hover {
+    box-shadow: var(--shadow-control);
+  }
+}
+
+/* Press feedback wins over hover in the later glass layer. */
+.button:not(:disabled):active,
+.icon-button:not(:disabled):active,
+.top-navigation-button:active,
+.workspace-mode-switch button:active,
+.context-expand:active,
+.export-menu button:active,
+.workbench-drawer-header > button:active,
+.drawer-section-heading > button:active,
+.dependency-dialog > header > button:active,
+.notice-bar button:active {
+  transform: scale(0.97);
+  transition-duration: var(--motion-press);
+}
+
+.top-navigation-button:hover:active,
+.workspace-mode-switch button:hover:active,
+.button-primary:not(:disabled):hover:active,
+.button-secondary:not(:disabled):hover:active,
+.icon-button:hover:active {
+  transform: scale(0.97);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .workspace-main > * {
-    animation: none;
+  .reader-mode-surface,
+  .provider-editor {
+    transform: none;
+    transition: opacity 120ms ease;
+  }
+
+  .motion-presence-overlay .workbench-scrim,
+  .motion-presence-overlay .workbench-drawer,
+  .motion-presence-modal .dependency-dialog-backdrop,
+  .motion-presence-modal .dependency-dialog,
+  .motion-presence-popover .export-menu,
+  .motion-presence-notice .notice-bar,
+  .motion-presence-collapse .artifact-list {
+    transition: opacity 120ms ease;
+  }
+
+  .motion-presence-overlay .workbench-drawer,
+  .motion-presence-modal .dependency-dialog,
+  .motion-presence-popover .export-menu,
+  .motion-presence-notice .notice-bar,
+  .motion-presence-collapse .artifact-list {
+    transform: none;
+  }
+
+  .top-navigation-button:hover,
+  .workspace-mode-switch button:hover,
+  .context-expand:hover,
+  .button-primary:not(:disabled):hover,
+  .button-secondary:not(:disabled):hover,
+  .icon-button:hover,
+  .mode-option:hover,
+  .context-task:hover,
+  .contents-list button:hover,
+  .provider-context-list button:hover,
+  .button:not(:disabled):active,
+  .icon-button:not(:disabled):active,
+  .top-navigation-button:active,
+  .workspace-mode-switch button:active,
+  .context-expand:active {
+    transform: none;
   }
 }

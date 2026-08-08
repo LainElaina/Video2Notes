@@ -54,11 +54,17 @@
   --radius-panel: 17px;
   --radius-control: 12px;
   --radius-compact: 9px;
+  --motion-press: 100ms;
+  --motion-exit: 140ms;
   --motion-fast: 160ms;
-  --motion-base: 240ms;
-  --motion-slow: 360ms;
-  --ease-standard: cubic-bezier(0.22, 0.72, 0.24, 1);
-  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-base: 220ms;
+  --motion-surface: 240ms;
+  --motion-slow: 280ms;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-standard: ease;
+  --ease-emphasized: var(--ease-out);
 }
 
 :root[data-theme="paper-light"],
@@ -522,7 +528,7 @@ button:disabled {
 }
 
 .topbar-backend.backend-connecting svg {
-  animation: pulse 1s ease-in-out infinite;
+  color: var(--warning);
 }
 
 .context-panel {
@@ -844,7 +850,6 @@ button:disabled {
 
 .provider-dot.status-testing {
   background: var(--warning);
-  animation: pulse 1s ease-in-out infinite;
 }
 
 .workspace {
@@ -1657,9 +1662,12 @@ button:disabled {
 
 .progress-track > span {
   display: block;
+  width: 100%;
   height: 100%;
+  transform-origin: left center;
   border-radius: inherit;
   background: var(--lens);
+  transition: transform var(--motion-surface) linear;
 }
 
 .run-actions {
@@ -1969,7 +1977,6 @@ button:disabled {
   border-color: var(--lens);
   background: var(--lens);
   color: var(--on-accent);
-  animation: pulse 1.4s ease-in-out infinite;
 }
 
 .stage-node.is-completed .stage-number {
@@ -2159,7 +2166,6 @@ button:disabled {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
-  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .sample-facts {
@@ -2330,7 +2336,7 @@ button:disabled {
   z-index: 5;
   top: -3px;
   bottom: -3px;
-  left: calc(31px + (100% - 31px) * var(--playhead-left) / 100);
+  left: 0;
   width: 1px;
   padding: 0;
   border: 0;
@@ -3430,16 +3436,6 @@ button:disabled {
   line-height: 1.6;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.42;
-  }
-}
-
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -3721,9 +3717,11 @@ button:disabled {
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+  }
+
+  .spin,
+  .report-revision-spinner {
+    animation: none !important;
   }
 }
 
@@ -4078,10 +4076,12 @@ button:disabled {
   z-index: 5;
   top: 0;
   bottom: 0;
+  left: 0;
   width: 1px;
   background: var(--playhead);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--playhead) 10%, transparent);
   pointer-events: none;
+  transition: none;
 }
 
 .density-playhead::before,
@@ -4306,6 +4306,8 @@ button:disabled {
 .dual-range > span {
   position: absolute;
   top: 10px;
+  right: 0;
+  left: 0;
   height: 4px;
   background: var(--lens);
   pointer-events: none;
@@ -4738,7 +4740,6 @@ button:disabled {
   border: 0;
   background: rgb(17 20 18 / 36%);
   cursor: default;
-  animation: workbench-fade 160ms ease-out both;
 }
 
 .workbench-drawer {
@@ -4752,7 +4753,6 @@ button:disabled {
   border-left: 1px solid var(--rule-strong);
   background: var(--paper);
   box-shadow: -22px 0 54px rgb(17 20 18 / 15%);
-  animation: workbench-slide 210ms cubic-bezier(0.22, 0.72, 0.25, 1) both;
 }
 
 .workbench-drawer-header {
@@ -5333,28 +5333,6 @@ button:disabled {
   color: var(--muted);
   font-size: 8px;
   line-height: 1.5;
-}
-
-@keyframes workbench-slide {
-  from {
-    transform: translateX(26px);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-@keyframes workbench-fade {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
 }
 
 @media (max-width: 640px) {
@@ -8136,7 +8114,6 @@ button:disabled {
   border-radius: 15px;
   background: var(--paper);
   box-shadow: var(--shadow-float);
-  animation: models-panel-in var(--motion-base) var(--ease-emphasized) both;
 }
 
 .provider-editor > header,
@@ -9224,7 +9201,6 @@ button:disabled {
   min-width: 0;
   padding: 24px;
   background: rgb(20 29 25 / 42%);
-  animation: workbench-fade 160ms ease-out both;
   place-items: center;
 }
 
@@ -9240,7 +9216,6 @@ button:disabled {
   background: var(--paper);
   box-shadow: 0 28px 80px rgb(20 36 29 / 20%);
   color: var(--ink);
-  animation: models-panel-in 210ms var(--ease-emphasized) both;
 }
 
 .dependency-dialog > header {
@@ -9548,17 +9523,6 @@ button:disabled {
 .create-preflight-error {
   border-radius: 8px;
   line-height: 1.55;
-}
-
-@keyframes models-panel-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.995);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 @media (max-width: 700px) {

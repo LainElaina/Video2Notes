@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2,
   Download,
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { DetailedEvidenceStudio } from '../components/DetailedEvidenceStudio'
 import { EvidenceRail } from '../components/EvidenceRail'
+import { MotionPresence } from '../components/MotionPresence'
 import {
   ReportRevisionDrawer,
   type ReportRevisionGenerateRequest,
@@ -97,6 +98,7 @@ export function ReaderPage() {
     startSeconds: number
     endSeconds: number
   }>()
+  const exportControlRef = useRef<HTMLDivElement>(null)
 
   const activeTask = tasks.find(task => task.id === activeTaskId)
   const terminalTask =
@@ -121,6 +123,35 @@ export function ReaderPage() {
   const selectedEvidence = task?.evidence.find(item => item.id === selectedEvidenceId)
   const evidenceList =
     task?.evidence.filter(item => evidenceFilter === 'all' || item.kind === evidenceFilter) ?? []
+
+  useEffect(() => {
+    if (!exportOpen) return
+
+    const dismissOutside = (event: PointerEvent) => {
+      if (!exportControlRef.current?.contains(event.target as Node)) {
+        setExportOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', dismissOutside)
+    return () => document.removeEventListener('pointerdown', dismissOutside)
+  }, [exportOpen])
+
+  useEffect(() => {
+    if (!exportOpen && !materialsOpen && !reworkOpen && !reportOpen) return
+
+    const dismissTopLayer = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      if (reportOpen) setReportOpen(false)
+      else if (reworkOpen) setReworkOpen(false)
+      else if (materialsOpen) setMaterialsOpen(false)
+      else setExportOpen(false)
+    }
+
+    document.addEventListener('keydown', dismissTopLayer)
+    return () => document.removeEventListener('keydown', dismissTopLayer)
+  }, [exportOpen, materialsOpen, reportOpen, reworkOpen])
 
   if (terminalTask) {
     return (
@@ -148,6 +179,7 @@ export function ReaderPage() {
   }
 
   const exportMarkdown = () => {
+    setExportOpen(false)
     if (task.realBackend) {
       downloadArtifact(task.id, 'markdown')
       return
@@ -155,6 +187,7 @@ export function ReaderPage() {
     downloadText('video2notes-demo.md', buildMarkdown(task, note), 'text/markdown;charset=utf-8')
   }
   const exportHtml = () => {
+    setExportOpen(false)
     if (task.realBackend) {
       downloadArtifact(task.id, 'html')
       return
@@ -168,6 +201,9 @@ export function ReaderPage() {
     )
   }
   const openRework = () => {
+    setExportOpen(false)
+    setMaterialsOpen(false)
+    setReportOpen(false)
     const startSeconds =
       selectedEvidence?.startSeconds ?? Math.max(0, currentTimeSeconds)
     const endSeconds =
@@ -182,7 +218,16 @@ export function ReaderPage() {
     })
     setReworkOpen(true)
   }
+  const openMaterials = () => {
+    setExportOpen(false)
+    setReworkOpen(false)
+    setReportOpen(false)
+    setMaterialsOpen(true)
+  }
   const openReport = () => {
+    setExportOpen(false)
+    setMaterialsOpen(false)
+    setReworkOpen(false)
     setReportOpen(true)
     setReportError(undefined)
     if (!task.realBackend) return
@@ -243,7 +288,7 @@ export function ReaderPage() {
           <button
             className="button button-quiet"
             type="button"
-            onClick={() => setMaterialsOpen(true)}
+            onClick={openMaterials}
           >
             <Paperclip size={15} aria-hidden="true" />
             补充资料
@@ -263,18 +308,23 @@ export function ReaderPage() {
             <Focus size={15} aria-hidden="true" />
             专注阅读
           </button>
-          <div className="export-control">
+          <div className="export-control" ref={exportControlRef}>
             <button
               className="button button-secondary"
               type="button"
               onClick={() => setExportOpen(value => !value)}
               aria-expanded={exportOpen}
+              aria-controls="reader-export-menu"
             >
               <Download size={15} aria-hidden="true" />
               导出
             </button>
-            {exportOpen && (
-              <div className="export-menu">
+            <MotionPresence
+              show={exportOpen}
+              className="motion-presence-popover"
+              exitMs={120}
+            >
+              <div className="export-menu" id="reader-export-menu">
                 <button type="button" onClick={exportMarkdown}>
                   <FileText size={15} aria-hidden="true" />
                   Markdown
@@ -285,38 +335,40 @@ export function ReaderPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    task.realBackend && task.artifactPaths?.pdf
-                      ? downloadArtifact(task.id, 'pdf')
-                      : window.print()
-                  }
+                  onClick={() => {
+                    setExportOpen(false)
+                    if (task.realBackend && task.artifactPaths?.pdf) {
+                      downloadArtifact(task.id, 'pdf')
+                    } else {
+                      window.print()
+                    }
+                  }}
                 >
                   <Printer size={15} aria-hidden="true" />
                   打印 / PDF
                 </button>
               </div>
-            )}
+            </MotionPresence>
           </div>
         </div>
       </div>
 
-      {workspaceMode === 'professional' ? (
-        <DetailedEvidenceStudio
-          task={task}
-          note={note}
-          currentTimeSeconds={currentTimeSeconds}
-          selectedEvidenceId={selectedEvidenceId}
-          onSeek={setCurrentTime}
-          onSelectEvidence={selectEvidence}
-          onRequestRework={(startSeconds, endSeconds) =>
-            {
+      <div className="reader-mode-surface" key={workspaceMode}>
+        {workspaceMode === 'professional' ? (
+          <DetailedEvidenceStudio
+            task={task}
+            note={note}
+            currentTimeSeconds={currentTimeSeconds}
+            selectedEvidenceId={selectedEvidenceId}
+            onSeek={setCurrentTime}
+            onSelectEvidence={selectEvidence}
+            onRequestRework={(startSeconds, endSeconds) => {
               setReworkRange({ startSeconds, endSeconds })
               setReworkOpen(true)
-            }
-          }
-        />
-      ) : (
-        <div className="reader-split">
+            }}
+          />
+        ) : (
+          <div className="reader-split">
         <article className="note-paper">
           <header className="note-title-block" id="note-overview">
             <span className="section-kicker">VERIFIED NOTE / {note.generatedAt}</span>
@@ -498,17 +550,26 @@ export function ReaderPage() {
             <Sparkles size={15} aria-hidden="true" />
           </div>
         </aside>
-        </div>
-      )}
-      {materialsOpen && (
+          </div>
+        )}
+      </div>
+      <MotionPresence
+        show={materialsOpen}
+        className="motion-presence-overlay"
+        exitMs={160}
+      >
         <SupportingMaterialsDrawer
           task={task}
           initialStartSeconds={reworkRange?.startSeconds}
           initialEndSeconds={reworkRange?.endSeconds}
           onClose={() => setMaterialsOpen(false)}
         />
-      )}
-      {reworkOpen && (
+      </MotionPresence>
+      <MotionPresence
+        show={reworkOpen}
+        className="motion-presence-overlay"
+        exitMs={160}
+      >
         <ReworkDrawer
           task={task}
           initialStartSeconds={reworkRange?.startSeconds}
@@ -516,8 +577,12 @@ export function ReaderPage() {
           selectedEvidenceId={selectedEvidenceId}
           onClose={() => setReworkOpen(false)}
         />
-      )}
-      {reportOpen && (
+      </MotionPresence>
+      <MotionPresence
+        show={reportOpen}
+        className="motion-presence-overlay"
+        exitMs={160}
+      >
         <ReportRevisionDrawer
           taskTitle={task.source.title}
           materialsCount={task.materials.length}
@@ -536,7 +601,7 @@ export function ReaderPage() {
             }
           }}
         />
-      )}
+      </MotionPresence>
     </div>
   )
 }

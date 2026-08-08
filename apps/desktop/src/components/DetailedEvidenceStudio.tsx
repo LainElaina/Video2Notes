@@ -99,8 +99,7 @@ const buildDensity = (evidence: EvidenceItem[], durationSeconds: number, buckets
 }
 
 const bucketCountForWidth = (width: number) => {
-  const availableWidth = Math.max(0, width - 108)
-  return Math.min(220, Math.max(48, Math.floor(availableWidth / 7)))
+  return Math.min(220, Math.max(48, Math.floor(Math.max(0, width) / 7)))
 }
 
 interface TimelineEventLayerProps {
@@ -183,29 +182,48 @@ export function DetailedEvidenceStudio({
   const [confidenceFloor, setConfidenceFloor] = useState(0.7)
   const [rangeStart, setRangeStart] = useState(Math.min(duration * 0.1, 600))
   const [rangeEnd, setRangeEnd] = useState(Math.min(duration * 0.2, 1_200))
-  const timelineTracksRef = useRef<HTMLDivElement>(null)
+  const timelineCanvasRef = useRef<HTMLDivElement>(null)
+  const densityPlotRef = useRef<HTMLButtonElement>(null)
   const [timelineBucketCount, setTimelineBucketCount] = useState(168)
+  const [timelineCanvasWidth, setTimelineCanvasWidth] = useState(0)
+  const [densityWidth, setDensityWidth] = useState(0)
 
   useEffect(() => {
-    const element = timelineTracksRef.current
-    if (!element) return
+    const timelineElement = timelineCanvasRef.current
+    const densityElement = densityPlotRef.current
+    if (!timelineElement && !densityElement) return
 
-    const updateBucketCount = (width: number) => {
-      if (width <= 0) return
-      const next = bucketCountForWidth(width)
-      setTimelineBucketCount(current => (current === next ? current : next))
+    const measure = () => {
+      const timelineWidth = timelineElement?.getBoundingClientRect().width ?? 0
+      const densityPlotWidth = densityElement?.getBoundingClientRect().width ?? 0
+      if (timelineWidth > 0) {
+        setTimelineCanvasWidth(current =>
+          current === timelineWidth ? current : timelineWidth,
+        )
+        const nextBucketCount = bucketCountForWidth(timelineWidth)
+        setTimelineBucketCount(current =>
+          current === nextBucketCount ? current : nextBucketCount,
+        )
+      }
+      if (densityPlotWidth > 0) {
+        setDensityWidth(current =>
+          current === densityPlotWidth ? current : densityPlotWidth,
+        )
+      }
     }
 
-    updateBucketCount(element.getBoundingClientRect().width)
+    measure()
     if (typeof ResizeObserver === 'undefined') return
 
-    const observer = new ResizeObserver(entries => {
-      const entry = entries[0]
-      if (entry) updateBucketCount(entry.contentRect.width)
-    })
-    observer.observe(element)
+    const observer = new ResizeObserver(measure)
+    if (timelineElement) observer.observe(timelineElement)
+    if (densityElement) observer.observe(densityElement)
     return () => observer.disconnect()
   }, [])
+
+  const playheadRatio = clamp(currentTimeSeconds / duration, 0, 1)
+  const densityPlayheadX = densityWidth * playheadRatio
+  const timelinePlayheadX = timelineCanvasWidth * playheadRatio
 
   const evidence = useMemo(
     () =>
@@ -401,6 +419,7 @@ export function DetailedEvidenceStudio({
           <button
             type="button"
             className="density-plot"
+            ref={densityPlotRef}
             aria-label="证据密度时间线，点击跳转"
             onClick={event => {
               const bounds = event.currentTarget.getBoundingClientRect()
@@ -416,7 +435,10 @@ export function DetailedEvidenceStudio({
             ))}
             <span
               className="density-playhead"
-              style={{ left: percentAt(currentTimeSeconds, duration) }}
+              style={{
+                opacity: densityWidth > 0 ? 1 : 0,
+                transform: `translate3d(${densityPlayheadX}px, 0, 0)`,
+              }}
               aria-hidden="true"
             />
           </button>
@@ -448,7 +470,7 @@ export function DetailedEvidenceStudio({
               </span>
             ))}
           </div>
-          <div className="timeline-tracks" ref={timelineTracksRef}>
+          <div className="timeline-tracks">
             {timelineKinds.map(kind => {
               const Icon = trackMeta[kind].icon
               return (
@@ -460,7 +482,10 @@ export function DetailedEvidenceStudio({
                       <small>{trackMeta[kind].shortLabel}</small>
                     </span>
                   </div>
-                  <div className="timeline-track-canvas">
+                  <div
+                    className="timeline-track-canvas"
+                    ref={kind === timelineKinds[0] ? timelineCanvasRef : undefined}
+                  >
                     <TimelineEventLayer
                       buckets={evidenceBucketsByKind[kind]}
                       durationSeconds={duration}
@@ -469,7 +494,10 @@ export function DetailedEvidenceStudio({
                     />
                     <span
                       className="timeline-playhead"
-                      style={{ left: percentAt(currentTimeSeconds, duration) }}
+                      style={{
+                        opacity: timelineCanvasWidth > 0 ? 1 : 0,
+                        transform: `translate3d(${timelinePlayheadX}px, 0, 0)`,
+                      }}
                       aria-hidden="true"
                     />
                   </div>
@@ -509,8 +537,7 @@ export function DetailedEvidenceStudio({
               />
               <span
                 style={{
-                  left: percentAt(rangeStart, duration),
-                  width: percentAt(rangeEnd - rangeStart, duration),
+                  clipPath: `inset(0 ${100 - clamp((rangeEnd / duration) * 100, 0, 100)}% 0 ${clamp((rangeStart / duration) * 100, 0, 100)}%)`,
                 }}
                 aria-hidden="true"
               />

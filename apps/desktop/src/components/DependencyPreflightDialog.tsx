@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   Archive,
   Check,
@@ -11,7 +12,9 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react'
+import { preferredScrollBehavior } from '../motion'
 import { useStudioStore } from '../store'
+import { MotionPresence } from './MotionPresence'
 
 const formatBytes = (bytes: number): string => {
   if (bytes <= 0) return '0 B'
@@ -38,7 +41,32 @@ export function DependencyPreflightDialog() {
   const createTask = useStudioStore(state => state.createTask)
   const navigate = useStudioStore(state => state.navigate)
 
-  if (!open || !preflight) return null
+  const visible = Boolean(open && preflight)
+
+  useEffect(() => {
+    if (!visible) return
+
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      dismiss()
+    }
+
+    document.addEventListener('keydown', dismissOnEscape)
+    return () => document.removeEventListener('keydown', dismissOnEscape)
+  }, [dismiss, visible])
+
+  if (!preflight) {
+    return (
+      <MotionPresence
+        show={false}
+        className="motion-presence-modal"
+        exitMs={160}
+      >
+        {null}
+      </MotionPresence>
+    )
+  }
 
   const actionable = preflight.recommendedActions.some(action =>
     ['install', 'bind'].includes(action.kind),
@@ -66,20 +94,25 @@ export function DependencyPreflightDialog() {
     navigate('models')
     window.setTimeout(() => {
       document.getElementById('runtime-packages')?.scrollIntoView({
-        behavior: 'smooth',
+        behavior: preferredScrollBehavior(),
         block: 'start',
       })
     }, 80)
   }
 
   return (
-    <div className="dependency-dialog-backdrop" role="presentation">
-      <section
-        className="dependency-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="dependency-dialog-title"
-      >
+    <MotionPresence
+      show={visible}
+      className="motion-presence-modal"
+      exitMs={160}
+    >
+      <div className="dependency-dialog-backdrop" role="presentation">
+        <section
+          className="dependency-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="dependency-dialog-title"
+        >
         <header>
           <span className="dependency-dialog-icon">
             <ShieldAlert size={20} aria-hidden="true" />
@@ -189,7 +222,8 @@ export function DependencyPreflightDialog() {
             </button>
           </div>
         </footer>
-      </section>
-    </div>
+        </section>
+      </div>
+    </MotionPresence>
   )
 }

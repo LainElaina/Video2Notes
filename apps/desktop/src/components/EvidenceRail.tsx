@@ -111,6 +111,7 @@ export function EvidenceRail({
 }: EvidenceRailProps) {
   const tracksRef = useRef<HTMLDivElement>(null)
   const [bucketCount, setBucketCount] = useState(compact ? 96 : 144)
+  const [railWidth, setRailWidth] = useState(0)
 
   useEffect(() => {
     const element = tracksRef.current
@@ -118,6 +119,7 @@ export function EvidenceRail({
 
     const updateBucketCount = (width: number) => {
       if (width <= 0) return
+      setRailWidth(current => (current === width ? current : width))
       const next = bucketCountForWidth(width, compact)
       setBucketCount(current => (current === next ? current : next))
     }
@@ -147,6 +149,10 @@ export function EvidenceRail({
     )
     return grouped as Record<EvidenceKind, EvidencePixelBucket[]>
   }, [bucketCount, durationSeconds, evidence, selectedEvidenceId])
+  const playheadX =
+    31 +
+    Math.max(0, railWidth - 31) *
+      Math.min(1, Math.max(0, currentTimeSeconds / Math.max(1, durationSeconds)))
 
   return (
     <section className={`evidence-rail ${compact ? 'is-compact' : ''}`} aria-label="证据时间轨">
@@ -176,7 +182,10 @@ export function EvidenceRail({
         <button
           type="button"
           className="rail-playhead"
-          style={{ '--playhead-left': `${percent(currentTimeSeconds, durationSeconds)}%` } as CSSProperties}
+          style={{
+            opacity: railWidth > 0 ? 1 : 0,
+            transform: `translate3d(${playheadX}px, 0, 0)`,
+          }}
           onClick={() => onSeek(currentTimeSeconds)}
           title={`当前时间 ${formatTime(currentTimeSeconds)}`}
           aria-label={`当前播放位置 ${formatTime(currentTimeSeconds)}`}

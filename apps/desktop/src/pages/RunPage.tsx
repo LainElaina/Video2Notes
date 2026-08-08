@@ -12,6 +12,7 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 import { EvidenceRail } from '../components/EvidenceRail'
+import { MotionPresence } from '../components/MotionPresence'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import { formatTime, statusLabel } from '../domain'
@@ -110,7 +111,7 @@ export function RunPage() {
             {task.status === 'running' && <> · 预计 {formatTime(task.etaSeconds)}</>}
           </span>
           <div className="progress-track" aria-label={`总体进度 ${Math.round(task.progress)}%`}>
-            <span style={{ width: `${task.progress}%` }} />
+            <span style={{ transform: `scaleX(${Math.min(1, Math.max(0, task.progress / 100))})` }} />
           </div>
         </div>
         <div className="run-actions">
@@ -232,12 +233,17 @@ export function RunPage() {
             type="button"
             onClick={() => setShowArtifacts(value => !value)}
             aria-expanded={showArtifacts}
+            aria-controls="run-artifact-list"
           >
             <Archive size={16} aria-hidden="true" />
             {showArtifacts ? '隐藏阶段 artifact' : '查看阶段 artifact'}
           </button>
-          {showArtifacts && (
-            <div className="artifact-list">
+          <MotionPresence
+            show={showArtifacts}
+            className="motion-presence-collapse"
+            exitMs={120}
+          >
+            <div className="artifact-list" id="run-artifact-list">
               {selectedArtifacts.map(artifact => (
                 <button
                   type="button"
@@ -263,7 +269,7 @@ export function RunPage() {
                 </p>
               )}
             </div>
-          )}
+          </MotionPresence>
           <div className="stage-footnote">
             <Clock3 size={14} aria-hidden="true" />
             列表只显示后端 manifest 已登记的真实文件；阶段内尚未提交的中间状态不承诺可恢复。
