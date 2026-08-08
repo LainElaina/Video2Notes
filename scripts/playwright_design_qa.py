@@ -84,8 +84,8 @@ def main() -> int:
             ).click()
 
             page.get_by_role("button", name="新建任务", exact=True).click()
-            page.locator("details.advanced-options > summary").click()
-            page.locator("details.advanced-options").scroll_into_view_if_needed()
+            page.get_by_role("button", name="高级选项").click()
+            page.locator(".advanced-options-content").scroll_into_view_if_needed()
             page.wait_for_timeout(150)
             page.screenshot(
                 path=str(screenshot_root / "10-create-options-1440x900.png"),

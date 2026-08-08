@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ModelsPage } from './ModelsPage'
 import { useStudioStore } from '../store'
@@ -42,6 +42,37 @@ describe('models and performance workspace', () => {
       experienceMode: 'professional',
       overrides: { cpuWorkers: 10, ocrInferenceMaxWidth: 1536 },
     })
+  })
+
+  it('dismisses the provider editor with Escape and restores focus after its exit', async () => {
+    render(<ModelsPage />)
+
+    const trigger = screen.getByRole('button', { name: '新增供应商' })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    const editorId = trigger.getAttribute('aria-controls')
+    expect(editorId).toBeTruthy()
+
+    fireEvent.click(trigger)
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    const editor = screen.getByRole('region', { name: '新增供应商' })
+    expect(editor).toHaveAttribute('id', editorId)
+
+    const providerId = screen.getByLabelText('供应商 ID')
+    providerId.focus()
+    expect(providerId).toHaveFocus()
+    fireEvent.keyDown(providerId, { key: 'Escape' })
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(
+      screen.getByRole('region', { name: '新增供应商', hidden: true }),
+    ).toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('region', { name: '新增供应商', hidden: true }),
+      ).not.toBeInTheDocument(),
+    )
   })
 
   it('offers CUDA only for engines whose runtime capability is available', () => {

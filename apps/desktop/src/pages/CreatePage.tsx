@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import {
   AudioLines,
   ArrowRight,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { CreateProcessingOptions } from '../components/CreateProcessingOptions'
 import { DependencyPreflightDialog } from '../components/DependencyPreflightDialog'
+import { MotionPresence } from '../components/MotionPresence'
 import { ProcessingBenchmarkGuide } from '../components/ProcessingBenchmarkGuide'
 import { formatTime, platformLabel } from '../domain'
 import type { ProcessingMode } from '../domain'
@@ -89,6 +90,8 @@ export function CreatePage() {
   const setDraftCookieFile = useStudioStore(state => state.setDraftCookieFile)
   const setLanguageHints = useStudioStore(state => state.setLanguageHints)
   const [dragActive, setDragActive] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const advancedOptionsId = useId()
   const audioOnlySupported = backendSupportsAudioOnly(backend)
   const scopeLocked = submissionInFlight || draft.status === 'submitting'
   const samplingValidation = validateSamplingDraft(draft)
@@ -166,7 +169,11 @@ export function CreatePage() {
           <span>也可以把视频直接拖到此区域</span>
         </div>
         <button className="button button-primary" type="button" onClick={probeSource}>
-          <Globe2 size={16} aria-hidden="true" />
+          {draft.status === 'probing' ? (
+            <RefreshCw className="spin" size={16} aria-hidden="true" />
+          ) : (
+            <Globe2 size={16} aria-hidden="true" />
+          )}
           {draft.status === 'probing' ? '正在探测…' : '探测来源'}
         </button>
         <div className="source-divider" aria-hidden="true">
@@ -191,17 +198,28 @@ export function CreatePage() {
         </div>
       </section>
 
-      {draft.error && (
-        <div className="inline-error" role="alert">
-          {draft.error}
-        </div>
-      )}
+      <MotionPresence
+        show={Boolean(draft.error)}
+        className="motion-presence-inline-feedback"
+        exitMs={120}
+      >
+        {draft.error && (
+          <div className="inline-error" role="alert">
+            {draft.error}
+          </div>
+        )}
+      </MotionPresence>
 
-      {draft.manifest && (
-        <section
-          className={`source-manifest ${manifestNeedsRefresh ? 'is-stale' : ''}`}
-          aria-label={manifestNeedsRefresh ? '来源探测结果，需要重新探测' : '来源探测结果'}
-        >
+      <MotionPresence
+        show={Boolean(draft.manifest)}
+        className="motion-presence-source-manifest"
+        exitMs={140}
+      >
+        {draft.manifest && (
+          <section
+            className={`source-manifest ${manifestNeedsRefresh ? 'is-stale' : ''}`}
+            aria-label={manifestNeedsRefresh ? '来源探测结果，需要重新探测' : '来源探测结果'}
+          >
           <div className="manifest-thumb" aria-hidden="true">
             <FileVideo2 size={28} />
             <span>{platformLabel[draft.manifest.platform]}</span>
@@ -263,8 +281,9 @@ export function CreatePage() {
               </button>
             )}
           </div>
-        </section>
-      )}
+          </section>
+        )}
+      </MotionPresence>
 
       <section className="mode-section">
         <div className="section-heading">
@@ -399,8 +418,14 @@ export function CreatePage() {
         )}
       </section>
 
-      <details className="advanced-options">
-        <summary>
+      <section className="advanced-options" data-expanded={advancedOpen}>
+        <button
+          className="advanced-options-trigger"
+          type="button"
+          aria-expanded={advancedOpen}
+          aria-controls={advancedOptionsId}
+          onClick={() => setAdvancedOpen(value => !value)}
+        >
           <span>
             高级选项
             <small
@@ -418,8 +443,15 @@ export function CreatePage() {
             </small>
           </span>
           <ChevronDown size={17} aria-hidden="true" />
-        </summary>
-        <div className="advanced-grid">
+        </button>
+        <MotionPresence
+          show={advancedOpen}
+          className="motion-presence-advanced-options"
+          exitMs={140}
+        >
+          {advancedOpen && (
+            <div className="advanced-options-content" id={advancedOptionsId}>
+              <div className="advanced-grid">
           <label>
             语言提示
             <input
@@ -443,7 +475,7 @@ export function CreatePage() {
           </label>
           {draft.authKind === 'browser_profile' && (
             <>
-              <label>
+              <label className="motion-field-enter">
                 浏览器
                 <select
                   value={draft.browser}
@@ -456,7 +488,7 @@ export function CreatePage() {
                   <option value="firefox">Mozilla Firefox</option>
                 </select>
               </label>
-              <label>
+              <label className="motion-field-enter">
                 已登录 Profile
                 <select
                   value={draft.profile}
@@ -474,7 +506,7 @@ export function CreatePage() {
             </>
           )}
           {draft.authKind === 'cookie_file' && (
-            <label className="advanced-span">
+            <label className="advanced-span motion-field-enter">
               cookies.txt 绝对路径
               <input
                 value={draft.cookieFile}
@@ -483,9 +515,12 @@ export function CreatePage() {
               />
             </label>
           )}
-        </div>
-        <CreateProcessingOptions />
-      </details>
+              </div>
+              <CreateProcessingOptions />
+            </div>
+          )}
+        </MotionPresence>
+      </section>
 
       <footer className="create-actions">
         <div>
@@ -513,15 +548,25 @@ export function CreatePage() {
             : manifestNeedsRefresh
               ? '需重新探测'
               : '开始处理'}
-          <ArrowRight size={17} aria-hidden="true" />
+          {jobPreflightStatus === 'loading' || submissionInFlight || draft.status === 'submitting' ? (
+            <RefreshCw className="spin" size={17} aria-hidden="true" />
+          ) : (
+            <ArrowRight size={17} aria-hidden="true" />
+          )}
         </button>
       </footer>
 
-      {jobPreflightStatus === 'error' && (
-        <div className="inline-error create-preflight-error" role="alert">
-          依赖检查失败，任务没有提交。请确认本机后端可用后重试，或打开“模型与性能”检查运行时。
-        </div>
-      )}
+      <MotionPresence
+        show={jobPreflightStatus === 'error'}
+        className="motion-presence-inline-feedback"
+        exitMs={120}
+      >
+        {jobPreflightStatus === 'error' && (
+          <div className="inline-error create-preflight-error" role="alert">
+            依赖检查失败，任务没有提交。请确认本机后端可用后重试，或打开“模型与性能”检查运行时。
+          </div>
+        )}
+      </MotionPresence>
 
       <DependencyPreflightDialog />
     </div>

@@ -335,7 +335,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
       </div>
 
       {experienceMode === 'guided' && (
-        <div className={`runtime-guidance ${missingRequirements.length === 0 ? 'is-ready' : ''}`}>
+        <div className={`runtime-guidance motion-swap-surface ${missingRequirements.length === 0 ? 'is-ready' : ''}`}>
           <span className="runtime-guidance-mark">
             {missingRequirements.length === 0 ? (
               <ShieldCheck size={18} aria-hidden="true" />
@@ -372,14 +372,14 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
       )}
 
       {error && (
-        <div className="runtime-package-error" role="alert">
+        <div className="runtime-package-error motion-inline-feedback" role="alert">
           <TriangleAlert size={15} aria-hidden="true" />
           <div><strong>运行时操作未完成</strong><span>{error}</span></div>
         </div>
       )}
 
       {inventory ? (
-        <div className="runtime-package-content">
+        <div className="runtime-package-content motion-surface-enter">
           <section className="runtime-instance-section" aria-labelledby="runtime-instance-title">
             <header className="runtime-subsection-heading">
               <div>
@@ -546,7 +546,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
           </section>
 
           {experienceMode === 'professional' && (
-            <section className="runtime-binding-section" aria-labelledby="runtime-binding-title">
+            <section className="runtime-binding-section motion-swap-surface" aria-labelledby="runtime-binding-title">
               <header className="runtime-subsection-heading">
                 <div>
                   <h3 id="runtime-binding-title">功能绑定</h3>
@@ -666,7 +666,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
           </section>
 
           {inventory.operations.length > 0 && (
-            <section className="runtime-operation-section" aria-labelledby="runtime-operation-title">
+            <section className="runtime-operation-section motion-surface-enter" aria-labelledby="runtime-operation-title">
               <header className="runtime-subsection-heading">
                 <div><h3 id="runtime-operation-title">安装与维护记录</h3><p>运行中的任务显示阶段、传输速度、预计剩余时间和可续传状态。</p></div>
                 <span>{inventory.operations.length} 条</span>
@@ -680,7 +680,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
                     const succeeded = operation.status === 'succeeded'
                     const failed = operation.status === 'failed'
                     return (
-                      <article className={`runtime-operation status-${operation.status}`} key={operation.operationId}>
+                      <article className={`runtime-operation motion-list-item status-${operation.status}`} key={operation.operationId}>
                         <span className="runtime-operation-icon">
                           {active ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : succeeded ? <Check size={16} aria-hidden="true" /> : failed ? <TriangleAlert size={16} aria-hidden="true" /> : <CircleDot size={16} aria-hidden="true" />}
                         </span>
@@ -710,7 +710,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
           )}
         </div>
       ) : (
-        <div className="runtime-loading-state">
+        <div className="runtime-loading-state motion-surface-enter">
           {status === 'loading' ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <ServerCog size={19} aria-hidden="true" />}
           <div><strong>{status === 'loading' ? '正在读取运行时包清单' : '尚未取得运行时包清单'}</strong><span>{backend.mode === 'offline' ? '本机后端未连接。' : '刷新后会显示可复用环境、受管安装包与能力绑定。'}</span></div>
         </div>

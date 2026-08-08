@@ -1479,20 +1479,21 @@ button:disabled {
   border-bottom: 1px solid var(--rule);
 }
 
-.advanced-options summary {
+.advanced-options-trigger {
   display: flex;
+  width: 100%;
   min-height: 54px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  list-style: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
-.advanced-options summary::-webkit-details-marker {
-  display: none;
-}
-
-.advanced-options summary > span {
+.advanced-options-trigger > span {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1500,18 +1501,22 @@ button:disabled {
   font-weight: 650;
 }
 
-.advanced-options summary small {
+.advanced-options-trigger small {
   color: var(--muted);
   font-size: 9px;
   font-weight: 400;
 }
 
-.advanced-options summary svg {
+.advanced-options-trigger svg {
   transition: transform var(--motion-base) var(--ease-emphasized);
 }
 
-.advanced-options[open] summary svg {
+.advanced-options[data-expanded="true"] .advanced-options-trigger svg {
   transform: rotate(180deg);
+}
+
+.advanced-options-content {
+  min-width: 0;
 }
 
 .advanced-grid {
@@ -5374,7 +5379,7 @@ button:disabled {
   padding: 2px 0 20px;
 }
 
-.advanced-options summary .create-advanced-error-summary {
+.advanced-options-trigger .create-advanced-error-summary {
   color: var(--danger);
   font-weight: 600;
 }
@@ -5432,6 +5437,11 @@ button:disabled {
   align-items: end;
   gap: 12px 18px;
   margin-top: 16px;
+}
+
+.create-visual-contract {
+  display: grid;
+  gap: 18px;
 }
 
 .create-sampling-default > label,
@@ -5849,17 +5859,7 @@ button:disabled {
 }
 
 .benchmark-guide-collapse {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows var(--motion-slow) var(--ease-emphasized),
-    opacity var(--motion-base) var(--ease-standard);
-}
-
-.benchmark-guide-collapse[data-expanded="true"] {
-  grid-template-rows: 1fr;
-  opacity: 1;
+  display: block;
 }
 
 .benchmark-guide-overflow {
@@ -5873,12 +5873,6 @@ button:disabled {
   padding: 19px;
   border-top: 1px solid var(--rule);
   background: color-mix(in srgb, var(--desk) 58%, var(--paper));
-  transform: translateY(-5px);
-  transition: transform var(--motion-slow) var(--ease-emphasized);
-}
-
-.benchmark-guide-collapse[data-expanded="true"] .benchmark-guide-content {
-  transform: translateY(0);
 }
 
 .benchmark-guide-intro,

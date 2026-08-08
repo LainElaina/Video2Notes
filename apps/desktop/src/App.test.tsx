@@ -101,7 +101,7 @@ describe('desktop workflow', () => {
     expect(screen.getByText(/未返回的模式继续显示通用区间/)).toBeInTheDocument()
   })
 
-  it('reveals the measured tier reference inline and exposes honest performance scopes', () => {
+  it('reveals the measured tier reference inline and exposes honest performance scopes', async () => {
     render(<App />)
 
     const guide = screen.getByRole('button', { name: /实测档位与性能说明/ })
@@ -119,10 +119,23 @@ describe('desktop workflow', () => {
     expect(screen.getAllByText('仅音频 · 等待本机估算')).toHaveLength(3)
     expect(screen.getByText(/专有名词仍应人工复核/)).toBeInTheDocument()
 
-    const details = document.querySelector<HTMLDetailsElement>('.advanced-options')
-    fireEvent.click(details!.querySelector('summary')!)
+    const advancedOptions = screen.getByRole('button', { name: /高级选项/ })
+    expect(advancedOptions).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(advancedOptions)
+
+    expect(advancedOptions).toHaveAttribute('aria-expanded', 'true')
+    const controlledPanelId = advancedOptions.getAttribute('aria-controls')
+    expect(controlledPanelId).toBeTruthy()
+    expect(document.getElementById(controlledPanelId!)).toBeInTheDocument()
     expect(screen.getByText('本任务已跳过画面处理')).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: '嵌入关键帧截图' })).toBeDisabled()
+
+    fireEvent.click(advancedOptions)
+    expect(advancedOptions).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByText('本任务已跳过画面处理')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByText('本任务已跳过画面处理')).not.toBeInTheDocument(),
+    )
   })
 
   it('disables audio-only when the connected backend does not declare support', () => {
@@ -213,10 +226,10 @@ describe('desktop workflow', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: '探测来源' }))
-    const details = document.querySelector<HTMLDetailsElement>('.advanced-options')
-    const summary = details?.querySelector('summary')
-    expect(summary).not.toBeNull()
-    fireEvent.click(summary!)
+    const advancedOptions = screen.getByRole('button', { name: /高级选项/ })
+    expect(advancedOptions).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(advancedOptions)
+    expect(advancedOptions).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(screen.getByRole('button', { name: '添加时间段' }))
 
     fireEvent.change(screen.getByLabelText('时间段 1 开始时间（秒）'), {

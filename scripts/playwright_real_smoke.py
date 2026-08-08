@@ -56,7 +56,8 @@ def main() -> int:
             source_input.fill(str(source))
             page.get_by_role("button", name="探测来源").click()
             page.get_by_text("SOURCE VERIFIED", exact=True).wait_for(timeout=15_000)
-            page.locator("details.advanced-options").evaluate("(element) => element.open = true")
+            page.get_by_role("button", name="高级选项").click()
+            page.locator(".advanced-options-content").wait_for()
             pdf_toggle = page.get_by_label("同时生成离线 PDF")
             if args.pdf:
                 pdf_toggle.check()

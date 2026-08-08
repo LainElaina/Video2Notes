@@ -38,8 +38,13 @@ def _attach_browser_diagnostics(
     page.on("pageerror", lambda error: page_errors.append(f"{label}: {error}"))
 
 
-def _open_reader(page: Any, url: str, expect: Any) -> None:
+def _open_fixture(page: Any, url: str, expect: Any) -> None:
     page.goto(url, wait_until="networkidle")
+    expect(page.locator(".app-shell")).to_be_visible()
+
+
+def _open_reader(page: Any, url: str, expect: Any) -> None:
+    _open_fixture(page, url, expect)
     page.get_by_role("button", name="笔记阅读").click()
     expect(page.locator(".reader-page")).to_be_visible()
 
@@ -90,6 +95,45 @@ def _exercise_rapid_workspace_switching(page: Any, expect: Any) -> None:
     _assert_single_reader_workspace(page, expect, "guided")
 
 
+def _exercise_rapid_page_switching(page: Any, expect: Any) -> None:
+    navigation = page.get_by_role("navigation", name="主导航")
+    create = navigation.get_by_role("button", name="新建任务", exact=True)
+    tasks = navigation.get_by_role("button", name="任务运行", exact=True)
+    reader = navigation.get_by_role("button", name="笔记阅读", exact=True)
+    models = navigation.get_by_role("button", name="模型设置", exact=True)
+
+    for target in (models, create, tasks, reader, models, tasks, models):
+        target.click()
+    _wait_for_finite_motion(page)
+
+    expect(page.locator(".top-navigation-button[aria-current='page']")).to_have_count(1)
+    expect(models).to_have_attribute("aria-current", "page")
+    expect(page.locator(".models-page")).to_have_count(1)
+    expect(page.locator(".create-page, .run-page, .reader-page")).to_have_count(0)
+
+
+def _exercise_models_mode_switching(page: Any, expect: Any) -> None:
+    mode_switch = page.locator(".experience-switch")
+    guided = mode_switch.get_by_role("button", name="自动配置", exact=True)
+    professional = mode_switch.get_by_role("button", name="自定义性能", exact=True)
+
+    for target in (professional, guided, professional, guided, professional):
+        target.click()
+    _wait_for_finite_motion(page)
+    expect(professional).to_have_attribute("aria-pressed", "true")
+    expect(guided).to_have_attribute("aria-pressed", "false")
+    expect(page.locator(".professional-performance")).to_have_count(1)
+    expect(page.locator(".guided-performance")).to_have_count(0)
+
+    for target in (guided, professional, guided):
+        target.click()
+    _wait_for_finite_motion(page)
+    expect(guided).to_have_attribute("aria-pressed", "true")
+    expect(professional).to_have_attribute("aria-pressed", "false")
+    expect(page.locator(".guided-performance")).to_have_count(1)
+    expect(page.locator(".professional-performance")).to_have_count(0)
+
+
 def _exercise_export_menu(page: Any, expect: Any) -> None:
     export_button = page.get_by_role("button", name="导出", exact=True)
     menu = page.locator(".export-menu")
@@ -108,6 +152,60 @@ def _exercise_export_menu(page: Any, expect: Any) -> None:
     page.locator(".reader-search input").click()
     expect(export_button).to_have_attribute("aria-expanded", "false")
     expect(menu).to_have_count(0, timeout=2_000)
+
+
+def _exercise_provider_editor(page: Any, expect: Any) -> None:
+    workbench = page.locator(".provider-workbench")
+    opener = workbench.locator(".provider-actions").get_by_role(
+        "button",
+        name="编辑",
+        exact=True,
+    )
+    editor = page.get_by_role("region", name="编辑供应商", exact=True)
+    presence = page.locator(".motion-presence-provider-editor")
+
+    opener.click()
+    expect(opener).to_have_attribute("aria-expanded", "true")
+    expect(editor).to_have_count(1)
+    expect(presence).to_have_attribute("data-motion-state", "entered")
+
+    page.get_by_role("button", name="关闭供应商编辑器", exact=True).click()
+    opener.dispatch_event("click")
+    expect(opener).to_have_attribute("aria-expanded", "true")
+    expect(presence).to_have_attribute("data-motion-state", "entered")
+    expect(editor).to_have_count(1)
+
+    page.keyboard.press("Escape")
+    expect(opener).to_have_attribute("aria-expanded", "false")
+    expect(editor).to_have_count(0, timeout=2_000)
+    expect(presence).to_have_count(0)
+    expect(opener).to_be_focused()
+
+
+def _exercise_benchmark_fold(page: Any, expect: Any) -> None:
+    page.get_by_role("button", name="新建任务", exact=True).click()
+    expect(page.locator(".create-page")).to_be_visible()
+
+    trigger = page.locator(".benchmark-guide-trigger")
+    presence = page.locator(".motion-presence-benchmark")
+    content = page.locator(".benchmark-guide-collapse")
+
+    expect(trigger).to_have_attribute("aria-expanded", "false")
+    trigger.click()
+    expect(trigger).to_have_attribute("aria-expanded", "true")
+    expect(content).to_have_count(1)
+    expect(presence).to_have_attribute("data-motion-state", "entered")
+
+    trigger.click()
+    trigger.dispatch_event("click")
+    expect(trigger).to_have_attribute("aria-expanded", "true")
+    expect(presence).to_have_attribute("data-motion-state", "entered")
+    expect(content).to_have_count(1)
+
+    trigger.click()
+    expect(trigger).to_have_attribute("aria-expanded", "false")
+    expect(content).to_have_count(0, timeout=2_000)
+    expect(presence).to_have_count(0)
 
 
 def _exercise_drawers(page: Any, expect: Any) -> None:
@@ -204,6 +302,60 @@ def _assert_reduced_motion(page: Any, expect: Any) -> None:
 
     page.keyboard.press("Escape")
     expect(page.locator(".workbench-overlay")).to_have_count(0, timeout=2_000)
+
+
+def _assert_extended_reduced_motion(page: Any, expect: Any) -> None:
+    navigation = page.get_by_role("navigation", name="主导航")
+    models = navigation.get_by_role("button", name="模型设置", exact=True)
+    create = navigation.get_by_role("button", name="新建任务", exact=True)
+
+    models.click()
+    expect(page.locator(".models-page")).to_be_visible()
+    _assert_reduced_motion_style(page, ".workspace-page-surface")
+
+    page.locator(".experience-switch").get_by_role(
+        "button",
+        name="自定义性能",
+        exact=True,
+    ).click()
+    expect(page.locator(".professional-performance")).to_be_visible()
+    _assert_reduced_motion_style(
+        page,
+        ".professional-performance.motion-swap-surface",
+    )
+
+    page.locator(".provider-workbench .provider-actions").get_by_role(
+        "button",
+        name="编辑",
+        exact=True,
+    ).click()
+    expect(page.get_by_role("region", name="编辑供应商", exact=True)).to_be_visible()
+    for selector in (
+        ".motion-presence-provider-editor",
+        ".provider-editor",
+    ):
+        _assert_reduced_motion_style(page, selector)
+    page.keyboard.press("Escape")
+    expect(page.get_by_role("region", name="编辑供应商", exact=True)).to_have_count(
+        0,
+        timeout=2_000,
+    )
+
+    create.click()
+    expect(page.locator(".create-page")).to_be_visible()
+    _assert_reduced_motion_style(page, ".workspace-page-surface")
+    page.locator(".benchmark-guide-trigger").click()
+    expect(page.locator(".benchmark-guide-collapse")).to_be_visible()
+    for selector in (
+        ".motion-presence-benchmark",
+        ".benchmark-guide-collapse",
+    ):
+        _assert_reduced_motion_style(page, selector)
+    page.locator(".benchmark-guide-trigger").click()
+    expect(page.locator(".motion-presence-benchmark")).to_have_count(
+        0,
+        timeout=2_000,
+    )
 
 
 def _assert_viewport_bounds(page: Any, label: str) -> None:
@@ -335,6 +487,10 @@ def main() -> int:
             _exercise_rapid_workspace_switching(interaction_page, expect)
             _exercise_export_menu(interaction_page, expect)
             _exercise_drawers(interaction_page, expect)
+            _exercise_rapid_page_switching(interaction_page, expect)
+            _exercise_models_mode_switching(interaction_page, expect)
+            _exercise_provider_editor(interaction_page, expect)
+            _exercise_benchmark_fold(interaction_page, expect)
             interaction_page.close()
 
             reduced_page = browser.new_page(viewport={"width": 1440, "height": 900})
@@ -347,6 +503,7 @@ def main() -> int:
             )
             _open_reader(reduced_page, fixture_url, expect)
             _assert_reduced_motion(reduced_page, expect)
+            _assert_extended_reduced_motion(reduced_page, expect)
             reduced_page.close()
 
             for width, height in VIEWPORTS:

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import type { ResourceBudget, ResourceReserve } from '../domain'
 import { useStudioStore } from '../store'
+import { MotionPresence } from './MotionPresence'
 
 const measuredRows = [
   ['完整处理时间（worker；PDF 另计）', '526.994 秒', '1662.287 秒', '3013.919 秒'],
@@ -225,14 +226,15 @@ export function ProcessingBenchmarkGuide() {
         <ChevronDown className="benchmark-guide-chevron" size={17} aria-hidden="true" />
       </button>
 
-      <div className="benchmark-guide-collapse" data-expanded={expanded}>
-        <div className="benchmark-guide-overflow">
-          <div
-            className="benchmark-guide-content"
-            id={panelId}
-            aria-hidden={!expanded}
-            inert={!expanded}
-          >
+      <MotionPresence
+        show={expanded}
+        className="motion-presence-benchmark"
+        exitMs={140}
+      >
+        {expanded && (
+          <div className="benchmark-guide-collapse">
+            <div className="benchmark-guide-overflow">
+              <div className="benchmark-guide-content" id={panelId}>
             <div className="benchmark-guide-intro">
               <div>
                 <span className="section-kicker">BV12hsEz3ELL · FULL RUN</span>
@@ -303,9 +305,11 @@ export function ProcessingBenchmarkGuide() {
                 表中“完整处理时间”是受保护 worker 墙钟时间，包含流水线 Markdown / HTML 渲染，但本轮 worker 设置为不生成 PDF；后续补导出的 PDF 不计入这三项耗时。
               </p>
             </div>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        )}
+      </MotionPresence>
     </section>
   )
 }

@@ -6,6 +6,7 @@ import {
   validateSamplingDraft,
 } from '../sampling'
 import { useStudioStore } from '../store'
+import { MotionPresence } from './MotionPresence'
 
 const samplingModes: Array<{ value: SamplingMode; label: string; description: string }> = [
   {
@@ -108,7 +109,7 @@ export function CreateProcessingOptions() {
         </div>
 
         {audioOnly ? (
-          <div className="create-audio-only-contract" role="note">
+          <div className="create-audio-only-contract motion-swap-surface" role="note">
             <AudioLines size={20} aria-hidden="true" />
             <div>
               <strong>保留音频识别与报告生成</strong>
@@ -119,7 +120,7 @@ export function CreateProcessingOptions() {
             </div>
           </div>
         ) : (
-          <>
+          <div className="create-visual-contract motion-swap-surface">
             <div className="create-sampling-default">
           <label>
             全局采样方式
@@ -135,13 +136,19 @@ export function CreateProcessingOptions() {
               ))}
             </select>
           </label>
-          {draft.samplingMode === 'fixed_interval' && (
-            <IntervalEditor
-              label="全局固定采样间隔（秒）"
-              value={draft.samplingIntervalSeconds}
-              onChange={setSamplingIntervalSeconds}
-            />
-          )}
+          <MotionPresence
+            show={draft.samplingMode === 'fixed_interval'}
+            className="motion-presence-field"
+            exitMs={120}
+          >
+            {draft.samplingMode === 'fixed_interval' && (
+              <IntervalEditor
+                label="全局固定采样间隔（秒）"
+                value={draft.samplingIntervalSeconds}
+                onChange={setSamplingIntervalSeconds}
+              />
+            )}
+          </MotionPresence>
           <p className="create-sampling-mode-note">
             {
               samplingModes.find(option => option.value === draft.samplingMode)
@@ -172,7 +179,7 @@ export function CreateProcessingOptions() {
             <div className="create-sampling-segment-list">
               {draft.samplingOverrides.map((override, index) => (
                 <div
-                  className="create-sampling-segment"
+                  className="create-sampling-segment motion-list-item"
                   role="group"
                   aria-label={`采样时间段 ${index + 1}`}
                   key={override.id}
@@ -258,20 +265,26 @@ export function CreateProcessingOptions() {
           )}
             </div>
 
-            {validation.errors.length > 0 && (
-              <div className="create-sampling-errors" role="alert">
-                <AlertTriangle size={16} aria-hidden="true" />
-                <div>
-                  <strong>采样计划尚不能提交</strong>
-                  <ul>
-                    {validation.errors.map(error => (
-                      <li key={error}>{error}</li>
-                    ))}
-                  </ul>
+            <MotionPresence
+              show={validation.errors.length > 0}
+              className="motion-presence-inline-feedback"
+              exitMs={120}
+            >
+              {validation.errors.length > 0 && (
+                <div className="create-sampling-errors" role="alert">
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  <div>
+                    <strong>采样计划尚不能提交</strong>
+                    <ul>
+                      {validation.errors.map(error => (
+                        <li key={error}>{error}</li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
-              </div>
-            )}
-          </>
+              )}
+            </MotionPresence>
+          </div>
         )}
       </section>
 

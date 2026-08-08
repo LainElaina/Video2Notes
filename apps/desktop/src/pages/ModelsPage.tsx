@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   Check,
@@ -40,6 +40,7 @@ import type {
   ProviderProtocol,
   ResourceReserve,
 } from '../domain'
+import { MotionPresence } from '../components/MotionPresence'
 import { RuntimePackagesPanel } from '../components/RuntimePackagesPanel'
 import { useStudioStore } from '../store'
 
@@ -304,8 +305,14 @@ export function ModelsPage() {
   const [modelQuery, setModelQuery] = useState('')
   const [secret, setSecret] = useState('')
   const [providerEditorOpen, setProviderEditorOpen] = useState(false)
+  const [providerEditorKind, setProviderEditorKind] = useState<'new' | 'edit'>('edit')
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>(emptyProviderDraft)
   const [providerFormError, setProviderFormError] = useState('')
+  const providerEditorId = useId()
+  const providerEditorTitleId = `${providerEditorId}-title`
+  const providerEditorRef = useRef<HTMLDivElement>(null)
+  const providerEditorTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const providerFocusReturnFrameRef = useRef<number | null>(null)
   const [modelDraft, setModelDraft] = useState<ModelDraft>({
     modelId: '',
     displayName: '',
@@ -363,6 +370,16 @@ export function ModelsPage() {
     setModelDraft(value => ({ ...value, locality: provider.locality }))
     setProviderFormError('')
   }, [provider])
+
+  useEffect(() => {
+    if (!providerEditorOpen) return
+    const focusFrame = window.requestAnimationFrame(() => {
+      providerEditorRef.current
+        ?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')
+        ?.focus()
+    })
+    return () => window.cancelAnimationFrame(focusFrame)
+  }, [providerEditorOpen])
 
   const activeReserve =
     performanceDraft.reserve ?? recommendation?.reserve ?? defaultReserve
@@ -440,13 +457,62 @@ export function ModelsPage() {
     }))
   }
 
-  const openNewProvider = () => {
+  const rememberProviderEditorTrigger = (trigger: HTMLButtonElement) => {
+    if (providerFocusReturnFrameRef.current !== null) {
+      window.cancelAnimationFrame(providerFocusReturnFrameRef.current)
+      providerFocusReturnFrameRef.current = null
+    }
+    providerEditorTriggerRef.current = trigger
+  }
+
+  const closeProviderEditor = useCallback(() => {
+    setProviderEditorOpen(false)
+    const trigger = providerEditorTriggerRef.current
+    if (providerFocusReturnFrameRef.current !== null) {
+      window.cancelAnimationFrame(providerFocusReturnFrameRef.current)
+    }
+    providerFocusReturnFrameRef.current = window.requestAnimationFrame(() => {
+      trigger?.focus()
+      providerFocusReturnFrameRef.current = null
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!providerEditorOpen) return
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      closeProviderEditor()
+    }
+    document.addEventListener('keydown', dismissOnEscape)
+    return () => document.removeEventListener('keydown', dismissOnEscape)
+  }, [closeProviderEditor, providerEditorOpen])
+
+  useEffect(
+    () => () => {
+      if (providerFocusReturnFrameRef.current !== null) {
+        window.cancelAnimationFrame(providerFocusReturnFrameRef.current)
+      }
+    },
+    [],
+  )
+
+  const openNewProvider = (trigger: HTMLButtonElement) => {
+    rememberProviderEditorTrigger(trigger)
+    setProviderEditorKind('new')
     const first = catalog.protocols.find(item => item.protocol === 'openai_chat_completions')
     setProviderDraft({
       ...emptyProviderDraft(),
       authScheme: first?.defaultAuthScheme ?? 'bearer',
       baseUrl: first?.defaultBaseUrl ?? '',
     })
+    setProviderEditorOpen(true)
+    setProviderFormError('')
+  }
+
+  const openExistingProvider = (trigger: HTMLButtonElement) => {
+    rememberProviderEditorTrigger(trigger)
+    setProviderEditorKind('edit')
     setProviderEditorOpen(true)
     setProviderFormError('')
   }
@@ -484,7 +550,7 @@ export function ModelsPage() {
         protocolOptions: protocolOptions as Record<string, unknown>,
         credential: providerDraft.credential,
       })
-      setProviderEditorOpen(false)
+      closeProviderEditor()
     } catch (error) {
       setProviderFormError(error instanceof Error ? error.message : '协议选项格式不正确。')
     }
@@ -718,7 +784,7 @@ export function ModelsPage() {
 
                 <div className="component-preparation-feedback" aria-live="polite">
                   {componentPreparationStatus === 'success' && (
-                    <div className="component-feedback is-success">
+                    <div className="component-feedback is-success motion-inline-feedback">
                       <Check size={15} aria-hidden="true" />
                       <div>
                         <strong>
@@ -750,7 +816,7 @@ export function ModelsPage() {
                     </div>
                   )}
                   {componentPreparationStatus === 'error' && componentPreparationError && (
-                    <div className="component-feedback is-error" role="alert">
+                    <div className="component-feedback is-error motion-inline-feedback" role="alert">
                       <TriangleAlert size={15} aria-hidden="true" />
                       <div><strong>组件准备未完成</strong><span>{componentPreparationError}</span></div>
                     </div>
@@ -788,7 +854,7 @@ export function ModelsPage() {
         </div>
 
         {performanceDraft.experienceMode === 'guided' ? (
-          <div className="guided-performance">
+          <div className="guided-performance motion-swap-surface" key="guided-performance">
             <div className="preference-grid" role="radiogroup" aria-label="性能偏好">
               {(Object.keys(preferenceCopy) as Array<keyof typeof preferenceCopy>).map(value => {
                 const item = preferenceCopy[value]
@@ -862,7 +928,7 @@ export function ModelsPage() {
             </div>
           </div>
         ) : (
-          <div className="professional-performance">
+          <div className="professional-performance motion-swap-surface" key="professional-performance">
             <div className="professional-toolbar">
               <div>
                 <strong>专业参数覆盖</strong>
@@ -976,7 +1042,13 @@ export function ModelsPage() {
             <h2>协议、认证与模型目录</h2>
             <p>协议决定请求格式；模型能力必须由你明确确认，发现结果不会自动推断。</p>
           </div>
-          <button className="button button-secondary" type="button" onClick={openNewProvider}>
+          <button
+            className="button button-secondary"
+            type="button"
+            aria-expanded={providerEditorOpen && providerEditorKind === 'new'}
+            aria-controls={providerEditorId}
+            onClick={event => openNewProvider(event.currentTarget)}
+          >
             <Plus size={15} aria-hidden="true" />新增供应商
           </button>
         </div>
@@ -998,13 +1070,19 @@ export function ModelsPage() {
               <button className="button button-secondary" type="button" onClick={() => testProvider(provider.id)} disabled={provider.status === 'testing'}>
                 <Link2 size={14} aria-hidden="true" />测试连接
               </button>
-              <button className="button button-secondary" type="button" onClick={() => setProviderEditorOpen(true)}>
+              <button
+                className="button button-secondary"
+                type="button"
+                aria-expanded={providerEditorOpen && providerEditorKind === 'edit'}
+                aria-controls={providerEditorId}
+                onClick={event => openExistingProvider(event.currentTarget)}
+              >
                 <Settings2 size={14} aria-hidden="true" />编辑
               </button>
             </div>
 
             {provider.authScheme !== 'none' && (
-              <div className="credential-strip">
+              <div className="credential-strip motion-surface-enter">
                 <LockKeyhole size={16} aria-hidden="true" />
                 <div>
                   <strong>{provider.credentialState === 'stored-locally' ? '凭据已保存在 Windows 凭据库' : '还没有保存凭据'}</strong>
@@ -1020,11 +1098,22 @@ export function ModelsPage() {
           <div className="provider-empty"><Cloud size={24} aria-hidden="true" /><strong>还没有供应商</strong><span>先添加一个协议端点，再发现或手工登记模型。</span></div>
         )}
 
-        {providerEditorOpen && (
-          <div className="provider-editor" aria-label="供应商编辑器">
+        <MotionPresence
+          show={providerEditorOpen}
+          className="motion-presence-provider-editor"
+          exitMs={140}
+        >
+          {providerEditorOpen && (
+            <div
+              className="provider-editor"
+              id={providerEditorId}
+              ref={providerEditorRef}
+              role="region"
+              aria-labelledby={providerEditorTitleId}
+            >
             <header>
-              <div><strong>{providerDraft.id ? '编辑供应商' : '新增供应商'}</strong><span>连接信息和密钥仅写入本机。</span></div>
-              <button type="button" aria-label="关闭供应商编辑器" onClick={() => setProviderEditorOpen(false)}><X size={17} aria-hidden="true" /></button>
+              <div><strong id={providerEditorTitleId}>{providerDraft.id ? '编辑供应商' : '新增供应商'}</strong><span>连接信息和密钥仅写入本机。</span></div>
+              <button type="button" aria-label="关闭供应商编辑器" onClick={closeProviderEditor}><X size={17} aria-hidden="true" /></button>
             </header>
             <div className="provider-editor-grid">
               <label>供应商 ID<input value={providerDraft.id} disabled={Boolean(provider && providerDraft.id === provider.id)} onChange={event => setProviderDraft(current => ({ ...current, id: event.target.value }))} placeholder="my-provider" /></label>
@@ -1035,17 +1124,18 @@ export function ModelsPage() {
               <label className="provider-editor-wide">Base URL<input value={providerDraft.baseUrl} disabled={providerDraft.protocol === 'local'} onChange={event => setProviderDraft(current => ({ ...current, baseUrl: event.target.value }))} placeholder={protocol?.defaultBaseUrl ?? 'https://api.example.com/v1'} /></label>
               <label>模型位置<select value={providerDraft.locality} onChange={event => setProviderDraft(current => ({ ...current, locality: event.target.value as 'local' | 'cloud' }))}><option value="local">本机</option><option value="cloud">云端</option></select></label>
               <label>请求超时（秒）<input type="number" min="1" value={providerDraft.timeoutSeconds} onChange={event => setProviderDraft(current => ({ ...current, timeoutSeconds: clampNumber(event.target.value, 1, 3600) }))} /></label>
-              {providerDraft.authScheme !== 'none' && <label className="provider-editor-wide">保存凭据（可选）<input type="password" value={providerDraft.credential} onChange={event => setProviderDraft(current => ({ ...current, credential: event.target.value }))} placeholder="留空则保留现有凭据" autoComplete="new-password" /></label>}
+              {providerDraft.authScheme !== 'none' && <label className="provider-editor-wide motion-field-enter">保存凭据（可选）<input type="password" value={providerDraft.credential} onChange={event => setProviderDraft(current => ({ ...current, credential: event.target.value }))} placeholder="留空则保留现有凭据" autoComplete="new-password" /></label>}
               <label className="provider-editor-wide">协议选项（JSON）<textarea value={providerDraft.protocolOptionsText} onChange={event => setProviderDraft(current => ({ ...current, protocolOptionsText: event.target.value }))} rows={4} spellCheck={false} /></label>
               <label className="provider-enable"><input type="checkbox" checked={providerDraft.enabled} onChange={event => setProviderDraft(current => ({ ...current, enabled: event.target.checked }))} />启用这个供应商</label>
             </div>
-            {providerFormError && <p className="provider-form-error"><TriangleAlert size={14} aria-hidden="true" />{providerFormError}</p>}
+            {providerFormError && <p className="provider-form-error motion-inline-feedback"><TriangleAlert size={14} aria-hidden="true" />{providerFormError}</p>}
             <footer>
               <span>{protocol?.discoveryPath ? `支持从 ${protocol.discoveryPath} 发现模型` : '此协议没有标准模型发现接口'}</span>
               <button className="button button-primary" type="button" onClick={submitProvider} disabled={backend.mode !== 'real'}><Save size={14} aria-hidden="true" />保存供应商</button>
             </footer>
-          </div>
-        )}
+            </div>
+          )}
+        </MotionPresence>
       </section>
 
       {provider && (
@@ -1064,7 +1154,7 @@ export function ModelsPage() {
             </div>
 
             {discoveryProviderId === provider.id && discoveredModels.length > 0 && (
-              <div className="discovery-results" aria-label="发现的模型">
+              <div className="discovery-results motion-surface-enter" aria-label="发现的模型">
                 {discoveredModels.slice(0, 12).map(model => (
                   <button type="button" key={model.modelId} onClick={() => selectDiscoveredModel(model.modelId)}>
                     <span><strong>{model.displayName}</strong><small>{model.modelId}</small></span>

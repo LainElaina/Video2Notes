@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   Activity,
   BookOpenText,
@@ -401,17 +401,44 @@ export function AppShell({ children }: { children: ReactNode }) {
   const workspaceMode = useUiPreferences(state => state.workspaceMode)
   const themePreset = useUiPreferences(state => state.themePreset)
   const professionalReader = view === 'reader' && workspaceMode === 'professional'
+  const contextShouldShow = !contextCollapsed && !professionalReader
+  const [contextSlotOpen, setContextSlotOpen] = useState(contextShouldShow)
+
+  useEffect(() => {
+    if (professionalReader) {
+      setContextSlotOpen(false)
+      return
+    }
+
+    if (contextShouldShow) {
+      setContextSlotOpen(true)
+      return
+    }
+
+    const closeTimer = window.setTimeout(() => setContextSlotOpen(false), 140)
+    return () => window.clearTimeout(closeTimer)
+  }, [contextShouldShow, professionalReader])
+
+  const layoutContextCollapsed = contextCollapsed && !contextSlotOpen
 
   return (
     <div
-      className={`app-shell ${contextCollapsed ? 'context-is-collapsed' : ''} ${
+      className={`app-shell ${layoutContextCollapsed ? 'context-is-collapsed' : ''} ${
         professionalReader ? 'detail-workspace' : ''
       }`}
       data-theme={themePreset}
       data-workspace-mode={workspaceMode}
     >
       <TopNavigation />
-      {!contextCollapsed && !professionalReader && <ContextPanel />}
+      {!professionalReader && (
+        <MotionPresence
+          show={!contextCollapsed}
+          className="motion-presence-context-panel"
+          exitMs={140}
+        >
+          {!contextCollapsed && <ContextPanel />}
+        </MotionPresence>
+      )}
       <section className="workspace">
         <WorkspaceHeader />
         {contextCollapsed && !professionalReader && (
@@ -438,7 +465,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
           </div>
         </MotionPresence>
-        <main className="workspace-main">{children}</main>
+        <main className="workspace-main">
+          <div className="workspace-page-surface" key={view}>
+            {children}
+          </div>
+        </main>
       </section>
     </div>
   )
