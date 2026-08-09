@@ -26,6 +26,7 @@ import { ReworkDrawer } from '../components/ReworkDrawer'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SupportingMaterialsDrawer } from '../components/SupportingMaterialsDrawer'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
+import { VisualAsset } from '../components/VisualAsset'
 import { usePopoverFocus } from '../components/usePopoverFocus'
 import type { EvidenceKind, NoteDocument, ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
@@ -166,6 +167,12 @@ export function ReaderPage() {
   if (!task || !note) {
     return (
       <div className="empty-workspace">
+        <VisualAsset
+          className="empty-workspace-visual"
+          asset="emptyReader"
+          width={640}
+          height={640}
+        />
         <FileText size={26} aria-hidden="true" />
         <h2>还没有可阅读的笔记</h2>
         <p>任务完成并通过验证后，Markdown 和证据会出现在这里。</p>

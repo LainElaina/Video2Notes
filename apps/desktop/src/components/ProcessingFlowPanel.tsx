@@ -22,6 +22,8 @@ import type {
   TelemetrySample,
   TelemetryValue,
 } from '../domain'
+import { preferredScrollBehavior } from '../motion'
+import { VisualAsset } from './VisualAsset'
 import './ProcessingFlowPanel.css'
 
 export type RunEventLogLevel = 'info' | 'warning' | 'error'
@@ -405,7 +407,10 @@ export function ProcessingFlowPanel({
     if (!autoFollow) return
     const viewport = viewportRef.current
     if (!viewport) return
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
+    viewport.scrollTo({
+      top: viewport.scrollHeight,
+      behavior: preferredScrollBehavior(),
+    })
   }, [autoFollow, filteredEvents.length])
 
   useEffect(() => {
@@ -415,7 +420,10 @@ export function ProcessingFlowPanel({
     const target = [...viewport.querySelectorAll<HTMLElement>('[data-flow-event-id]')]
       .find(node => node.dataset.flowEventId === focusedEventId)
     if (!target) return
-    target.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    target.scrollIntoView?.({
+      behavior: preferredScrollBehavior(),
+      block: 'center',
+    })
     target.focus({ preventScroll: true })
   }, [filteredEvents, focusedEventId])
 
@@ -595,9 +603,12 @@ export function ProcessingFlowPanel({
       <div className="processing-flow-viewport" ref={viewportRef}>
         {normalizedEvents.length === 0 ? (
           <div className="processing-flow-empty">
-            <FileClock size={22} aria-hidden="true" />
-            <strong>这个任务没有流程日志</strong>
-            <p>早期版本创建的任务可能只保留阶段状态和产物；新任务会在处理时持续写入事件。</p>
+            <VisualAsset className="inline-empty-visual" asset="emptyProcessingLog" width={192} height={124} />
+            <div>
+              <FileClock size={22} aria-hidden="true" />
+              <strong>这个任务没有流程日志</strong>
+              <p>早期版本创建的任务可能只保留阶段状态和产物；新任务会在处理时持续写入事件。</p>
+            </div>
           </div>
         ) : filteredEvents.length === 0 ? (
           <div className="processing-flow-empty is-filtered">

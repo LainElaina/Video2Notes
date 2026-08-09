@@ -4,7 +4,6 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  FileVideo2,
   Gauge,
   Globe2,
   MonitorUp,
@@ -19,6 +18,7 @@ import { CreateProcessingOptions } from '../components/CreateProcessingOptions'
 import { DependencyPreflightDialog } from '../components/DependencyPreflightDialog'
 import { MotionPresence } from '../components/MotionPresence'
 import { ProcessingBenchmarkGuide } from '../components/ProcessingBenchmarkGuide'
+import { VisualAsset } from '../components/VisualAsset'
 import { formatTime, platformLabel } from '../domain'
 import type { ProcessingMode } from '../domain'
 import { validateSamplingDraft } from '../sampling'
@@ -64,6 +64,19 @@ const modeCopy: Record<
     icon: Sparkles,
   },
 }
+
+const sourceVisualByPlatform = {
+  bilibili: 'sourceBilibili',
+  youtube: 'sourceYoutube',
+  x: 'sourceX',
+  local: 'sourceLocal',
+} as const
+
+const modeVisualByMode = {
+  fast: 'modeFast',
+  balanced: 'modeBalanced',
+  accurate: 'modeAccurate',
+} as const
 
 export function CreatePage() {
   const draft = useStudioStore(state => state.draft)
@@ -129,12 +142,22 @@ export function CreatePage() {
   return (
     <div className="create-page">
       <section className="create-intro">
-        <span className="section-kicker">EVIDENCE-FIRST VIDEO NOTES</span>
-        <h2>将视频变成可核查的笔记</h2>
-        <p>
-          下载或导入视频后，语音、屏幕文字和关键画面会进入同一条真实时间轴，再生成可回看的
-          Markdown。
-        </p>
+        <div className="create-intro-copy">
+          <span className="section-kicker">EVIDENCE-FIRST VIDEO NOTES</span>
+          <h2>将视频变成可核查的笔记</h2>
+          <p>
+            下载或导入视频后，语音、屏幕文字和关键画面会进入同一条真实时间轴，再生成可回看的
+            Markdown。
+          </p>
+        </div>
+        <VisualAsset
+          className="create-intro-visual"
+          asset="heroEvidenceTimeline"
+          width={640}
+          height={640}
+          loading="eager"
+          fetchPriority="high"
+        />
       </section>
 
       <section
@@ -199,6 +222,21 @@ export function CreatePage() {
         </div>
       </section>
 
+      <div className="source-platform-visuals" aria-label="支持的视频来源">
+        {(
+          [
+            ['sourceBilibili', 'Bilibili'],
+            ['sourceYoutube', 'YouTube'],
+            ['sourceX', 'X'],
+            ['sourceLocal', '本地文件'],
+          ] as const
+        ).map(([asset, label]) => (
+          <div className="source-platform-visual" key={asset} title={label}>
+            <VisualAsset asset={asset} width={320} height={140} />
+          </div>
+        ))}
+      </div>
+
       <MotionPresence
         show={Boolean(draft.error)}
         className="motion-presence-inline-feedback"
@@ -222,7 +260,12 @@ export function CreatePage() {
             aria-label={manifestNeedsRefresh ? '来源探测结果，需要重新探测' : '来源探测结果'}
           >
           <div className="manifest-thumb" aria-hidden="true">
-            <FileVideo2 size={28} />
+            <VisualAsset
+              className="visual-manifest-thumb"
+              asset={sourceVisualByPlatform[draft.manifest.platform]}
+              width={120}
+              height={90}
+            />
             <span>{platformLabel[draft.manifest.platform]}</span>
           </div>
           <div className="manifest-main">
@@ -322,6 +365,12 @@ export function CreatePage() {
               <span className="processing-scope-icon">
                 <ScanText size={18} aria-hidden="true" />
               </span>
+              <VisualAsset
+                className="scope-visual"
+                asset="scopeAudioVisual"
+                width={144}
+                height={112}
+              />
               <span>
                 <strong>完整音画</strong>
                 <small>语音、字幕、画面变化、屏幕文字与关键帧进入同一时间轴</small>
@@ -341,6 +390,12 @@ export function CreatePage() {
               <span className="processing-scope-icon">
                 <AudioLines size={18} aria-hidden="true" />
               </span>
+              <VisualAsset
+                className="scope-visual"
+                asset="scopeAudioOnly"
+                width={144}
+                height={112}
+              />
               <span>
                 <strong>仅识别音频</strong>
                 <small>跳过视觉扫描、OCR 与截图，只处理平台字幕、音轨和语音时间戳</small>
@@ -369,6 +424,12 @@ export function CreatePage() {
                   value={mode}
                   checked={checked}
                   onChange={() => setDraftMode(mode)}
+                />
+                <VisualAsset
+                  className="mode-visual"
+                  asset={modeVisualByMode[mode]}
+                  width={132}
+                  height={132}
                 />
                 <span className="mode-icon">
                   <Icon size={19} aria-hidden="true" />

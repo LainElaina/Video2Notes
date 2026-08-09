@@ -4,6 +4,7 @@ import '@fontsource-variable/noto-sans-sc/wght.css'
 import App from './App'
 import './styles.css'
 import './solid-glass.css'
+import './visual-assets.css'
 
 const root = document.getElementById('root')
 

@@ -12,6 +12,7 @@ import {
 import type { ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
 import { useStudioStore } from '../store'
+import { VisualAsset } from './VisualAsset'
 
 interface SupportingMaterialsDrawerProps {
   task: ProcessingTask
@@ -280,8 +281,11 @@ export function SupportingMaterialsDrawer({
               </div>
             ) : (
               <div className="material-empty">
-                <Link2 size={18} aria-hidden="true" />
-                <p>还没有补充资料。它们会和视频证据一起保存在此任务下。</p>
+                <VisualAsset className="inline-empty-visual" asset="emptyMaterials" width={192} height={124} />
+                <div>
+                  <Link2 size={18} aria-hidden="true" />
+                  <p>还没有补充资料。它们会和视频证据一起保存在此任务下。</p>
+                </div>
               </div>
             )}
           </section>

@@ -42,6 +42,7 @@ import type {
 } from '../domain'
 import { MotionPresence } from '../components/MotionPresence'
 import { RuntimePackagesPanel } from '../components/RuntimePackagesPanel'
+import { VisualAsset } from '../components/VisualAsset'
 import { useStudioStore } from '../store'
 import {
   useUiPreferences,
@@ -596,6 +597,13 @@ export function ModelsPage() {
   return (
     <div className="models-page models-workspace">
       <header className="models-hero">
+        <VisualAsset
+          className="models-hero-visual"
+          asset="settingsWorkbench"
+          width={720}
+          height={720}
+          loading="eager"
+        />
         <div>
           <span className="section-kicker">Video2Notes 偏好设置</span>
           <h1>设置中心</h1>
@@ -1149,7 +1157,14 @@ export function ModelsPage() {
             )}
           </div>
         ) : (
-          <div className="provider-empty"><Cloud size={24} aria-hidden="true" /><strong>还没有供应商</strong><span>先添加一个协议端点，再发现或手工登记模型。</span></div>
+          <div className="provider-empty">
+            <VisualAsset className="inline-empty-visual" asset="emptyProvider" width={192} height={124} />
+            <div>
+              <Cloud size={24} aria-hidden="true" />
+              <strong>还没有供应商</strong>
+              <span>先添加一个协议端点，再发现或手工登记模型。</span>
+            </div>
+          </div>
         )}
 
         <MotionPresence

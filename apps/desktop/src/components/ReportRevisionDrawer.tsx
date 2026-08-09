@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import { MotionPresence } from './MotionPresence'
+import { VisualAsset } from './VisualAsset'
 
 export type ReportRevisionPreset =
   | 'concise'
@@ -440,8 +441,9 @@ export function ReportRevisionDrawer({
               >
                 {revisions.length === 0 && (
                   <div className="report-revision-empty">
-                    <RefreshCcw size={19} aria-hidden="true" />
+                    <VisualAsset className="inline-empty-visual" asset="emptyReportHistory" width={192} height={124} />
                     <div>
+                      <RefreshCcw size={19} aria-hidden="true" />
                       <strong>还没有重新生成的报告</strong>
                       <p>
                         选择报告类型和输出格式后创建第一个不可变 revision；原始报告不会被覆盖。

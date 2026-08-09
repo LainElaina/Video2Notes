@@ -32,6 +32,7 @@ import type {
 } from '../domain'
 import { useStudioStore } from '../store'
 import { MotionPresence } from './MotionPresence'
+import { VisualAsset } from './VisualAsset'
 
 interface RuntimePackagesPanelProps {
   experienceMode: ExperienceMode
@@ -561,8 +562,12 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
               })}
               {inventory.instances.length === 0 && (
                 <div className="runtime-empty-state">
-                  <Archive size={20} aria-hidden="true" />
-                  <div><strong>还没有发现可用运行时</strong><span>检测本机环境、绑定自描述目录，或从可信目录安装组件。</span></div>
+                  <VisualAsset className="inline-empty-visual" asset="emptyRuntime" width={192} height={124} />
+                  <div>
+                    <Archive size={20} aria-hidden="true" />
+                    <strong>还没有发现可用运行时</strong>
+                    <span>检测本机环境、绑定自描述目录，或从可信目录安装组件。</span>
+                  </div>
                 </div>
               )}
             </div>

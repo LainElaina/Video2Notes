@@ -58,8 +58,25 @@ const logEvents: RunEventLogEntry[] = [
   },
 ]
 
+const setReducedMotion = (matches: boolean) => {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)' && matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  })
+}
+
 describe('ProcessingFlowPanel', () => {
   beforeEach(() => {
+    setReducedMotion(false)
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
       value: vi.fn(),
@@ -114,7 +131,10 @@ describe('ProcessingFlowPanel', () => {
     )
 
     await waitFor(() => {
-      expect(HTMLElement.prototype.scrollTo).toHaveBeenCalled()
+      expect(HTMLElement.prototype.scrollTo).toHaveBeenCalledWith({
+        top: 0,
+        behavior: 'smooth',
+      })
     })
 
     fireEvent.click(
@@ -258,7 +278,38 @@ describe('ProcessingFlowPanel', () => {
     expect(screen.getByRole('checkbox', { name: '自动跟随' })).not.toBeChecked()
     expect(screen.getByText('OcrWorkerError')).toBeInTheDocument()
     await waitFor(() => {
-      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled()
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'center',
+      })
+    })
+  })
+
+  it('avoids smooth automatic and failure-focused scrolling when reduced motion is requested', async () => {
+    setReducedMotion(true)
+    const task = makeTask()
+    task.status = 'failed'
+    task.stages = task.stages.map(stage =>
+      stage.id === 'vision'
+        ? {
+            ...stage,
+            status: 'failed',
+            backendStages: ['vision.scan', 'ocr.extract'],
+          }
+        : stage,
+    )
+
+    render(<ProcessingFlowPanel task={task} events={logEvents} />)
+
+    await waitFor(() => {
+      expect(HTMLElement.prototype.scrollTo).toHaveBeenCalledWith({
+        top: 0,
+        behavior: 'auto',
+      })
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'auto',
+        block: 'center',
+      })
     })
   })
 

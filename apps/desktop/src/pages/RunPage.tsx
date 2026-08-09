@@ -16,6 +16,7 @@ import { MotionPresence } from '../components/MotionPresence'
 import { ProcessingFlowPanel } from '../components/ProcessingFlowPanel'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
+import { VisualAsset } from '../components/VisualAsset'
 import { formatTime, statusLabel } from '../domain'
 import { useStudioStore } from '../store'
 
@@ -76,7 +77,13 @@ export function RunPage() {
   if (!task) {
     return (
       <div className="empty-workspace">
-        <TriangleAlert size={24} />
+        <VisualAsset
+          className="empty-workspace-visual"
+          asset="emptyTasks"
+          width={640}
+          height={640}
+        />
+        <TriangleAlert size={24} aria-hidden="true" />
         <h2>还没有任务</h2>
         <p>从新建任务页导入一个视频后，处理进度会显示在这里。</p>
       </div>

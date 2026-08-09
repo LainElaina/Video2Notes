@@ -7,6 +7,7 @@ import {
 } from '../sampling'
 import { useStudioStore } from '../store'
 import { MotionPresence } from './MotionPresence'
+import { VisualAsset } from './VisualAsset'
 
 const samplingModes: Array<{ value: SamplingMode; label: string; description: string }> = [
   {
@@ -33,6 +34,14 @@ const reportPresets: Array<{ value: ReportPreset; label: string; description: st
   { value: 'beginner', label: '入门', description: '用清晰步骤解释术语，不补造背景' },
   { value: 'executive', label: '领导', description: '优先结论、影响、风险、决策与行动项' },
 ]
+
+const reportVisualByPreset = {
+  concise: 'reportConcise',
+  detailed: 'reportDetailed',
+  professional: 'reportProfessional',
+  beginner: 'reportBeginner',
+  executive: 'reportExecutive',
+} as const
 
 const intervalPresets = [0.1, 0.5, 1] as const
 
@@ -136,6 +145,23 @@ export function CreateProcessingOptions() {
           >
             {!audioOnly && (
           <div className="create-visual-contract">
+            <div className="sampling-visual-rail" aria-label="采样策略预览">
+              {(
+                [
+                  ['samplingAdaptive', '智能变化', '只在真实变化峰值取帧'],
+                  ['samplingFixed', '固定间隔', '按秒数保持稳定节奏'],
+                  ['samplingSkip', '跳过画面', '保留音频与字幕轨'],
+                ] as const
+              ).map(([asset, label, detail]) => (
+                <div className="sampling-visual-card" key={asset}>
+                  <VisualAsset asset={asset} width={116} height={92} />
+                  <span>
+                    <strong>{label}</strong>
+                    <span>{detail}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
             <div className="create-sampling-default">
           <label>
             全局采样方式
@@ -329,6 +355,12 @@ export function CreateProcessingOptions() {
                   value={preset.value}
                   checked={checked}
                   onChange={() => setReportPreset(preset.value)}
+                />
+                <VisualAsset
+                  className="report-preset-visual"
+                  asset={reportVisualByPreset[preset.value]}
+                  width={112}
+                  height={88}
                 />
                 <span>
                   <strong>{preset.label}</strong>

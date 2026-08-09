@@ -711,11 +711,27 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .processing-flow-panel *,
-  .processing-flow-panel *::before,
-  .processing-flow-panel *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+  .processing-flow-viewport {
+    scroll-behavior: auto;
+  }
+
+  .processing-flow-levels button,
+  .processing-flow-search,
+  .processing-flow-follow > span,
+  .processing-flow-follow > span i,
+  .processing-flow-icon-button,
+  .processing-flow-event {
+    transition-property: opacity, color, background-color, border-color, box-shadow;
+    transition-duration: 120ms;
+    transition-timing-function: ease;
+  }
+
+  .processing-flow-icon-button:active:not(:disabled) {
+    transform: none;
+  }
+
+  .processing-flow-metrics-toggle svg {
+    transition: none;
   }
 }
 

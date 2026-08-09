@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Maximize2, Pause, Play, ScanText } from 'lucide-react'
 import { formatTime } from '../domain'
+import { VisualAsset } from './VisualAsset'
 
 interface SynchronizedVideoProps {
   title: string
@@ -55,6 +56,13 @@ export function SynchronizedVideo({
     'EvidenceSpan',
     'Canonical NoteDocument',
   ][sceneIndex]
+  const sceneAssets = [
+    'demoTimeline',
+    'demoRework',
+    'demoEvidenceSpan',
+    'demoNoteDocument',
+  ] as const
+  const sceneAsset = sceneAssets[sceneIndex]
 
   return (
     <section className="video-console" aria-label="同步视频">
@@ -76,15 +84,17 @@ export function SynchronizedVideo({
           />
         ) : (
           <div className="fixture-slide" aria-label={`当前演示画面：${sceneTitle}`}>
-            <small>VIDEO2NOTES / FRAME {Math.floor(currentTimeSeconds * 30)}</small>
-            <h3>{sceneTitle}</h3>
-            <div className="fixture-diagram" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-              <i />
+            <VisualAsset
+              className="video-fixture-visual"
+              asset={sceneAsset}
+              width={960}
+              height={640}
+            />
+            <div className="fixture-slide-overlay">
+              <small>VIDEO2NOTES / FRAME {Math.floor(currentTimeSeconds * 30)}</small>
+              <strong>{sceneTitle}</strong>
+              <span>speech · screen text · visual state · verified claim</span>
             </div>
-            <p>speech · screen text · visual state · verified claim</p>
           </div>
         )}
         {(!src || ocrConfidence !== undefined) && (
