@@ -167,7 +167,55 @@ class ApiAppTests(unittest.TestCase):
         self.assertTrue(payload["managed_root"].endswith("runtime-packages\\managed"))
         self.assertIn("instances", payload["inventory"])
         self.assertIn("operations", payload["inventory"])
+        self.assertIn("local_tools", payload["inventory"])
         self.assertIn("releases", payload)
+
+    def test_local_dependency_paths_can_be_scanned_bound_updated_and_unbound(self) -> None:
+        first = Path(self.temporary.name) / "external" / "ffmpeg.exe"
+        second = Path(self.temporary.name) / "replacement" / "ffmpeg.exe"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        first.write_bytes(b"fixture")
+        second.write_bytes(b"replacement")
+
+        with patch(
+            "video2notes.components.local_tools._run_version",
+            return_value=("7.1.1", "ffmpeg version 7.1.1", None),
+        ):
+            bound = self.client.post(
+                "/api/runtime-packages/local-tools/bindings",
+                headers=self.headers,
+                json={"dependency_id": "tool.ffmpeg", "path": str(first)},
+            )
+            self.assertEqual(self.context.pipeline.runtime.ffmpeg_path, str(first.resolve()))
+            inventory = self.client.get(
+                "/api/runtime-packages/local-tools",
+                headers=self.headers,
+            )
+            updated = self.client.put(
+                "/api/runtime-packages/local-tools/bindings/tool.ffmpeg",
+                headers=self.headers,
+                json={"path": str(second)},
+            )
+            self.assertEqual(self.context.pipeline.runtime.ffmpeg_path, str(second.resolve()))
+
+        self.assertEqual(bound.status_code, 200)
+        self.assertTrue(bound.json()["bound"])
+        self.assertIn("视频处理", bound.json()["display_name_zh"])
+        self.assertEqual(inventory.status_code, 200)
+        self.assertIn("tool.ffmpeg", inventory.json()["bindings"])
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["path"], str(second.resolve()))
+
+        removed = self.client.delete(
+            "/api/runtime-packages/local-tools/bindings/tool.ffmpeg",
+            headers=self.headers,
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertTrue(removed.json()["removed"])
+        self.assertNotEqual(self.context.pipeline.runtime.ffmpeg_path, str(second.resolve()))
+        self.assertTrue(first.is_file())
+        self.assertTrue(second.is_file())
 
     def test_system_report_exposes_engine_specific_acceleration_and_mixed_plan(
         self,

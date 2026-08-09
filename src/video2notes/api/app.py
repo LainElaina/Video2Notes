@@ -32,6 +32,8 @@ from video2notes.components import (
     ComponentManagerError,
     ComponentNotReadyError,
     FeatureAvailabilityState,
+    LocalToolInventory,
+    LocalToolResult,
     PrepareResult,
     RuntimeBinding,
     RuntimePackageBindingError,
@@ -311,6 +313,15 @@ class RuntimeCustomRequest(ApiModel):
     root: str = Field(min_length=1, max_length=32_768)
 
 
+class LocalToolBindingRequest(ApiModel):
+    dependency_id: str = Field(min_length=2, max_length=128)
+    path: str = Field(min_length=1, max_length=32_768)
+
+
+class LocalToolPathRequest(ApiModel):
+    path: str = Field(min_length=1, max_length=32_768)
+
+
 class RuntimeUpgradeRequest(ApiModel):
     version: str | None = Field(default=None, min_length=1, max_length=128)
 
@@ -520,14 +531,19 @@ class ApiContext:
                 resource_reserve=self.performance_settings.reserve,
                 performance_overrides=self.performance_settings.overrides,
                 acceleration_capabilities=detect_acceleration_capabilities(),
-                ffmpeg_path=str(
-                    self.component_manager.binary_path("ffmpeg") or "ffmpeg"
-                ),
-                ffprobe_path=str(
-                    self.component_manager.binary_path("ffprobe") or "ffprobe"
-                ),
-                pdf_browser_executable=(
-                    str(self.pdf_browser_path) if self.pdf_browser_path is not None else None
+                ffmpeg_path=self.local_tool_path(
+                    "tool.ffmpeg",
+                    str(self.component_manager.binary_path("ffmpeg") or "ffmpeg"),
+                )
+                or "ffmpeg",
+                ffprobe_path=self.local_tool_path(
+                    "tool.ffprobe",
+                    str(self.component_manager.binary_path("ffprobe") or "ffprobe"),
+                )
+                or "ffprobe",
+                pdf_browser_executable=self.local_tool_path(
+                    "render.chromium_pdf",
+                    str(self.pdf_browser_path) if self.pdf_browser_path is not None else None,
                 ),
             )
             self.pipeline = Video2NotesPipeline(
@@ -541,6 +557,15 @@ class ApiContext:
     def pipeline_snapshot(self) -> tuple[Video2NotesPipeline, tuple[str, ...]]:
         with self.configuration_lock:
             return self.pipeline, self.runtime_warnings
+
+    def local_tool_path(self, dependency_id: str, fallback: str | None) -> str | None:
+        """Resolve an explicit user binding without mutating their installation."""
+
+        binding = self.runtime_package_manager.local_tool_manager.binding(dependency_id)
+        if binding is None:
+            return fallback
+        selected = Path(binding.path).expanduser()
+        return str(selected.resolve()) if selected.exists() else fallback
 
     async def preflight(self, request: PipelineRequest) -> RuntimePreflightResult:
         pipeline, _ = self.pipeline_snapshot()
@@ -578,10 +603,19 @@ class ApiContext:
             resource_reserve=performance.reserve,
             performance_overrides=performance.overrides,
             acceleration_capabilities=detect_acceleration_capabilities(),
-            ffmpeg_path=str(self.component_manager.binary_path("ffmpeg") or "ffmpeg"),
-            ffprobe_path=str(self.component_manager.binary_path("ffprobe") or "ffprobe"),
-            pdf_browser_executable=(
-                str(self.pdf_browser_path) if self.pdf_browser_path is not None else None
+            ffmpeg_path=self.local_tool_path(
+                "tool.ffmpeg",
+                str(self.component_manager.binary_path("ffmpeg") or "ffmpeg"),
+            )
+            or "ffmpeg",
+            ffprobe_path=self.local_tool_path(
+                "tool.ffprobe",
+                str(self.component_manager.binary_path("ffprobe") or "ffprobe"),
+            )
+            or "ffprobe",
+            pdf_browser_executable=self.local_tool_path(
+                "render.chromium_pdf",
+                str(self.pdf_browser_path) if self.pdf_browser_path is not None else None,
             ),
         )
         runtime, clients = apply_runtime_package_snapshot(
@@ -824,6 +858,67 @@ def create_app(
     def discover_runtime_packages() -> RuntimePackageReport:
         context.runtime_package_manager.discover()
         return _runtime_package_report(context)
+
+    @app.get(
+        "/api/runtime-packages/local-tools",
+        response_model=LocalToolInventory,
+        dependencies=protected,
+    )
+    def local_tool_inventory() -> LocalToolInventory:
+        return context.runtime_package_manager.local_tools()
+
+    @app.post(
+        "/api/runtime-packages/local-tools/discover",
+        response_model=LocalToolInventory,
+        dependencies=protected,
+    )
+    def discover_local_tools() -> LocalToolInventory:
+        return context.runtime_package_manager.discover_local_tools()
+
+    @app.post(
+        "/api/runtime-packages/local-tools/bindings",
+        response_model=LocalToolResult,
+        dependencies=protected,
+    )
+    def bind_local_tool(request: LocalToolBindingRequest) -> LocalToolResult:
+        try:
+            result = context.runtime_package_manager.bind_local_tool(
+                request.dependency_id,
+                request.path,
+            )
+            context.refresh_pipeline()
+            return result
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.put(
+        "/api/runtime-packages/local-tools/bindings/{dependency_id}",
+        response_model=LocalToolResult,
+        dependencies=protected,
+    )
+    def update_local_tool_binding(
+        dependency_id: str,
+        request: LocalToolPathRequest,
+    ) -> LocalToolResult:
+        try:
+            result = context.runtime_package_manager.bind_local_tool(
+                dependency_id,
+                request.path,
+            )
+            context.refresh_pipeline()
+            return result
+        except RuntimePackageManagerError as error:
+            raise _runtime_http_exception(error) from None
+
+    @app.delete(
+        "/api/runtime-packages/local-tools/bindings/{dependency_id}",
+        dependencies=protected,
+    )
+    def unbind_local_tool(dependency_id: str) -> dict[str, bool]:
+        removed = context.runtime_package_manager.unbind_local_tool(dependency_id)
+        if removed:
+            context.refresh_pipeline()
+        return {"removed": removed}
 
     @app.post(
         "/api/runtime-packages/install",

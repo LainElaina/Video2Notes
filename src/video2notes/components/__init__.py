@@ -9,6 +9,12 @@ from .downloaders import (
     PaddleCompatibleDownloader,
     PaddleHuggingFaceDownloader,
 )
+from .local_tools import (
+    LocalToolManager,
+    LocalToolManagerError,
+    LocalToolNotFoundError,
+    LocalToolPathError,
+)
 from .manager import (
     ComponentManager,
     ComponentManagerError,
@@ -53,6 +59,10 @@ from .runtime_manager import (
 from .runtime_models import (
     FeatureAvailability,
     FeatureAvailabilityState,
+    LocalToolBinding,
+    LocalToolCandidate,
+    LocalToolInventory,
+    LocalToolResult,
     RuntimeArchivePartSpec,
     RuntimeArchiveSpec,
     RuntimeBinding,
@@ -102,6 +112,14 @@ __all__ = [
     "DownloadSource",
     "HuggingFaceSnapshotDownloader",
     "LocalAdapterSettings",
+    "LocalToolBinding",
+    "LocalToolCandidate",
+    "LocalToolInventory",
+    "LocalToolManager",
+    "LocalToolManagerError",
+    "LocalToolNotFoundError",
+    "LocalToolPathError",
+    "LocalToolResult",
     "LocalModelRole",
     "ModuleProbeResult",
     "PaddleCompatibilityResolver",

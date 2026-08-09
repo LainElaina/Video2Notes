@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
+from .local_tools import LocalToolManager, LocalToolManagerError
 from .runtime_catalog import (
     RuntimePackageCatalog,
     runtime_catalog_from_environment,
@@ -34,6 +35,8 @@ from .runtime_downloaders import (
 from .runtime_models import (
     RUNTIME_PACKAGE_INSTALL_MARKER,
     RUNTIME_PACKAGE_MANIFEST,
+    LocalToolInventory,
+    LocalToolResult,
     RuntimeBinding,
     RuntimeBindingSnapshot,
     RuntimeCapabilitySpec,
@@ -158,6 +161,7 @@ class RuntimePackageManager:
         system_packages: Sequence[RuntimePackageCandidate] = (),
         bundled_roots: Sequence[str | Path] = (),
         system_roots: Sequence[str | Path] = (),
+        local_tool_manager: LocalToolManager | None = None,
         max_workers: int = 2,
     ) -> None:
         if max_workers < 1:
@@ -224,6 +228,7 @@ class RuntimePackageManager:
         self._futures: dict[str, Future[None]] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._closed = False
+        self.local_tool_manager = local_tool_manager or LocalToolManager(self.data_root)
         with self._state_guard():
             if not self.config_path.exists():
                 self._write_config(RuntimePackageConfig())
@@ -325,12 +330,31 @@ class RuntimePackageManager:
             bindings=dict(config.bindings),
             operations=operations,
             available_releases=compatible_releases,
+            local_tools=self.local_tool_manager.inventory(),
         )
 
     def discover(self) -> RuntimePackageInventory:
         """Refresh all four package sources and return the resulting inventory."""
 
+        self.local_tool_manager.discover()
         return self.inventory()
+
+    def local_tools(self) -> LocalToolInventory:
+        """Return the cached machine dependency scan, scanning once if needed."""
+
+        return self.local_tool_manager.inventory()
+
+    def discover_local_tools(self) -> LocalToolInventory:
+        return self.local_tool_manager.discover()
+
+    def bind_local_tool(self, dependency_id: str, path: str | Path) -> LocalToolResult:
+        try:
+            return self.local_tool_manager.bind(dependency_id, path)
+        except LocalToolManagerError as error:
+            raise RuntimePackagePathError(str(error)) from None
+
+    def unbind_local_tool(self, dependency_id: str) -> bool:
+        return self.local_tool_manager.unbind(dependency_id)
 
     def resolve(self, requirement_id: str) -> RuntimePackageInstance:
         inventory = self.inventory()

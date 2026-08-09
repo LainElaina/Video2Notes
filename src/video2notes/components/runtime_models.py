@@ -527,11 +527,77 @@ class RuntimePackageLease(RuntimeModel):
     expires_at_utc: str | None = None
 
 
+class LocalToolCandidate(RuntimeModel):
+    """One locally discovered executable or Python module candidate.
+
+    Kept in this module so the runtime inventory remains one serializable
+    contract for the desktop client.  The scanner implementation lives in
+    ``local_tools.py`` and reuses this shape through model validation.
+    """
+
+    path: str = Field(min_length=1, max_length=32_768)
+    source: str = Field(min_length=1, max_length=32)
+    version: str | None = None
+    compatible: bool = False
+    detail: str | None = None
+    detail_zh: str | None = None
+
+
+class LocalToolBinding(RuntimeModel):
+    dependency_id: str = Field(min_length=2, max_length=128)
+    path: str = Field(min_length=1, max_length=32_768)
+    kind: str = Field(min_length=1, max_length=32)
+    bound_at_utc: str
+    last_version: str | None = None
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def validate_path(cls, value: object) -> str:
+        raw = str(value).strip()
+        if not raw or "\x00" in raw:
+            raise ValueError("local tool path is invalid")
+        return raw
+
+
+class LocalToolResult(RuntimeModel):
+    """UI-ready local dependency state with localized diagnostics."""
+
+    dependency_id: str = Field(min_length=2, max_length=128)
+    display_name: str = Field(min_length=1, max_length=200)
+    display_name_zh: str = Field(min_length=1, max_length=200)
+    kind: str = Field(min_length=1, max_length=32)
+    status: str = Field(min_length=1, max_length=32)
+    compatible: bool = False
+    path: str | None = None
+    version: str | None = None
+    source: str = "none"
+    capabilities: tuple[str, ...] = ()
+    cpu_supported: bool = True
+    cuda_supported: bool = False
+    bound: bool = False
+    detail: str | None = None
+    detail_zh: str | None = None
+    suggestion: str | None = None
+    suggestion_zh: str | None = None
+    candidates: tuple[LocalToolCandidate, ...] = ()
+    checked_at_utc: str
+
+
+class LocalToolInventory(RuntimeModel):
+    schema_version: int = Field(default=1, ge=1, le=1)
+    tools: tuple[LocalToolResult, ...] = ()
+    bindings: dict[str, LocalToolBinding] = Field(default_factory=dict)
+    scanned_at_utc: str | None = None
+    platform: str = Field(min_length=1, max_length=64)
+    architecture: str = Field(min_length=1, max_length=64)
+
+
 class RuntimePackageInventory(RuntimeModel):
     instances: tuple[RuntimePackageInstance, ...]
     bindings: dict[str, RuntimeBinding]
     operations: tuple[RuntimePackageOperation, ...]
     available_releases: tuple[RuntimePackageRelease, ...] = ()
+    local_tools: LocalToolInventory | None = None
 
 
 class FeatureAvailability(RuntimeModel):
