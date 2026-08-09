@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { EvidenceRail } from '../components/EvidenceRail'
 import { MotionPresence } from '../components/MotionPresence'
+import { ProcessingFlowPanel } from '../components/ProcessingFlowPanel'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import { formatTime, statusLabel } from '../domain'
@@ -25,6 +26,12 @@ const stageStatusLabel = {
   failed: '失败',
   cancelled: '已取消',
 } as const
+
+interface RunStageSelection {
+  taskId: string
+  selectedStageId?: string
+  logStageFilter: string
+}
 
 export function RunPage() {
   const tasks = useStudioStore(state => state.tasks)
@@ -41,10 +48,12 @@ export function RunPage() {
   const selectTask = useStudioStore(state => state.selectTask)
   const refreshTasks = useStudioStore(state => state.refreshTasks)
   const navigate = useStudioStore(state => state.navigate)
-  const [selectedStageId, setSelectedStageId] = useState<string>()
+  const [stageSelection, setStageSelection] = useState<RunStageSelection>()
   const [showArtifacts, setShowArtifacts] = useState(false)
 
   const task = tasks.find(item => item.id === activeTaskId) ?? tasks[0]
+  const currentStageSelection =
+    stageSelection?.taskId === task?.id ? stageSelection : undefined
   const liveStage = task?.stages.find(stage => stage.status === 'running')
   const terminalStage = task?.stages.find(
     stage => stage.status === 'failed' || stage.status === 'cancelled',
@@ -53,7 +62,7 @@ export function RunPage() {
     .reverse()
     .find(stage => stage.status === 'completed')
   const selectedStage =
-    task?.stages.find(stage => stage.id === selectedStageId) ??
+    task?.stages.find(stage => stage.id === currentStageSelection?.selectedStageId) ??
     liveStage ??
     terminalStage ??
     lastCompletedStage ??
@@ -84,6 +93,33 @@ export function RunPage() {
   const selectedArtifacts = task.realBackend
     ? (selectedStage?.outputArtifacts ?? [])
     : []
+
+  const selectStage = (stageId: string) => {
+    setStageSelection({
+      taskId: task.id,
+      selectedStageId: stageId,
+      logStageFilter: stageId,
+    })
+  }
+
+  const setLogStageFilter = (value: string) => {
+    const matchingStage = task.stages.find(
+      stage =>
+        stage.id === value ||
+        stage.backendStages?.includes(value),
+    )
+    setStageSelection(current => ({
+      taskId: task.id,
+      selectedStageId:
+        value === 'all'
+          ? current?.taskId === task.id
+            ? current.selectedStageId
+            : undefined
+          : matchingStage?.id ??
+            (current?.taskId === task.id ? current.selectedStageId : undefined),
+      logStageFilter: value,
+    }))
+  }
 
   return (
     <div className="run-page">
@@ -154,6 +190,14 @@ export function RunPage() {
         onDownloadArtifact={artifact => downloadRunArtifact(task.id, artifact)}
       />
 
+      <ProcessingFlowPanel
+        task={task}
+        className="run-processing-flow"
+        downloadFileName={`video2notes-${task.id}-processing-log.jsonl`}
+        stageFilter={currentStageSelection?.logStageFilter ?? 'all'}
+        onStageFilterChange={setLogStageFilter}
+      />
+
       <section className="stage-rail" aria-label="处理阶段">
         {task.stages.map((stage, index) => (
           <button
@@ -162,7 +206,7 @@ export function RunPage() {
             }`}
             type="button"
             key={stage.id}
-            onClick={() => setSelectedStageId(stage.id)}
+            onClick={() => selectStage(stage.id)}
             aria-label={`${stage.label}，${stageStatusLabel[stage.status]}，${stage.progress}%`}
           >
             <span className="stage-number">

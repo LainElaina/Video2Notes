@@ -50,11 +50,36 @@ def main() -> int:
             page.get_by_role("button", name="开始处理").click()
             page.get_by_role("button", name="取消").wait_for(timeout=5_000)
             page.get_by_role("heading", name="证据轨正在形成").wait_for(timeout=5_000)
+            flow_panel = page.locator(".processing-flow-panel")
+            page.get_by_role("heading", name="处理流程日志").wait_for(timeout=5_000)
+            if flow_panel.locator(".processing-flow-event").count() < 1:
+                raise RuntimeError("Processing flow did not render any task events.")
+            if flow_panel.evaluate("element => element.scrollWidth > element.clientWidth + 1"):
+                raise RuntimeError("Processing flow overflowed horizontally at 1440px.")
             if screenshot_root is not None:
                 page.screenshot(
                     path=str(screenshot_root / "02-run-1440x900.png"),
                     full_page=True,
                 )
+                page.get_by_role("button", name="数据工作室", exact=True).click()
+                page.locator(".app-shell").wait_for()
+                workspace_mode = page.locator(".app-shell").get_attribute("data-workspace-mode")
+                if workspace_mode != "professional":
+                    raise RuntimeError("Data studio did not switch to professional workspace mode.")
+                page.screenshot(
+                    path=str(screenshot_root / "02c-run-professional-1440x900.png"),
+                    full_page=True,
+                )
+                page.get_by_role("button", name="简约视图", exact=True).click()
+                page.set_viewport_size({"width": 720, "height": 860})
+                page.wait_for_timeout(200)
+                if flow_panel.evaluate("element => element.scrollWidth > element.clientWidth + 1"):
+                    raise RuntimeError("Processing flow overflowed horizontally at 720px.")
+                page.screenshot(
+                    path=str(screenshot_root / "02b-run-720x860.png"),
+                    full_page=False,
+                )
+                page.set_viewport_size({"width": 1440, "height": 900})
                 page.get_by_role("button", name="笔记阅读").click()
                 page.get_by_role(
                     "heading",
@@ -65,7 +90,7 @@ def main() -> int:
                     path=str(screenshot_root / "03-reader-1440x900.png"),
                     full_page=True,
                 )
-                page.get_by_role("button", name="模型设置").click()
+                page.get_by_role("button", name="设置", exact=True).click()
                 page.get_by_role("heading", name="模型与角色路由").wait_for()
                 page.screenshot(
                     path=str(screenshot_root / "04-models-1440x900.png"),
@@ -81,7 +106,7 @@ def main() -> int:
                 with tempfile.TemporaryDirectory(prefix="video2notes-playwright-") as directory:
                     page.screenshot(path=str(Path(directory) / "primary-path.png"), full_page=True)
             browser.close()
-    except Error as error:
+    except (Error, RuntimeError) as error:
         raise SystemExit(f"Playwright primary-path smoke test failed: {error}") from error
 
     if console_errors:
