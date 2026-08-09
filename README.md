@@ -2,7 +2,7 @@
 
 Video2Notes 是一个面向 Windows 的本地视频转笔记工作台。它把视频下载或导入、字幕、语音识别、画面变化、OCR、证据对齐、笔记生成和 Markdown/HTML/PDF 导出串成一条可回查的完整流程。
 
-项目当前版本是 `0.2.0`。首要产物始终是 Markdown；HTML 和 PDF 都从同一份规范化 `NoteDocument` 渲染，避免三种格式各写一遍后内容互相漂移。
+项目当前版本是 `0.2.1`。首要产物始终是 Markdown；HTML 和 PDF 都从同一份规范化 `NoteDocument` 渲染，避免三种格式各写一遍后内容互相漂移。
 
 > 只处理你有权访问和分析的内容。Video2Notes 不提供 DRM 绕过，也不把你的账号信息上传到项目方服务器。使用第三方大模型 API 时，绑定给该模型的证据会发送到对应供应商，请按供应商的隐私条款自行判断。
 
@@ -77,9 +77,9 @@ artifacts\portable\current\Video2Notes.exe
 4. 先在“新建任务”里运行内置 9 秒样例，确认下载器、视觉、OCR、导出和本地后端工作正常。
 5. 再粘贴视频链接或选择本地视频，选择处理范围与档位后开始任务。
 
-[`v0.2.0` GitHub Release](https://github.com/LainElaina/Video2Notes/releases/tag/v0.2.0) 以小体积 `core` 为基础，把本地推理库拆成可检测、绑定、安装、升级和移除的独立运行时包。Release 同时提供免安装 ZIP、Core NSIS `.exe`、Core MSI，以及 CPU、NVIDIA ASR、Full GPU 三档运行时资产。普通用户不需要手动配置 Python、CUDA Toolkit、FFmpeg 或命令行环境；仓库里的 `artifacts\portable\current` 只是本机最近一次构建结果，不应当作为固定下载地址。
+[`v0.2.1` GitHub Release](https://github.com/LainElaina/Video2Notes/releases/tag/v0.2.1) 提供已经修复便携后端启动问题的免安装 ZIP、Core NSIS `.exe` 和 Core MSI。CPU、NVIDIA ASR、Full GPU 三档受管运行时没有随本次桌面热修复重新打包，软件继续从经过校验的 [`v0.2.0` Release](https://github.com/LainElaina/Video2Notes/releases/tag/v0.2.0) 按需下载。普通用户不需要手动配置 Python、CUDA Toolkit、FFmpeg 或命令行环境；仓库里的 `artifacts\portable\current` 只是本机最近一次构建结果，不应当作为固定下载地址。
 
-本次验证并发布的 Core 免安装 ZIP 为 `179.5 MiB`，NSIS 安装 EXE 为 `129.7 MiB`，MSI 为 `174.6 MiB`。免安装 ZIP 解压后约 `420.9 MiB`，其中已经包含桌面程序、本地后端、yt-dlp、FFmpeg/FFprobe 和依赖管理能力，但不内嵌数 GiB 的本地推理运行时或模型权重。
+`v0.2.1` Core 免安装 ZIP 解压后约 `421 MiB`，其中已经包含桌面程序、本地后端、yt-dlp、FFmpeg/FFprobe 和依赖管理能力，但不内嵌数 GiB 的本地推理运行时或模型权重。各下载资产的准确字节数和 SHA-256 以 Release 页面及其中的 `SHA256SUMS.txt` 为准。
 
 PDF 是唯一仍依赖系统浏览器的输出：程序会调用已安装的 Edge、Chrome 或 Chromium 打印同一份 HTML。没有可用浏览器时，Markdown 和 HTML 仍会正常生成。
 
@@ -396,7 +396,7 @@ runs/<run-id>/
 
 | 内容 | 大小约 | 为什么保留 |
 | --- | ---: | --- |
-| `artifacts/portable/current` | 5.17 GiB | 审计当时可直接双击的 legacy full GPU 便携版；`v0.2.0` Core 已降至约 420.9 MiB |
+| `artifacts/portable/current` | 约 421 MiB | 当前可直接双击的 `v0.2.1` Core 便携版；本地推理运行时与模型按需安装 |
 | `.venv` | 5.41 GiB | 源码开发、测试和重新打包环境 |
 | `artifacts/benchmarks` | 1.78 GiB | 三档完整基准与回归证据 |
 | `artifacts/models` | 0.57 GiB | 已下载的本地模型 |
@@ -560,7 +560,8 @@ $env:VIDEO2NOTES_TOKEN = "至少16字符的随机本地令牌"
 - [docs/03-evaluation-and-hardware-profiles.md](docs/03-evaluation-and-hardware-profiles.md)：评测和硬件档位背景。
 - [docs/04-reference-benchmark-2026-08-01.md](docs/04-reference-benchmark-2026-08-01.md)：受限 CPU 片段实验。
 - [docs/05-full-bv12hsez3ell-gpu-benchmark-2026-08-02.md](docs/05-full-bv12hsez3ell-gpu-benchmark-2026-08-02.md)：完整三档 GPU/CPU OCR 基准。
-- [docs/RELEASE_NOTES_0.2.0.md](docs/RELEASE_NOTES_0.2.0.md)：`v0.2.0` 发行资产、体积和选择建议。
+- [docs/RELEASE_NOTES_0.2.1.md](docs/RELEASE_NOTES_0.2.1.md)：`v0.2.1` 便携后端与全局字号热修复说明。
+- [docs/RELEASE_NOTES_0.2.0.md](docs/RELEASE_NOTES_0.2.0.md)：`v0.2.0` 运行时资产、体积和选择建议。
 - [docs/04-roadmap.md](docs/04-roadmap.md)：后续路线，不代表已经实现。
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)：第三方依赖与许可证。
 

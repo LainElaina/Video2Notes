@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tomllib
 from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
@@ -28,6 +31,8 @@ def main() -> int:
     if not source.is_file():
         raise SystemExit(f"Real UI smoke source does not exist: {source}")
     args.screenshot_dir.mkdir(parents=True, exist_ok=True)
+    with (REPOSITORY_ROOT / "pyproject.toml").open("rb") as handle:
+        expected_version = str(tomllib.load(handle)["project"]["version"])
 
     try:
         from playwright.sync_api import Error, sync_playwright
@@ -46,7 +51,9 @@ def main() -> int:
                 ),
             )
             page.goto(args.base_url, wait_until="networkidle")
-            page.get_by_text("后端 0.2.0", exact=True).wait_for(timeout=15_000)
+            page.get_by_text(f"后端 {expected_version}", exact=True).wait_for(
+                timeout=15_000
+            )
             page.get_by_role("button", name="新建任务", exact=True).click()
             # The processing profile is part of the source probe policy because it
             # can change the exact media format we require.  Select it before the

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import shutil
 import subprocess
@@ -30,8 +31,27 @@ class WindowsReleaseScriptContractTests(unittest.TestCase):
             "rb"
         ) as handle:
             cargo = tomllib.load(handle)
+        with (REPOSITORY_ROOT / "pyproject.toml").open("rb") as handle:
+            project = tomllib.load(handle)
+        backend_module = ast.parse(
+            (REPOSITORY_ROOT / "src/video2notes/__init__.py").read_text(
+                encoding="utf-8"
+            )
+        )
+        backend_version = next(
+            node.value.value
+            for node in backend_module.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "__version__"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
 
-        self.assertEqual(tauri["version"], "0.2.0")
+        self.assertEqual(tauri["version"], project["project"]["version"])
+        self.assertEqual(backend_version, tauri["version"])
         self.assertEqual(desktop["version"], tauri["version"])
         self.assertEqual(cargo["package"]["version"], tauri["version"])
         self.assertTrue(tauri["bundle"]["active"])
