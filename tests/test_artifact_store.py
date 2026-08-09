@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from video2notes.artifacts import RunWorkspace
 from video2notes.domain import (
@@ -110,6 +112,42 @@ class RunWorkspaceTests(unittest.TestCase):
             first_file = first.artifact_path("media", "source.mp4")
             first_file.write_bytes(b"first")
             self.assertFalse(second.artifact_path("media", "source.mp4").exists())
+
+    def test_manifest_replace_retries_transient_windows_reader_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = self.create_workspace(Path(temporary))
+            real_replace = os.replace
+            attempts = 0
+
+            def flaky_replace(source: Path, destination: Path) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError("manifest is briefly open by a reader")
+                real_replace(source, destination)
+
+            with patch("video2notes.artifacts.store.os.replace", side_effect=flaky_replace):
+                workspace.set_status(RunStatus.RUNNING)
+
+            self.assertEqual(attempts, 3)
+            self.assertEqual(RunWorkspace(workspace.root).manifest.status, RunStatus.RUNNING)
+
+    def test_manifest_replace_failure_removes_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = self.create_workspace(Path(temporary))
+
+            with (
+                patch(
+                    "video2notes.artifacts.store.os.replace",
+                    side_effect=PermissionError("manifest remains locked"),
+                ),
+                patch("video2notes.artifacts.store.time.sleep"),
+                self.assertRaises(PermissionError),
+            ):
+                workspace.set_status(RunStatus.RUNNING)
+
+            temporary_files = list(workspace.root.glob(".manifest.json.*.tmp"))
+            self.assertEqual(temporary_files, [])
 
     def test_legacy_v1_manifest_without_scope_loads_as_audio_visual(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

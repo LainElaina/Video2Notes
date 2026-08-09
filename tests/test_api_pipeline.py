@@ -79,8 +79,12 @@ class FakePipeline(Video2NotesPipeline):
         progress(
             "fake.process",
             progress=0.5,
-            message="api_key=event-private token=event-token",
-            metrics={"diagnostic": "Bearer metric-private"},
+            message='password="two word secret" api_key=event-private token=event-token',
+            metrics={
+                "diagnostic": "Bearer metric-private",
+                "token": 123456,
+                "token_count": 42,
+            },
         )
         with workspace.stage("fake.process", stage_version="1") as stage:
             markdown = workspace.artifact_path("notes", "note.md")
@@ -165,6 +169,8 @@ class ApiPipelineTests(unittest.TestCase):
         self.assertNotIn("event-private", encoded)
         self.assertNotIn("event-token", encoded)
         self.assertNotIn("metric-private", encoded)
+        self.assertNotIn("two word secret", encoded)
+        self.assertNotIn("123456", encoded)
 
         note = self.client.get(
             f"/api/runs/{run_id}/artifact",
@@ -231,6 +237,16 @@ class ApiPipelineTests(unittest.TestCase):
         self.assertEqual(run.status_code, 200)
         self.assertNotIn("never-return-this", run.text)
 
+        events = self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers=self.headers,
+        )
+        self.assertEqual(events.status_code, 200)
+        failed_event = next(event for event in events.json()["events"] if event["error_type"])
+        self.assertEqual(failed_event["error_type"], "RuntimeError")
+        self.assertIn("<redacted>", failed_event["message"])
+        self.assertNotIn("never-return-this", events.text)
+
     def test_cancel_is_forwarded_to_pipeline_token(self) -> None:
         payload = self._payload(title_override="block")
         submitted = self.client.post(
@@ -251,6 +267,103 @@ class ApiPipelineTests(unittest.TestCase):
         result = self._wait_for_terminal(run_id)
         self.assertEqual(result["job"]["state"], "cancelled")
         self.assertIsNone(result["result"])
+
+    def test_run_events_are_persisted_redacted_and_incremental(self) -> None:
+        submitted = self.client.post(
+            "/api/jobs",
+            headers=self.headers,
+            json=self._payload(),
+        )
+        self.assertEqual(submitted.status_code, 202)
+        run_id = submitted.json()["run"]["run_id"]
+        self._wait_for_terminal(run_id)
+
+        self.assertEqual(
+            self.client.get(f"/api/runs/{run_id}/events").status_code,
+            401,
+        )
+
+        first = self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers=self.headers,
+            params={"limit": 2},
+        )
+        self.assertEqual(first.status_code, 200)
+        first_page = first.json()
+        self.assertTrue(first_page["log_available"])
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(len(first_page["events"]), 2)
+
+        second = self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers=self.headers,
+            params={
+                "after_sequence": first_page["next_sequence"],
+                "limit": 20,
+            },
+        )
+        self.assertEqual(second.status_code, 200)
+        second_page = second.json()
+        self.assertFalse(second_page["has_more"])
+        self.assertEqual(second_page["events"][-1]["stage"], "completed")
+
+        encoded = first.text + second.text
+        self.assertNotIn("event-private", encoded)
+        self.assertNotIn("event-token", encoded)
+        self.assertNotIn("metric-private", encoded)
+        self.assertIn("<redacted>", encoded)
+
+        log_path = self.context.runs_root / run_id / "logs" / "events.jsonl"
+        self.assertTrue(log_path.is_file())
+        persisted = log_path.read_text(encoding="utf-8")
+        self.assertNotIn("event-private", persisted)
+        self.assertNotIn("event-token", persisted)
+        self.assertNotIn("metric-private", persisted)
+        self.assertNotIn("two word secret", persisted)
+        self.assertNotIn("123456", persisted)
+
+    def test_run_events_missing_corrupt_and_unknown_runs_degrade_cleanly(self) -> None:
+        created = self.client.post(
+            "/api/runs",
+            headers=self.headers,
+            json={
+                "source": {"kind": "url", "value": "https://example.com/video"},
+                "quality_mode": "fast",
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        run_id = created.json()["run_id"]
+
+        missing = self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers=self.headers,
+        )
+        self.assertEqual(missing.status_code, 200)
+        self.assertFalse(missing.json()["log_available"])
+        self.assertEqual(missing.json()["events"], [])
+
+        log_path = self.context.runs_root / run_id / "logs" / "events.jsonl"
+        log_path.write_text('{"invalid":true}\n', encoding="utf-8")
+        damaged = self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers=self.headers,
+        )
+        self.assertEqual(damaged.status_code, 200)
+        self.assertTrue(damaged.json()["log_available"])
+        self.assertEqual(damaged.json()["corrupt_line_count"], 1)
+
+        unknown = self.client.get(
+            "/api/runs/not-a-real-run/events",
+            headers=self.headers,
+        )
+        self.assertEqual(unknown.status_code, 404)
+
+        too_large = self.client.get(
+            f"/api/runs/{run_id}/events",
+            headers=self.headers,
+            params={"limit": 501},
+        )
+        self.assertEqual(too_large.status_code, 422)
 
     def _payload(self, *, title_override: str | None = None) -> dict[str, Any]:
         return {

@@ -3,6 +3,8 @@
 from .manager import (
     JobAlreadyRunningError,
     JobEvent,
+    JobEventPage,
+    JobEventStore,
     JobManager,
     JobNotFoundError,
     JobSnapshot,
@@ -12,6 +14,8 @@ from .manager import (
 __all__ = [
     "JobAlreadyRunningError",
     "JobEvent",
+    "JobEventPage",
+    "JobEventStore",
     "JobManager",
     "JobNotFoundError",
     "JobSnapshot",

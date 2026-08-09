@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -337,8 +338,23 @@ def _sanitize_id(value: str) -> str:
 def _atomic_write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        for attempt in range(8):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                # Windows can briefly deny replacement while an API reader has
+                # the previous manifest open. Keep the retry local and bounded.
+                time.sleep(0.005 * (attempt + 1))
+    finally:
+        # Antivirus/indexer handles can briefly retain the temp file on
+        # Windows; cleanup is best effort after an atomic replacement.
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)

@@ -59,6 +59,9 @@ from video2notes.components.runtime_preflight import build_runtime_preflight
 from video2notes.domain import ArtifactManifest, ProcessingScope, SourceDescriptor
 from video2notes.jobs import (
     JobAlreadyRunningError,
+    JobEvent,
+    JobEventPage,
+    JobEventStore,
     JobManager,
     JobNotFoundError,
     JobSnapshot,
@@ -113,6 +116,7 @@ from video2notes.sources import (
     SourceManifest,
     SourceRegistry,
     enumerate_browser_profiles,
+    redact_sensitive,
 )
 from video2notes.system import (
     AccelerationCapabilities,
@@ -136,8 +140,15 @@ from video2notes.system import (
 from video2notes.workers import RuntimeWorkerClient
 
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)\b(api[_ -]?key|authorization|cookie|token|sessdata|auth_token)"
-    r"\b\s*[:=]\s*[^\s,;]+"
+    r"(?i)\b(api[_ -]?key|authorization|client[_ -]?secret|cookie|password|secret|"
+    r"access[_ -]?token|refresh[_ -]?token|session[_ -]?token|csrf[_ -]?token|"
+    r"token|sessdata|auth[_ -]?token)"
+    r"\b\s*[:=]\s*(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;]+)"
+)
+_SENSITIVE_METRIC_KEY = re.compile(
+    r"(?i)(?:^|[._ -])(?:api.?key|authorization|client.?secret|cookie|password|"
+    r"secret|access.?token|refresh.?token|session.?token|csrf.?token|auth.?token|"
+    r"sessdata|bili.?jct|guest.?token|ct0|twid)(?:$|[._ -])|^token$"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
 _OPENAI_STYLE_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
@@ -403,7 +414,14 @@ class ApiContext:
         # One processing job at a time is the safe v1 default: local ASR/OCR
         # models are large, lazily loaded native engines and must not be
         # duplicated by two jobs that independently see the same GPU budget.
-        self.job_manager = job_manager or JobManager(max_workers=1)
+        self.job_event_store = JobEventStore(
+            self.runs_root,
+            sanitize_message=_sanitize_message,
+        )
+        self.job_manager = job_manager or JobManager(
+            max_workers=1,
+            event_store=self.job_event_store,
+        )
         self._owns_job_manager = job_manager is None
         self._pipeline_is_injected = pipeline is not None or pipeline_runtime is not None
         self.pipeline: Video2NotesPipeline
@@ -465,8 +483,13 @@ class ApiContext:
         return sorted(manifests, key=lambda item: item.created_at, reverse=True)
 
     def get_workspace(self, run_id: str) -> RunWorkspace:
-        candidate = (self.runs_root / run_id).resolve()
-        if not candidate.is_relative_to(self.runs_root):
+        if not run_id or Path(run_id).name != run_id:
+            raise FileNotFoundError(run_id)
+        try:
+            candidate = (self.runs_root / run_id).resolve()
+        except (OSError, RuntimeError, ValueError) as error:
+            raise FileNotFoundError(run_id) from error
+        if candidate.parent != self.runs_root:
             raise FileNotFoundError(run_id)
         for attempt in range(5):
             try:
@@ -1181,8 +1204,30 @@ def create_app(
     def get_run(run_id: str) -> ArtifactManifest:
         try:
             return _safe_manifest(context.get_workspace(run_id).manifest)
-        except (FileNotFoundError, ValueError):
+        except (FileNotFoundError, OSError, RuntimeError, ValueError):
             raise HTTPException(status_code=404, detail="run not found") from None
+
+    @app.get(
+        "/api/runs/{run_id}/events",
+        response_model=JobEventPage,
+        dependencies=protected,
+    )
+    def get_run_events(
+        run_id: str,
+        after_sequence: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    ) -> JobEventPage:
+        try:
+            context.get_workspace(run_id)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError):
+            raise HTTPException(status_code=404, detail="run not found") from None
+        page = context.job_event_store.read(
+            run_id,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
+        page.events = [_safe_job_event(event) for event in page.events]
+        return page
 
     @app.get("/api/runs/{run_id}/artifact", dependencies=protected)
     def get_artifact(
@@ -1903,20 +1948,36 @@ def _safe_manifest(manifest: ArtifactManifest) -> ArtifactManifest:
 def _safe_job(snapshot: JobSnapshot) -> JobSnapshot:
     safe = snapshot.model_copy(deep=True)
     safe.stage = _sanitize_message(safe.stage)
+    if safe.error_type is not None:
+        safe.error_type = _exception_type_only(safe.error_type)
     if safe.message is not None:
         safe.message = _sanitize_message(safe.message)
     for event in safe.events:
         event.stage = _sanitize_message(event.stage)
+        if event.error_type is not None:
+            event.error_type = _exception_type_only(event.error_type)
         if event.message is not None:
             event.message = _sanitize_message(event.message)
         event.metrics = _sanitize_metrics(event.metrics)
     return safe
 
 
+def _safe_job_event(event: JobEvent) -> JobEvent:
+    safe = event.model_copy(deep=True)
+    safe.stage = _sanitize_message(safe.stage)
+    if safe.error_type is not None:
+        safe.error_type = _exception_type_only(safe.error_type)
+    if safe.message is not None:
+        safe.message = _sanitize_message(safe.message)
+    safe.metrics = _sanitize_metrics(safe.metrics)
+    return safe
+
+
 def _sanitize_message(message: str) -> str:
+    sanitized = redact_sensitive(message)
     sanitized = _SENSITIVE_ASSIGNMENT.sub(
         lambda match: f"{match.group(1)}=<redacted>",
-        message,
+        sanitized,
     )
     sanitized = _BEARER_VALUE.sub("Bearer <redacted>", sanitized)
     return _OPENAI_STYLE_KEY.sub("<redacted-api-key>", sanitized)
@@ -1926,7 +1987,13 @@ def _sanitize_metrics(
     metrics: dict[str, float | int | str | bool | None],
 ) -> dict[str, float | int | str | bool | None]:
     return {
-        _sanitize_message(key): (_sanitize_message(value) if isinstance(value, str) else value)
+        _sanitize_message(key): (
+            "<redacted>"
+            if _SENSITIVE_METRIC_KEY.search(key)
+            else _sanitize_message(value)
+            if isinstance(value, str)
+            else value
+        )
         for key, value in metrics.items()
     }
 
