@@ -27,6 +27,7 @@ import type {
   ApiProcessingRun,
   ApiReportRevision,
   ApiRunMaterial,
+  ApiRunEventPage,
   ApiRunManifest,
   ApiRunOperation,
   ApiRunOperationRequest,
@@ -314,6 +315,7 @@ const sourceByRun = new Map<string, SourceManifest>()
 const submissionByRun = new Map<string, PipelineSubmission>()
 const objectUrls = new Map<string, string>()
 const taskHydrationInFlight = new Map<string, Promise<ProcessingTask>>()
+const runEventCursorByRun = new Map<string, number>()
 let demoMaterialSequence = 0
 let demoOperationSequence = 0
 let samplingOverrideSequence = 0
@@ -1240,6 +1242,7 @@ const mapTelemetrySample = (event: ApiJobEvent): TelemetrySample => ({
   stage: event.stage,
   progress: event.progress,
   message: event.message,
+  ...(event.error_type ? { errorType: event.error_type } : {}),
   metrics: { ...event.metrics },
   createdAt: event.created_at,
 })
@@ -1255,6 +1258,51 @@ const mergeTelemetry = (
   for (const sample of existing) bySequence.set(sample.sequence, sample)
   for (const sample of incoming) bySequence.set(sample.sequence, sample)
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+interface HistoricalTelemetryResult {
+  telemetry: TelemetrySample[]
+  eventLog?: ProcessingTask['eventLog']
+}
+
+const loadHistoricalTelemetry = async (
+  client: Video2NotesApi,
+  runId: string,
+): Promise<HistoricalTelemetryResult> => {
+  let afterSequence = runEventCursorByRun.get(runId) ?? 0
+  let telemetry: TelemetrySample[] = []
+  let eventLog: ProcessingTask['eventLog']
+
+  while (true) {
+    let page: ApiRunEventPage
+    try {
+      page = await client.listRunEvents(runId, afterSequence, 500)
+    } catch {
+      return { telemetry, eventLog }
+    }
+
+    telemetry = mergeTelemetry(
+      telemetry,
+      page.events.map(mapTelemetrySample),
+    )
+    eventLog = {
+      available: page.log_available,
+      corruptLineCount: Math.max(
+        eventLog?.corruptLineCount ?? 0,
+        page.corrupt_line_count,
+      ),
+    }
+    const nextSequence = Math.max(
+      afterSequence,
+      page.next_sequence,
+      ...page.events.map(event => event.sequence),
+    )
+    runEventCursorByRun.set(runId, nextSequence)
+    if (!page.has_more || nextSequence <= afterSequence) {
+      return { telemetry, eventLog }
+    }
+    afterSequence = nextSequence
+  }
 }
 
 const mapStages = (run: ApiRunManifest, job?: ApiJobSnapshot): TaskStage[] =>
@@ -2626,6 +2674,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         ])
         api = nextApi
         registry = loadedRegistry
+        runEventCursorByRun.clear()
         const configurationCatalog = mapConfigurationCatalog(catalogPayload)
         const secretPairs = await Promise.all(
           Object.values(loadedRegistry.providers)
@@ -2727,35 +2776,56 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     pollInFlight = true
     void (async () => {
       try {
+        const tasksAtStart = get().tasks
         const jobs = await api!.listJobs()
-        const responses = await Promise.all(
-          jobs.map(async job => {
-            try {
-              return await api!.jobResult(job.run_id)
-            } catch {
-              return undefined
-            }
-          }),
-        )
+        const runIds = [
+          ...new Set([
+            ...tasksAtStart.map(task => task.id),
+            ...jobs.map(job => job.run_id),
+          ]),
+        ]
+        const [responses, historicalTelemetryPairs] = await Promise.all([
+          Promise.all(
+            jobs.map(async job => {
+              try {
+                return await api!.jobResult(job.run_id)
+              } catch {
+                return undefined
+              }
+            }),
+          ),
+          Promise.all(
+            runIds.map(async runId => [
+              runId,
+              await loadHistoricalTelemetry(api!, runId),
+            ] as const),
+          ),
+        ])
         const responseById = new Map(
           responses
             .filter((item): item is ApiProcessingRun => Boolean(item))
             .map(item => [item.run.run_id, item]),
         )
         const jobById = new Map(jobs.map(job => [job.run_id, job]))
+        const historicalTelemetryById = new Map(historicalTelemetryPairs)
         const existing = get().tasks
         const existingById = new Map(existing.map(task => [task.id, task]))
         const merged = existing.map(task => {
           const response = responseById.get(task.id)
           const job = jobById.get(task.id)
+          const historical = historicalTelemetryById.get(task.id)
+          const historicalTelemetry = historical?.telemetry ?? []
+          const eventLog = historical?.eventLog ?? task.eventLog
           if (!response) {
-            return job
-              ? {
-                  ...task,
-                  lastMessage: job.message ?? task.lastMessage,
-                  telemetry: mergeTelemetry(task.telemetry, telemetryFromJob(job)),
-                }
-              : task
+            return {
+              ...task,
+              ...(job ? { lastMessage: job.message ?? task.lastMessage } : {}),
+              eventLog,
+              telemetry: mergeTelemetry(
+                mergeTelemetry(task.telemetry, telemetryFromJob(job)),
+                historicalTelemetry,
+              ),
+            }
           }
           const next = taskFromRun(
             response.run,
@@ -2772,22 +2842,33 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
             operations: task.operations,
             evidenceRevisionId: task.evidenceRevisionId,
             reportRevisions: task.reportRevisions,
+            eventLog,
             telemetry: mergeTelemetry(
-              mergeTelemetry(task.telemetry, next.telemetry),
-              telemetryFromJob(response.job),
+              mergeTelemetry(
+                mergeTelemetry(task.telemetry, next.telemetry),
+                telemetryFromJob(response.job),
+              ),
+              historicalTelemetry,
             ),
           }
         })
         for (const response of responseById.values()) {
           if (!merged.some(task => task.id === response.run.run_id)) {
-            merged.unshift(
-              taskFromRun(
-                response.run,
-                response.job,
-                undefined,
-                response.runtime_warnings,
-              ),
+            const next = taskFromRun(
+              response.run,
+              response.job,
+              undefined,
+              response.runtime_warnings,
             )
+            merged.unshift({
+              ...next,
+              eventLog:
+                historicalTelemetryById.get(response.run.run_id)?.eventLog,
+              telemetry: mergeTelemetry(
+                next.telemetry,
+                historicalTelemetryById.get(response.run.run_id)?.telemetry ?? [],
+              ),
+            })
           }
         }
         const hydrated = await Promise.all(
@@ -5350,6 +5431,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     sourceByRun.clear()
     submissionByRun.clear()
     taskHydrationInFlight.clear()
+    runEventCursorByRun.clear()
     for (const url of objectUrls.values()) URL.revokeObjectURL(url)
     objectUrls.clear()
     set(initialData(true))

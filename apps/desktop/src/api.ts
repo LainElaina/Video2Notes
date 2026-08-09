@@ -228,8 +228,18 @@ export interface ApiJobEvent {
   stage: string
   progress?: number
   message?: string
+  error_type?: string | null
   metrics: Record<string, string | number | boolean | null>
   created_at: string
+}
+
+export interface ApiRunEventPage {
+  run_id: string
+  events: ApiJobEvent[]
+  next_sequence: number
+  has_more: boolean
+  log_available: boolean
+  corrupt_line_count: number
 }
 
 export interface ApiJobSnapshot {
@@ -1369,6 +1379,20 @@ export class Video2NotesApi {
 
   jobResult(runId: string): Promise<ApiProcessingRun> {
     return this.request(`/api/jobs/${encodeURIComponent(runId)}/result`)
+  }
+
+  listRunEvents(
+    runId: string,
+    afterSequence = 0,
+    limit = 200,
+  ): Promise<ApiRunEventPage> {
+    const query = new URLSearchParams({
+      after_sequence: String(afterSequence),
+      limit: String(limit),
+    })
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/events?${query}`,
+    )
   }
 
   listOperations(runId: string): Promise<ApiRunOperation[]> {

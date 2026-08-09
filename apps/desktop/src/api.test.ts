@@ -301,6 +301,49 @@ describe('real local API client', () => {
     )
   })
 
+  it('maps paged historical run event queries without losing response metadata', async () => {
+    const payload = {
+      run_id: 'run / 01',
+      events: [
+        {
+          sequence: 42,
+          run_id: 'run / 01',
+          state: 'failed',
+          stage: 'audio.asr',
+          progress: 0.75,
+          message: 'ASR worker stopped.',
+          error_type: 'WorkerProtocolError',
+          metrics: { processed_seconds: 30.5 },
+          created_at: '2026-08-10T01:02:03Z',
+        },
+      ],
+      next_sequence: 42,
+      has_more: true,
+      log_available: true,
+      corrupt_line_count: 1,
+    }
+    fetchMock.mockResolvedValueOnce(json(payload))
+    const client = new Video2NotesApi({
+      baseUrl: 'http://127.0.0.1:43119/',
+      token: 'session-secret',
+    })
+
+    await expect(client.listRunEvents('run / 01', 41, 500)).resolves.toEqual(
+      payload,
+    )
+
+    const request = asRequest(fetchMock.mock.calls[0])
+    const url = new URL(request.url)
+    expect(url.pathname).toBe('/api/runs/run%20%2F%2001/events')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      after_sequence: '41',
+      limit: '500',
+    })
+    expect(new Headers(request.init.headers).get('X-Video2Notes-Token')).toBe(
+      'session-secret',
+    )
+  })
+
   it('maps runtime package management and job preflight contracts', async () => {
     fetchMock.mockImplementation(() => Promise.resolve(json({ ok: true })))
     const client = new Video2NotesApi({

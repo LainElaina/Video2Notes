@@ -183,6 +183,7 @@ export interface TelemetrySample {
   stage: string
   progress?: number
   message?: string
+  errorType?: string
   metrics: Record<string, TelemetryValue>
   createdAt: string
 }
@@ -243,6 +244,11 @@ export interface TaskRecoveryCapability {
   reason: string
 }
 
+export interface TaskEventLogStatus {
+  available: boolean
+  corruptLineCount: number
+}
+
 export interface ProcessingTask {
   id: string
   source: SourceManifest
@@ -254,6 +260,7 @@ export interface ProcessingTask {
   createdAt: string
   stages: TaskStage[]
   telemetry: TelemetrySample[]
+  eventLog?: TaskEventLogStatus
   runtimeWarnings: string[]
   materials: SupportingMaterial[]
   operations: ReworkOperation[]

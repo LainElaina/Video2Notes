@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ApiEvidenceSpan,
+  ApiJobEvent,
   ApiJobPreflight,
   ApiJobSnapshot,
   ApiRunManifest,
@@ -431,6 +432,10 @@ describe('studio store against the real loopback API contract', () => {
     token?: string
   }> = []
   let currentJob: ApiJobSnapshot = runningJob
+  let historicalJobEvents: ApiJobEvent[] = [...runningJob.events]
+  let historicalEventPageSize: number | undefined
+  let historicalLogAvailable = true
+  let historicalCorruptLineCount = 0
   let currentRun: ApiRunManifest = runningRun
   let currentMaterials: ApiRunMaterial[] = [textMaterial]
   let materialListFails = false
@@ -459,6 +464,10 @@ describe('studio store against the real loopback API contract', () => {
     vi.stubEnv('VITE_VIDEO2NOTES_API_TOKEN', 'desktop-session-token')
     requests.length = 0
     currentJob = runningJob
+    historicalJobEvents = [...runningJob.events]
+    historicalEventPageSize = undefined
+    historicalLogAvailable = true
+    historicalCorruptLineCount = 0
     currentRun = runningRun
     currentMaterials = [textMaterial]
     materialListFails = false
@@ -777,6 +786,25 @@ describe('studio store against the real loopback API contract', () => {
       if (url.pathname === '/api/jobs/run-real-01/result') {
         return Promise.resolve(
           json({ run: currentRun, job: currentJob, runtime_warnings: runtimeWarnings }),
+        )
+      }
+      if (url.pathname === '/api/runs/run-real-01/events' && method === 'GET') {
+        const afterSequence = Number(url.searchParams.get('after_sequence') ?? 0)
+        const requestedLimit = Number(url.searchParams.get('limit') ?? 200)
+        const limit = Math.min(requestedLimit, historicalEventPageSize ?? requestedLimit)
+        const remaining = historicalJobEvents.filter(
+          event => event.sequence > afterSequence,
+        )
+        const events = remaining.slice(0, limit)
+        return Promise.resolve(
+          json({
+            run_id: 'run-real-01',
+            events,
+            next_sequence: events.at(-1)?.sequence ?? afterSequence,
+            has_more: remaining.length > events.length,
+            log_available: historicalLogAvailable,
+            corrupt_line_count: historicalCorruptLineCount,
+          }),
         )
       }
       if (
@@ -1620,6 +1648,103 @@ describe('studio store against the real loopback API contract', () => {
       primary_model_id: 'asr-main',
       fallback_model_ids: [],
     })
+  })
+
+  it('merges paged persisted events with truncated realtime telemetry and advances the cursor', async () => {
+    listedRuns = [runningRun]
+    currentJob = {
+      ...runningJob,
+      events: [runningJob.events[2]],
+    }
+    historicalEventPageSize = 2
+    historicalCorruptLineCount = 3
+    historicalJobEvents = [
+      ...runningJob.events,
+      {
+        sequence: 4,
+        run_id: 'run-real-01',
+        state: 'running',
+        stage: 'notes.compose',
+        progress: 0.8,
+        message: '正在整理证据链',
+        error_type: 'WorkerProtocolError',
+        metrics: { evidence_count: 24 },
+        created_at: '2026-07-28T12:00:03Z',
+      },
+    ]
+
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() =>
+      expect(
+        useStudioStore.getState().tasks[0]?.telemetry.map(sample => sample.sequence),
+      ).toEqual([1, 2, 3, 4]),
+    )
+    expect(useStudioStore.getState().tasks[0]?.telemetry.at(-1)).toMatchObject({
+      sequence: 4,
+      errorType: 'WorkerProtocolError',
+      metrics: { evidence_count: 24 },
+    })
+    expect(useStudioStore.getState().tasks[0]?.eventLog).toEqual({
+      available: true,
+      corruptLineCount: 3,
+    })
+    expect(
+      requests
+        .filter(request => request.url.includes('/api/runs/run-real-01/events?'))
+        .map(request => request.url),
+    ).toEqual([
+      '/api/runs/run-real-01/events?after_sequence=0&limit=500',
+      '/api/runs/run-real-01/events?after_sequence=2&limit=500',
+    ])
+
+    historicalJobEvents = [
+      ...historicalJobEvents,
+      {
+        sequence: 5,
+        run_id: 'run-real-01',
+        state: 'running',
+        stage: 'render.outputs',
+        progress: 0.95,
+        message: '正在写入 HTML',
+        metrics: { artifact_count: 2 },
+        created_at: '2026-07-28T12:00:04Z',
+      },
+    ]
+    await new Promise(resolve => window.setTimeout(resolve, 0))
+    useStudioStore.getState().refreshTasks()
+    await vi.waitFor(() =>
+      expect(
+        useStudioStore.getState().tasks[0]?.telemetry.map(sample => sample.sequence),
+      ).toEqual([1, 2, 3, 4, 5]),
+    )
+    expect(
+      requests.some(
+        request =>
+          request.url ===
+          '/api/runs/run-real-01/events?after_sequence=4&limit=500',
+      ),
+    ).toBe(true)
+    expect(useStudioStore.getState().tasks[0]?.eventLog).toEqual({
+      available: true,
+      corruptLineCount: 3,
+    })
+  })
+
+  it('preserves a successful empty response as an unavailable persisted log', async () => {
+    listedRuns = [runningRun]
+    historicalJobEvents = []
+    historicalLogAvailable = false
+
+    useStudioStore.getState().initializeBackend()
+    await vi.waitFor(() =>
+      expect(useStudioStore.getState().tasks[0]?.eventLog).toEqual({
+        available: false,
+        corruptLineCount: 0,
+      }),
+    )
+    expect(useStudioStore.getState().tasks[0]?.telemetry).toEqual(runningJob.events.map(
+      event => expect.objectContaining({ sequence: event.sequence }),
+    ))
   })
 
   it('keeps the first source probe alive across scope changes and estimates the latest scope', async () => {
