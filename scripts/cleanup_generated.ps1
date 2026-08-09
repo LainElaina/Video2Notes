@@ -156,13 +156,24 @@ function Add-FileTarget {
 $targets = [System.Collections.Generic.List[object]]::new()
 
 $fixedDirectoryTargets = @(
+    @{ Relative = "build"; Reason = "Python package build output" },
+    @{ Relative = "dist"; Reason = "Python package distribution output" },
+    @{ Relative = "src\video2notes.egg-info"; Reason = "generated Python package metadata" },
+    @{ Relative = "apps\desktop\coverage"; Reason = "desktop coverage output" },
+    @{ Relative = "apps\desktop\playwright-report"; Reason = "Playwright HTML report" },
+    @{ Relative = "apps\desktop\test-results"; Reason = "Playwright test output" },
+    @{ Relative = "apps\desktop\src-tauri\gen"; Reason = "generated Tauri schemas" },
     @{ Relative = "apps\desktop\src-tauri\target"; Reason = "Rust and Tauri build output" },
     @{ Relative = "apps\desktop\src-tauri\resources\backend\_internal"; Reason = "generated frozen backend staging" },
     @{ Relative = "apps\desktop\src-tauri\resources\backend\tools"; Reason = "generated bundled media tools staging" },
+    @{ Relative = "apps\desktop\src-tauri\resources\backend\runtime-packs"; Reason = "generated runtime-package catalog staging" },
+    @{ Relative = "apps\desktop\src-tauri\icons\android"; Reason = "generated Android icon set" },
+    @{ Relative = "apps\desktop\src-tauri\icons\ios"; Reason = "generated iOS icon set" },
     @{ Relative = "apps\desktop\dist"; Reason = "Vite production output" },
     @{ Relative = "artifacts\build"; Reason = "PyInstaller and release build output" },
     @{ Relative = "artifacts\verification"; Reason = "rebuildable verification workspaces and smoke output" },
     @{ Relative = "artifacts\scratch"; Reason = "temporary packaging probes" },
+    @{ Relative = "artifacts\portable\acceptance-data"; Reason = "superseded portable acceptance output" },
     @{ Relative = "tmp"; Reason = "temporary UI, PDF, and pipeline smoke output" },
     @{ Relative = ".mypy_cache"; Reason = "mypy cache" },
     @{ Relative = ".pytest_cache"; Reason = "pytest cache" },
@@ -176,11 +187,39 @@ foreach ($definition in $fixedDirectoryTargets) {
 $fixedFileTargets = @(
     @{ Relative = "apps\desktop\src-tauri\resources\backend\manifest.json"; Reason = "generated frozen backend manifest" },
     @{ Relative = "apps\desktop\src-tauri\resources\backend\video2notes.exe"; Reason = "generated frozen backend executable" },
+    @{ Relative = "apps\desktop\src-tauri\icons\128x128.png"; Reason = "generated desktop icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\128x128@2x.png"; Reason = "generated desktop icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\32x32.png"; Reason = "generated desktop icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\64x64.png"; Reason = "generated desktop icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\icon.icns"; Reason = "generated macOS icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\icon.png"; Reason = "generated desktop icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square107x107Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square142x142Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square150x150Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square284x284Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square30x30Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square310x310Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square44x44Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square71x71Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\Square89x89Logo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "apps\desktop\src-tauri\icons\StoreLogo.png"; Reason = "generated Windows icon" },
+    @{ Relative = "artifacts\portable\acceptance-clip.mp4"; Reason = "superseded portable acceptance clip" },
+    @{ Relative = "coverage.xml"; Reason = "coverage XML report" },
     @{ Relative = ".coverage"; Reason = "coverage database" }
 )
 
 foreach ($definition in $fixedFileTargets) {
     Add-FileTarget -Targets $targets -Path (Resolve-RepoPath $definition.Relative) -Reason $definition.Reason
+}
+
+foreach ($pythonRootRelative in @("src", "tests", "scripts")) {
+    $pythonRoot = Resolve-RepoPath $pythonRootRelative
+    if (-not (Test-Path -LiteralPath $pythonRoot -PathType Container)) {
+        continue
+    }
+    foreach ($cache in Get-ChildItem -LiteralPath $pythonRoot -Recurse -Force -Directory -Filter "__pycache__") {
+        Add-DirectoryTarget -Targets $targets -Path $cache.FullName -Reason "Python bytecode cache"
+    }
 }
 
 if ($IncludePortableZip) {
