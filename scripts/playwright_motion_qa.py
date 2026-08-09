@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 VIEWPORTS = (
     (1440, 900),
     (1180, 760),

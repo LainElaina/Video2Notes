@@ -9,7 +9,6 @@ from pathlib import Path
 from PIL import Image
 from playwright.sync_api import Error, Page, sync_playwright
 
-
 VIEWPORT = {"width": 1600, "height": 1000}
 
 
