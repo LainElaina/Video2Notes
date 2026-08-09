@@ -110,7 +110,7 @@ Video2Notes 读取原始 PTS，再把所有时间转换成从统一原点开始�
 | 页面 | 文件 | 责任 |
 | --- | --- | --- |
 | 新建任务 | `pages/CreatePage.tsx` | 来源、认证、范围、档位、采样计划、报告配置 |
-| 任务 | `pages/RunPage.tsx` | 阶段进度、警告、诊断、取消 |
+| 任务 | `pages/RunPage.tsx` | 阶段进度、流程日志、警告、诊断、取消 |
 | 阅读器 | `pages/ReaderPage.tsx` | 笔记、时间同步、证据、材料、返工、报告 revision |
 | 模型与算力 | `pages/ModelsPage.tsx` | Provider、Model、Role、性能、组件准备 |
 
@@ -152,11 +152,32 @@ API 大致分为六组：
 | 组件 | `/api/components`、`/api/components/prepare` | 下载和启用本地模型权重 |
 | 模型 | `/api/providers`、secret、test、discover | Provider/Model/Role 与凭据 |
 | 任务 | `/api/jobs`、cancel、result | 提交、轮询、取消和结果 |
-| Run | `/api/runs`、artifact、materials、operations、evidence、report-revisions | 已落盘任务与后处理 |
+| Run | `/api/runs`、events、artifact、materials、operations、evidence、report-revisions | 已落盘任务、历史事件与后处理 |
 
 FastAPI 创建 `JobManager(max_workers=1)`。虽然通用 `JobManager` 类默认可以配置两个 worker，桌面服务明确限制为一个任务，避免本地 ASR/OCR 模型在同一 GPU 上重复加载和争抢显存。
 
-任务事件和线程句柄保存在内存中；run 文件和最终 `render/outcome.json` 持久化。后端重启后，旧任务的实时事件不会恢复，但已经完成或失败的 run 仍可以从磁盘读取。
+任务线程句柄和当前快照保存在内存中，不会在后端重启后继续执行。任务事件同时走两条路径：近期事件留在 `JobManager` 的内存快照中，每次发出的事件还会尝试按 JSON Lines 格式追加到该 run 的 `logs/events.jsonl`。因此重启后不能恢复旧线程，却可以重新读取已经落盘的历史事件和失败诊断。
+
+事件历史接口是：
+
+```http
+GET /api/runs/{run_id}/events?after_sequence=0&limit=200
+```
+
+`after_sequence` 是排他游标，只返回序号大于它的事件，默认 `0`；`limit` 默认 `200`，允许 `1` 到 `500`。前端通常取响应的 `next_sequence` 作为下一次游标，并在 `has_more=true` 时继续请求。
+
+响应字段如下：
+
+| 字段 | 含义 |
+| --- | --- |
+| `run_id` | 被读取的 run |
+| `events` | 当前页事件，包含 `sequence`、状态、阶段、进度、消息、`error_type`、指标和时间 |
+| `next_sequence` | 本页最后返回的序号；本页为空时保持传入游标 |
+| `has_more` | 当前游标之后是否还有下一页 |
+| `log_available` | 是否找到并成功读取事件日志文件 |
+| `corrupt_line_count` | 本次读取过程中跳过的损坏、run 不匹配或非递增日志行数量 |
+
+不存在的 run 返回 `404`。早期版本创建的合法 run 如果没有 `events.jsonl`，返回 `200`、空 `events` 和 `log_available=false`，这样旧数据仍可打开。读取器逐行验证 JSONL；单行损坏只增加 `corrupt_line_count`，不会让整份历史日志不可读。写入也是尽力而为：目录或文件暂时不可写时，事件仍保留在当前内存快照中，日志失败不会反过来把视频处理任务标记为失败。
 
 ### 4.4 Python CLI
 
@@ -669,6 +690,7 @@ runs/<run-id>/
 ├─ operations/
 ├─ revisions/
 └─ logs/
+   └─ events.jsonl            # 每行一个追加式 JobEvent
 ```
 
 ### 11.3 Manifest schema v2
@@ -1024,6 +1046,24 @@ Pydantic request/response model
 
 任务进度每秒轮询。为了避免前一次请求尚未结束又发出下一次请求，store 使用 `pollInFlight` 防止重叠轮询。
 
+### 14.1 实时事件与历史事件如何合并
+
+任务运行时，`/api/jobs` 的快照提供近期内存事件；`/api/runs/{run_id}/events` 提供该 run 从磁盘读取的完整历史。前端不会简单拼接两个数组，而是以 `sequence` 为键合并，再按序号升序排序。同一序号以新读到的数据覆盖旧值，因此轮询、分页边界和后端重启后的重新加载都不会制造重复日志行。
+
+```text
+/api/jobs 中的近期事件 ─┐
+                       ├─ 按 sequence 合并 -> 排序 -> 去重 -> task.telemetry
+/api/runs/.../events ──┘
+        ^
+        └─ after_sequence 游标分页，has_more 时继续
+```
+
+历史接口不可用时，当前后端已经返回的内存事件仍会保留；旧 run 没有日志时得到正常空页。任务页会把 `log_available=false` 或 `corrupt_line_count>0` 显示为非阻塞的完整性提示，同时保留可读取事件；这些状态不会被旧后端或失败的增量请求覆盖。
+
+### 14.2 处理流程日志界面
+
+[`apps/desktop/src/components/ProcessingFlowPanel.tsx`](apps/desktop/src/components/ProcessingFlowPanel.tsx) 消费合并后的 `task.telemetry`。它提供阶段筛选、全部/警告/错误级别筛选、阶段名/消息/指标搜索、单条指标展开、自动跟随、复制和导出当前筛选结果。这个面板的目标是回答三个排障问题：任务执行到了哪个阶段、最后一条有效事件是什么、失败前后有哪些指标或警告。空日志是受支持状态，不能因为早期 run 没有 `events.jsonl` 就显示伪造事件。
+
 阅读器中的简约/专业模式读取同一个 task、NoteDocument 和 evidence，只改变信息密度。
 
 ## 15. 错误、取消与恢复
@@ -1039,6 +1079,8 @@ Pydantic request/response model
 
 run 状态同步变为 failed。已经写出的 artifact 不会自动删除，便于排障。
 
+`JobManager` 生成的失败事件不会把阶段统一改写成模糊的 `failed`：事件的 `stage` 保留异常发生前正在运行的真实阶段，`error_type` 保存异常类名，`message` 保存经过脱敏的摘要。Cookie、Authorization、Bearer、API key、token、SESSDATA 等常见敏感值在写入事件文件和返回 API 前都会过滤。这样 UI 可以把失败定位到具体阶段，同时不会为了诊断把凭据写进日志。
+
 ### 15.2 取消
 
 取消是协作式的：
@@ -1053,7 +1095,7 @@ run 状态同步变为 failed。已经写出的 artifact 不会自动删除，�
 
 同一个 run 内，重新调用 stage 时可以根据 fingerprint 复用完整且校验通过的产物。
 
-但是当前 UI 没有“从失败阶段原地续跑”按钮，后端重启也不会恢复 JobManager 的实时任务句柄。通常做法是：
+但是当前 UI 没有“从失败阶段原地续跑”按钮，后端重启也不会恢复 JobManager 的实时任务句柄或继续旧任务。`logs/events.jsonl` 只恢复可读的历史过程和诊断，不等同于任务断点续跑。通常做法是：
 
 - 创建新 run；或
 - 对已完成 run 使用支持的局部返工；或
