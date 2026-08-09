@@ -3565,7 +3565,7 @@ button:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .app-shell:not(.context-is-collapsed) .context-panel {
+  .app-shell:not(.context-is-collapsed) .motion-presence-context-panel {
     display: none;
   }
 
