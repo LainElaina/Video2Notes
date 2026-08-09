@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import type { ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
+import { useI18n } from '../i18n'
 import { useStudioStore } from '../store'
 import { VisualAsset } from './VisualAsset'
 
@@ -33,6 +34,7 @@ export function SupportingMaterialsDrawer({
   initialEndSeconds,
   onClose,
 }: SupportingMaterialsDrawerProps) {
+  const { text } = useI18n()
   const addTextMaterial = useStudioStore(state => state.addTextMaterial)
   const addFileMaterial = useStudioStore(state => state.addFileMaterial)
   const deleteMaterial = useStudioStore(state => state.deleteMaterial)
@@ -94,7 +96,7 @@ export function SupportingMaterialsDrawer({
       <button
         type="button"
         className="workbench-scrim"
-        aria-label="关闭补充资料面板"
+        aria-label={text('关闭补充资料面板', 'Close supporting materials panel')}
         aria-hidden="true"
         tabIndex={-1}
         onClick={onClose}
@@ -108,11 +110,11 @@ export function SupportingMaterialsDrawer({
       >
         <header className="workbench-drawer-header">
           <div>
-            <span className="section-kicker">SUPPORTING MATERIALS</span>
-            <h2 id="materials-title">补充资料</h2>
-            <p>把评论、图片和自行找到的依据绑定到这个视频任务。</p>
+            <span className="section-kicker">{text('补充资料', 'SUPPORTING MATERIALS')}</span>
+            <h2 id="materials-title">{text('补充资料', 'Supporting materials')}</h2>
+            <p>{text('把评论、图片和自行找到的依据绑定到这个视频任务。', 'Attach comments, images, and evidence you found to this video task.')}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭补充资料面板">
+          <button type="button" onClick={onClose} aria-label={text('关闭补充资料面板', 'Close supporting materials panel')}>
             <X size={18} aria-hidden="true" />
           </button>
         </header>
@@ -121,27 +123,27 @@ export function SupportingMaterialsDrawer({
           <section className="material-composer">
             <div className="drawer-section-heading">
               <div>
-                <span>ADD TEXT</span>
-                <h3>加入文字资料</h3>
+                <span>{text('添加文字', 'ADD TEXT')}</span>
+                <h3>{text('加入文字资料', 'Add text material')}</h3>
               </div>
               <Link2 size={16} aria-hidden="true" />
             </div>
             <label>
-              资料标题
+              {text('资料标题', 'Material title')}
               <input
                 value={title}
                 maxLength={240}
                 onChange={event => setTitle(event.target.value)}
-                placeholder="例如：评论区中的参考链接与更正"
+                placeholder={text('例如：评论区中的参考链接与更正', 'For example: references and corrections from the comments')}
               />
             </label>
             <label>
-              资料内容
+              {text('资料内容', 'Material content')}
               <textarea
                 value={content}
                 maxLength={1_000_000}
                 onChange={event => setContent(event.target.value)}
-                placeholder="粘贴文字、链接、引用或你自己的观察。生成报告时可作为补充依据。"
+                placeholder={text('粘贴文字、链接、引用或你自己的观察。生成报告时可作为补充依据。', 'Paste text, links, quotations, or your own observations. They can be used as supporting evidence when generating the report.')}
               />
             </label>
             <label className="material-range-toggle">
@@ -150,12 +152,12 @@ export function SupportingMaterialsDrawer({
                 checked={bindRange}
                 onChange={event => setBindRange(event.target.checked)}
               />
-              只绑定到视频中的一个时间范围
+              {text('只绑定到视频中的一个时间范围', 'Attach only to a time range in the video')}
             </label>
             {bindRange && (
               <div className="material-range-fields">
                 <label>
-                  开始（秒）
+                  {text('开始（秒）', 'Start (seconds)')}
                   <input
                     type="number"
                     min={0}
@@ -166,7 +168,7 @@ export function SupportingMaterialsDrawer({
                   />
                 </label>
                 <label>
-                  结束（秒）
+                  {text('结束（秒）', 'End (seconds)')}
                   <input
                     type="number"
                     min={0}
@@ -179,7 +181,7 @@ export function SupportingMaterialsDrawer({
                 <span className={validRange ? '' : 'is-invalid'}>
                   {validRange
                     ? `${formatTime(startSeconds)} — ${formatTime(endSeconds)}`
-                    : '结束时间必须晚于开始时间，并位于视频时长内'}
+                    : text('结束时间必须晚于开始时间，并位于视频时长内', 'The end time must be after the start time and within the video duration')}
                 </span>
               </div>
             )}
@@ -190,15 +192,15 @@ export function SupportingMaterialsDrawer({
               onClick={submitText}
             >
               <Plus size={15} aria-hidden="true" />
-              加入此任务
+              {text('加入此任务', 'Add to this task')}
             </button>
           </section>
 
           <section className="material-upload">
             <div className="drawer-section-heading">
               <div>
-                <span>ADD IMAGE</span>
-                <h3>加入图片资料</h3>
+                <span>{text('添加图片', 'ADD IMAGE')}</span>
+                <h3>{text('加入图片资料', 'Add image material')}</h3>
               </div>
               <FileImage size={16} aria-hidden="true" />
             </div>
@@ -218,8 +220,8 @@ export function SupportingMaterialsDrawer({
             >
               <Upload size={18} aria-hidden="true" />
               <span>
-                <strong>选择 PNG、JPEG 或 WebP</strong>
-                <small>单个文件最大 25 MB；本地保存并计算内容哈希</small>
+                <strong>{text('选择 PNG、JPEG 或 WebP', 'Choose PNG, JPEG, or WebP files')}</strong>
+                <small>{text('单个文件最大 25 MB；本地保存并计算内容哈希', 'Up to 25 MB per file; saved locally with a content hash')}</small>
               </span>
             </button>
           </section>
@@ -227,13 +229,13 @@ export function SupportingMaterialsDrawer({
           <section className="material-library">
             <div className="drawer-section-heading">
               <div>
-                <span>BOUND TO THIS RUN</span>
-                <h3>已绑定资料 · {task.materials.length}</h3>
+                <span>{text('已绑定到此任务', 'BOUND TO THIS RUN')}</span>
+                <h3>{text('已绑定资料', 'Attached materials')} · {task.materials.length}</h3>
               </div>
               <button
                 type="button"
                 onClick={() => refreshMaterials(task.id)}
-                aria-label="刷新补充资料"
+                aria-label={text('刷新补充资料', 'Refresh supporting materials')}
               >
                 <RefreshCcw size={14} aria-hidden="true" />
               </button>
@@ -252,26 +254,26 @@ export function SupportingMaterialsDrawer({
                         <p>
                           {material.textContent ||
                             material.originalName ||
-                            '本地补充资料'}
+                            text('本地补充资料', 'Local supporting material')}
                         </p>
                         <span>
                           {material.startUs !== null && material.endUs !== null
                             ? `${formatTime(material.startUs / 1_000_000)} — ${formatTime(
                                 material.endUs / 1_000_000,
                               )}`
-                            : '全局资料'}
+                            : text('全局资料', 'Global material')}
                           {' · '}
                           {bytesLabel(material.sizeBytes)}
                           {' · '}
                           {material.storage === 'run-artifact'
-                            ? `本地 artifact · ${material.sha256?.slice(0, 8)}`
-                            : '演示内存条目'}
+                            ? `${text('本地 artifact', 'Local artifact')} · ${material.sha256?.slice(0, 8)}`
+                            : text('演示内存条目', 'In-memory demo item')}
                         </span>
                       </div>
                       <button
                         type="button"
                         onClick={() => deleteMaterial(task.id, material.id)}
-                        aria-label={`删除资料：${material.title}`}
+                        aria-label={text(`删除资料：${material.title}`, `Delete material: ${material.title}`)}
                       >
                         <Trash2 size={14} aria-hidden="true" />
                       </button>
@@ -284,7 +286,7 @@ export function SupportingMaterialsDrawer({
                 <VisualAsset className="inline-empty-visual" asset="emptyMaterials" width={192} height={124} />
                 <div>
                   <Link2 size={18} aria-hidden="true" />
-                  <p>还没有补充资料。它们会和视频证据一起保存在此任务下。</p>
+                  <p>{text('还没有补充资料。它们会和视频证据一起保存在此任务下。', 'No supporting materials yet. They will be saved with the video evidence under this task.')}</p>
                 </div>
               </div>
             )}
@@ -294,11 +296,11 @@ export function SupportingMaterialsDrawer({
         <footer className="workbench-drawer-footer">
           <span>
             {task.realBackend
-              ? '资料写入本机 run artifact，不会上传到 Video2Notes 云服务。'
-              : '当前是明确标记的演示模式；新增内容只保存在本次内存会话。'}
+              ? text('资料写入本机 run artifact，不会上传到 Video2Notes 云服务。', 'Materials are written to the local run artifact and are not uploaded to a Video2Notes cloud service.')
+              : text('当前是明确标记的演示模式；新增内容只保存在本次内存会话。', 'This is an explicitly marked demo mode; new content is kept only in this in-memory session.')}
           </span>
           <button className="button button-secondary" type="button" onClick={onClose}>
-            完成
+            {text('完成', 'Done')}
           </button>
         </footer>
       </aside>

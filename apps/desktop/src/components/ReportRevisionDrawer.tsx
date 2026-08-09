@@ -11,6 +11,7 @@ import {
   RefreshCcw,
   X,
 } from 'lucide-react'
+import { useI18n } from '../i18n'
 import { MotionPresence } from './MotionPresence'
 import { VisualAsset } from './VisualAsset'
 
@@ -63,35 +64,35 @@ export interface ReportRevisionDrawerProps {
 
 interface PresetOption {
   value: ReportRevisionPreset
-  label: string
-  description: string
+  label: readonly [string, string]
+  description: readonly [string, string]
 }
 
 const presetOptions: PresetOption[] = [
   {
     value: 'concise',
-    label: '简洁',
-    description: '压缩背景，只保留结论、必要依据与最短上下文。',
+    label: ['简洁', 'Concise'],
+    description: ['压缩背景，只保留结论、必要依据与最短上下文。', 'Compress background context and retain only conclusions, essential evidence, and the shortest necessary context.'],
   },
   {
     value: 'detailed',
-    label: '详细',
-    description: '完整覆盖时间顺序、术语、限制与关键证据。',
+    label: ['详细', 'Detailed'],
+    description: ['完整覆盖时间顺序、术语、限制与关键证据。', 'Cover chronology, terminology, limitations, and key evidence in full.'],
   },
   {
     value: 'professional',
-    label: '专业',
-    description: '突出方法、数据、假设、冲突与不确定性。',
+    label: ['专业', 'Professional'],
+    description: ['突出方法、数据、假设、冲突与不确定性。', 'Emphasize methods, data, assumptions, conflicts, and uncertainty.'],
   },
   {
     value: 'beginner',
-    label: '入门',
-    description: '解释术语和推理步骤，但不补造视频之外的背景。',
+    label: ['入门', 'Beginner'],
+    description: ['解释术语和推理步骤，但不补造视频之外的背景。', 'Explain terminology and reasoning steps without inventing context beyond the video.'],
   },
   {
     value: 'executive',
-    label: '领导',
-    description: '优先呈现结论、影响、风险、决策点与行动项。',
+    label: ['领导', 'Executive'],
+    description: ['优先呈现结论、影响、风险、决策点与行动项。', 'Prioritize conclusions, impact, risks, decision points, and action items.'],
   },
 ]
 
@@ -103,14 +104,10 @@ const formatLabels: Record<ReportRevisionFormat, string> = {
   pdf: 'PDF',
 }
 
-const presetLabels = Object.fromEntries(
-  presetOptions.map(option => [option.value, option.label]),
-) as Record<ReportRevisionPreset, string>
-
-const formatCreatedAt = (value: string) => {
+const formatCreatedAt = (value: string, locale: string) => {
   const timestamp = new Date(value)
   if (Number.isNaN(timestamp.getTime())) return value
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -138,6 +135,7 @@ export function ReportRevisionDrawer({
   onGenerate,
   onDownload,
 }: ReportRevisionDrawerProps) {
+  const { locale, text } = useI18n()
   const titleId = useId()
   const descriptionId = useId()
   const presetName = useId()
@@ -153,7 +151,7 @@ export function ReportRevisionDrawer({
       <button
         type="button"
         className="workbench-scrim"
-        aria-label="关闭报告重生成面板"
+        aria-label={text('关闭报告重生成面板', 'Close report regeneration panel')}
         aria-hidden="true"
         tabIndex={-1}
         onClick={onClose}
@@ -169,16 +167,16 @@ export function ReportRevisionDrawer({
       >
         <header className="workbench-drawer-header report-revision-header">
           <div>
-            <span className="section-kicker">REPORT REVISION</span>
-            <h2 id={titleId}>重新生成报告</h2>
+            <span className="section-kicker">{text('报告版本', 'REPORT REVISION')}</span>
+            <h2 id={titleId}>{text('重新生成报告', 'Regenerate report')}</h2>
             <p id={descriptionId}>
-              复用已经完成的证据分析，只重新组织笔记内容与输出格式。
+              {text('复用已经完成的证据分析，只重新组织笔记内容与输出格式。', 'Reuse the completed evidence analysis and reorganize only the note content and output formats.')}
             </p>
             <strong className="report-revision-task" title={taskTitle}>
               {taskTitle}
             </strong>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭报告重生成面板">
+          <button type="button" onClick={onClose} aria-label={text('关闭报告重生成面板', 'Close report regeneration panel')}>
             <X size={18} aria-hidden="true" />
           </button>
         </header>
@@ -187,32 +185,32 @@ export function ReportRevisionDrawer({
           <section className="report-revision-inputs">
             <div className="drawer-section-heading">
               <div>
-                <span>INPUT SNAPSHOT</span>
-                <h3>本次报告使用的输入</h3>
+                <span>{text('输入快照', 'INPUT SNAPSHOT')}</span>
+                <h3>{text('本次报告使用的输入', 'Inputs for this report')}</h3>
               </div>
               <Layers3 size={16} aria-hidden="true" />
             </div>
             <div className="report-revision-route">
               <div>
-                <span>有效证据 revision</span>
+                <span>{text('有效证据 revision', 'Active evidence revision')}</span>
                 <strong title={activeEvidenceRevisionId}>
                   {compactId(activeEvidenceRevisionId)}
                 </strong>
-                <small>语音、字幕、OCR 与关键帧沿用此版本</small>
+                <small>{text('语音、字幕、OCR 与关键帧沿用此版本', 'Speech, captions, OCR, and keyframes use this revision')}</small>
               </div>
               <div>
-                <span>补充资料</span>
-                <strong>{safeMaterialsCount} 份</strong>
+                <span>{text('补充资料', 'Supporting materials')}</span>
+                <strong>{safeMaterialsCount} {text('份', safeMaterialsCount === 1 ? 'item' : 'items')}</strong>
                 <small>
                   {safeMaterialsCount > 0
-                    ? '当前有效资料会作为外部补充依据参与生成'
-                    : '当前没有额外文字或图片资料'}
+                    ? text('当前有效资料会作为外部补充依据参与生成', 'Active materials will be included as external supporting evidence')
+                    : text('当前没有额外文字或图片资料', 'There are no additional text or image materials')}
                 </small>
               </div>
             </div>
             <p className="report-revision-scope-note">
               <Check size={14} aria-hidden="true" />
-              当前有效证据与补充资料都会参与；此操作不会重新下载视频，也不会覆盖既有报告。
+              {text('当前有效证据与补充资料都会参与；此操作不会重新下载视频，也不会覆盖既有报告。', 'The active evidence and supporting materials will both be used. This does not download the video again or overwrite existing reports.')}
             </p>
           </section>
 
@@ -226,8 +224,8 @@ export function ReportRevisionDrawer({
               <section className="report-revision-error" role="alert">
                 <AlertTriangle size={17} aria-hidden="true" />
                 <div>
-                  <strong>报告生成失败</strong>
-                  <p>{error}</p>
+                  <strong>{text('报告生成失败', 'Report generation failed')}</strong>
+                  <p>{text(`底层详情：${error}`, `Technical details: ${error}`)}</p>
                 </div>
               </section>
             )}
@@ -236,15 +234,15 @@ export function ReportRevisionDrawer({
           <section className="report-revision-contract">
             <div className="drawer-section-heading">
               <div>
-                <span>WRITING PROFILE</span>
-                <h3>选择报告类型</h3>
+                <span>{text('写作配置', 'WRITING PROFILE')}</span>
+                <h3>{text('选择报告类型', 'Choose a report type')}</h3>
               </div>
               <FileText size={16} aria-hidden="true" />
             </div>
             <div
               className="report-revision-presets"
               role="radiogroup"
-              aria-label="报告类型"
+              aria-label={text('报告类型', 'Report type')}
             >
               {presetOptions.map((option, index) => {
                 const checked = preset === option.value
@@ -265,8 +263,8 @@ export function ReportRevisionDrawer({
                       {(index + 1).toString().padStart(2, '0')}
                     </span>
                     <span>
-                      <strong>{option.label}</strong>
-                      <small>{option.description}</small>
+                      <strong>{text(...option.label)}</strong>
+                      <small>{text(...option.description)}</small>
                     </span>
                     <Check
                       className="report-revision-preset-check"
@@ -282,8 +280,8 @@ export function ReportRevisionDrawer({
           <section className="report-revision-outputs">
             <div className="drawer-section-heading">
               <div>
-                <span>OUTPUT CONTRACT</span>
-                <h3>输出与图像</h3>
+                <span>{text('输出约定', 'OUTPUT CONTRACT')}</span>
+                <h3>{text('输出与图像', 'Outputs and images')}</h3>
               </div>
               <FileCode2 size={16} aria-hidden="true" />
             </div>
@@ -292,14 +290,14 @@ export function ReportRevisionDrawer({
                 <Check size={15} aria-hidden="true" />
                 <span>
                   <strong>Markdown</strong>
-                  <small>固定生成 · canonical 笔记</small>
+                  <small>{text('固定生成 · canonical 笔记', 'Always generated · canonical note')}</small>
                 </span>
               </div>
               <div className="report-revision-output is-locked">
                 <Check size={15} aria-hidden="true" />
                 <span>
                   <strong>HTML</strong>
-                  <small>固定生成 · 浏览与打印来源</small>
+                  <small>{text('固定生成 · 浏览与打印来源', 'Always generated · source for browsing and printing')}</small>
                 </span>
               </div>
               <label className="report-revision-output is-toggle">
@@ -311,7 +309,7 @@ export function ReportRevisionDrawer({
                 />
                 <span>
                   <strong>PDF</strong>
-                  <small>生成可打印的本地离线版本</small>
+                  <small>{text('生成可打印的本地离线版本', 'Generate a printable local offline version')}</small>
                 </span>
               </label>
               <label className="report-revision-output is-toggle">
@@ -324,23 +322,23 @@ export function ReportRevisionDrawer({
                   }
                 />
                 <span>
-                  <strong>关键帧截图</strong>
-                  <small>只嵌入证据筛选后的画面</small>
+                  <strong>{text('关键帧截图', 'Keyframe screenshots')}</strong>
+                  <small>{text('只嵌入证据筛选后的画面', 'Embed only frames selected by the evidence pipeline')}</small>
                 </span>
               </label>
             </div>
             <p className="report-revision-selection-note">
-              当前选择：{selectedPreset.label}报告 · Markdown + HTML
+              {text('当前选择：', 'Current selection: ')}{text(...selectedPreset.label)}{text('报告', ' report')} · Markdown + HTML
               {includePdf ? ' + PDF' : ''} ·
-              {includeScreenshots ? ' 包含关键帧' : ' 不包含关键帧'}
+              {includeScreenshots ? text(' 包含关键帧', ' includes keyframes') : text(' 不包含关键帧', ' excludes keyframes')}
             </p>
           </section>
 
           <section className="report-revision-history">
             <div className="drawer-section-heading">
               <div>
-                <span>IMMUTABLE HISTORY</span>
-                <h3>历史报告 · {revisions.length}</h3>
+                <span>{text('不可变历史', 'IMMUTABLE HISTORY')}</span>
+                <h3>{text('历史报告', 'Report history')} · {revisions.length}</h3>
               </div>
               <Clock3 size={16} aria-hidden="true" />
             </div>
@@ -366,8 +364,8 @@ export function ReportRevisionDrawer({
                           R{(revisions.length - index).toString().padStart(2, '0')}
                         </span>
                         <div>
-                          <strong>{presetLabels[revision.preset]}报告</strong>
-                          <span>{formatCreatedAt(revision.createdAt)}</span>
+                          <strong>{text(...(presetOptions.find(option => option.value === revision.preset)?.label ?? presetOptions[1].label))}{text('报告', ' report')}</strong>
+                          <span>{formatCreatedAt(revision.createdAt, locale)}</span>
                         </div>
                         <code title={revision.id}>{compactId(revision.id)}</code>
                       </header>
@@ -380,11 +378,11 @@ export function ReportRevisionDrawer({
                           }
                           title={revision.evidenceRevisionId}
                         >
-                          {isCurrentEvidence ? '当前证据' : '历史证据'} ·{' '}
+                          {isCurrentEvidence ? text('当前证据', 'Current evidence') : text('历史证据', 'Historical evidence')} ·{' '}
                           {compactId(revision.evidenceRevisionId)}
                         </span>
                         {revision.fallback && (
-                          <span className="is-fallback">安全回退版本</span>
+                          <span className="is-fallback">{text('安全回退版本', 'Safe fallback version')}</span>
                         )}
                       </div>
                       {revision.warnings.length > 0 && (
@@ -393,7 +391,7 @@ export function ReportRevisionDrawer({
                           <ul>
                             {revision.warnings.map((warning, warningIndex) => (
                               <li key={`${revision.id}-warning-${warningIndex}`}>
-                                {warning}
+                                {text(`警告：${warning}`, `Warning: ${warning}`)}
                               </li>
                             ))}
                           </ul>
@@ -410,7 +408,7 @@ export function ReportRevisionDrawer({
                               title={
                                 artifactPath
                                   ? artifactPath
-                                  : `${formatLabels[format]} 产物路径不可用`
+                                  : text(`${formatLabels[format]} 产物路径不可用`, `${formatLabels[format]} artifact path is unavailable`)
                               }
                               onClick={() => onDownload(revision, format)}
                             >
@@ -420,7 +418,7 @@ export function ReportRevisionDrawer({
                                 <small>
                                   {artifactPath
                                     ? artifactFileName(artifactPath)
-                                    : '产物不可用'}
+                                    : text('产物不可用', 'Artifact unavailable')}
                                 </small>
                               </span>
                             </button>
@@ -444,9 +442,9 @@ export function ReportRevisionDrawer({
                     <VisualAsset className="inline-empty-visual" asset="emptyReportHistory" width={192} height={124} />
                     <div>
                       <RefreshCcw size={19} aria-hidden="true" />
-                      <strong>还没有重新生成的报告</strong>
+                      <strong>{text('还没有重新生成的报告', 'No regenerated reports yet')}</strong>
                       <p>
-                        选择报告类型和输出格式后创建第一个不可变 revision；原始报告不会被覆盖。
+                        {text('选择报告类型和输出格式后创建第一个不可变 revision；原始报告不会被覆盖。', 'Choose a report type and output formats to create the first immutable revision. The original report will not be overwritten.')}
                       </p>
                     </div>
                   </div>
@@ -458,7 +456,7 @@ export function ReportRevisionDrawer({
 
         <footer className="workbench-drawer-footer report-revision-footer">
           <span>
-            新报告将写入独立的本地 revision 目录。Markdown 与 HTML 始终生成。
+            {text('新报告将写入独立的本地 revision 目录。Markdown 与 HTML 始终生成。', 'The new report is written to a separate local revision directory. Markdown and HTML are always generated.')}
           </span>
           <button
             className="button button-primary"
@@ -481,7 +479,7 @@ export function ReportRevisionDrawer({
             ) : (
               <RefreshCcw size={15} aria-hidden="true" />
             )}
-            {busy ? '正在生成…' : '生成新 revision'}
+            {busy ? text('正在生成…', 'Generating…') : text('生成新 revision', 'Generate new revision')}
           </button>
         </footer>
       </aside>

@@ -7,6 +7,7 @@ import {
   RouteOff,
 } from 'lucide-react'
 import type { ProcessingTask, StageOutputArtifact } from '../domain'
+import { useI18n } from '../i18n'
 
 interface RunDiagnosticsPanelProps {
   task: ProcessingTask
@@ -36,6 +37,7 @@ export function RunDiagnosticsPanel({
   onCreateNew,
   onDownloadArtifact,
 }: RunDiagnosticsPanelProps) {
+  const { text } = useI18n()
   const terminal = task.status === 'failed' || task.status === 'cancelled'
   const failedStages =
     task.failure?.failedStages ??
@@ -75,25 +77,30 @@ export function RunDiagnosticsPanel({
       ? {
           canRetry: false,
           strategy: 'manual_recreate' as const,
-          reason:
+          reason: text(
             '当前会话没有可安全重放的认证与采样请求，请回到新建任务重新选择来源。',
+            'This session has no authentication and sampling request that can be replayed safely. Return to New task and select the source again.',
+          ),
         }
       : {
           canRetry: true,
           strategy: 'demo_restart' as const,
-          reason: '演示任务可从头重置，但不会写入真实阶段产物。',
+          reason: text(
+            '演示任务可从头重置，但不会写入真实阶段产物。',
+            'The demo task can restart from the beginning but does not write real stage artifacts.',
+          ),
         })
 
   if (!terminal && (!task.realBackend || warnings.length === 0)) return null
 
   const heading =
     task.status === 'failed'
-      ? `处理在 ${failedStages[0]?.stage ?? '未知阶段'} 停止`
+      ? text(`处理在 ${failedStages[0]?.stage ?? '未知阶段'} 停止`, `Processing stopped at ${failedStages[0]?.stage ?? 'an unknown stage'}`)
       : task.status === 'cancelled'
-        ? '任务已取消，已完成工作仍保留'
+        ? text('任务已取消，已完成工作仍保留', 'Task cancelled; completed work was retained')
         : task.status === 'completed'
-          ? '任务已完成，但存在运行提示'
-          : '任务正在使用降级或兼容配置'
+          ? text('任务已完成，但存在运行提示', 'Task completed with runtime notices')
+          : text('任务正在使用降级或兼容配置', 'Task is using a degraded or compatibility configuration')
   const errorType =
     task.failure?.errorType ?? failedStages.find(stage => stage.errorType)?.errorType
 
@@ -116,12 +123,12 @@ export function RunDiagnosticsPanel({
           <p>
             {task.failure?.message ??
               (terminal
-                ? '以下信息直接来自任务与阶段 manifest；已经写入的产物不会被删除。'
-                : '以下提示直接来自本机后端与阶段 manifest，任务仍会保留完整追踪信息。')}
+                ? text('以下信息直接来自任务与阶段 manifest；已经写入的产物不会被删除。', 'The following details come directly from the task and stage manifests. Existing artifacts will not be deleted.')
+                : text('以下提示直接来自本机后端与阶段 manifest，任务仍会保留完整追踪信息。', 'The following notices come directly from the local backend and stage manifests. The task retains its full trace.'))}
           </p>
         </div>
         {errorType && (
-          <span className="diagnostics-error-type" title="后端返回的安全异常类型">
+          <span className="diagnostics-error-type" title={text('后端返回的安全异常类型', 'Safe error type returned by the backend')}>
             {errorType}
           </span>
         )}
@@ -130,41 +137,41 @@ export function RunDiagnosticsPanel({
       {terminal && (
         <div className="diagnostics-facts">
           <div>
-            <span>失败阶段</span>
+            <span>{text('失败阶段', 'Failed stages')}</span>
             <strong>{failedStages.length || '—'}</strong>
             <p>
               {failedStages.length > 0
                 ? unique(failedStages.map(stage => stage.stage)).join(' · ')
                 : task.status === 'cancelled'
-                  ? '用户取消或安全中止'
-                  : '后端未返回阶段名'}
+                  ? text('用户取消或安全中止', 'Cancelled by the user or stopped safely')
+                  : text('后端未返回阶段名', 'The backend did not return a stage name')}
             </p>
           </div>
           <div>
-            <span>已完成阶段</span>
+            <span>{text('已完成阶段', 'Completed stages')}</span>
             <strong>{completedStages.length}</strong>
             <p>
               {completedStages.length > 0
                 ? completedStages.join(' · ')
-                : '尚无阶段确认完成'}
+                : text('尚无阶段确认完成', 'No stage has confirmed completion')}
             </p>
           </div>
           <div>
-            <span>可用产物</span>
+            <span>{text('可用产物', 'Available artifacts')}</span>
             <strong>{task.realBackend ? artifacts.length : 0}</strong>
             <p>
               {task.realBackend && artifacts.length > 0
-                ? '均来自后端 manifest，可单独导出'
+                ? text('均来自后端 manifest，可单独导出', 'All are listed in the backend manifest and can be exported separately')
                 : task.realBackend
-                  ? '尚无已登记产物'
-                  : '演示模式不写入真实文件'}
+                  ? text('尚无已登记产物', 'No registered artifacts yet')
+                  : text('演示模式不写入真实文件', 'Demo mode does not write real files')}
             </p>
           </div>
         </div>
       )}
 
       {warnings.length > 0 && (
-        <div className="diagnostics-warnings" aria-label="运行提示">
+        <div className="diagnostics-warnings" aria-label={text('运行提示', 'Runtime notices')}>
           {warnings.slice(0, compact ? 2 : 4).map(warning => (
             <p key={warning}>
               <AlertTriangle size={13} aria-hidden="true" />
@@ -172,19 +179,19 @@ export function RunDiagnosticsPanel({
             </p>
           ))}
           {warnings.length > (compact ? 2 : 4) && (
-            <small>另有 {warnings.length - (compact ? 2 : 4)} 条提示保留在任务记录中</small>
+            <small>{text(`另有 ${warnings.length - (compact ? 2 : 4)} 条提示保留在任务记录中`, `${warnings.length - (compact ? 2 : 4)} more notices remain in the task record`)}</small>
           )}
         </div>
       )}
 
       {terminal && task.realBackend && artifacts.length > 0 && !compact && (
-        <div className="diagnostics-artifacts" aria-label="失败任务保留的产物">
+        <div className="diagnostics-artifacts" aria-label={text('失败任务保留的产物', 'Artifacts retained from the failed task')}>
           {artifacts.slice(0, 6).map(artifact => (
             <button
               type="button"
               key={artifactKey(artifact)}
               onClick={() => onDownloadArtifact(artifact)}
-              aria-label={`下载产物 ${artifact.relativePath}`}
+              aria-label={text(`下载产物 ${artifact.relativePath}`, `Download artifact ${artifact.relativePath}`)}
             >
               <FileDown size={15} aria-hidden="true" />
               <span>
@@ -207,26 +214,26 @@ export function RunDiagnosticsPanel({
             <strong>
               {recovery.canRetry
                 ? recovery.strategy === 'demo_restart'
-                  ? '可重新开始演示任务'
-                  : '可按原配置新建重试任务'
-                : '无法在当前会话一键重试'}
+                  ? text('可重新开始演示任务', 'The demo task can be restarted')
+                  : text('可按原配置新建重试任务', 'A retry task can be created with the same configuration')
+                : text('无法在当前会话一键重试', 'One-click retry is unavailable in this session')}
             </strong>
             <p>{recovery.reason}</p>
             {recovery.strategy !== 'demo_restart' && (
-              <small>从失败阶段原地续跑：当前本地 API 未提供该能力</small>
+              <small>{text('从失败阶段原地续跑：当前本地 API 未提供该能力', 'Resume from the failed stage: the local API does not currently provide this capability')}</small>
             )}
           </div>
           {recovery.canRetry ? (
             <button className="button button-primary" type="button" onClick={onRetry}>
               <RotateCcw size={15} aria-hidden="true" />
               {recovery.strategy === 'demo_restart'
-                ? '重新开始演示'
-                : '按原配置新建重试'}
+                ? text('重新开始演示', 'Restart demo')
+                : text('按原配置新建重试', 'Create retry with same settings')}
             </button>
           ) : (
             <button className="button button-secondary" type="button" onClick={onCreateNew}>
               <CheckCircle2 size={15} aria-hidden="true" />
-              返回新建任务
+              {text('返回新建任务', 'Return to New task')}
             </button>
           )}
         </footer>

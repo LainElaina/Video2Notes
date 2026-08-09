@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Maximize2, Pause, Play, ScanText } from 'lucide-react'
 import { formatTime } from '../domain'
+import { useI18n } from '../i18n'
 import { VisualAsset } from './VisualAsset'
 
 interface SynchronizedVideoProps {
@@ -22,6 +23,7 @@ export function SynchronizedVideo({
 }: SynchronizedVideoProps) {
   const [playing, setPlaying] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const { text } = useI18n()
 
   useEffect(() => {
     if (src || !playing) return
@@ -51,8 +53,8 @@ export function SynchronizedVideo({
 
   const sceneIndex = Math.floor(currentTimeSeconds / 180) % 4
   const sceneTitle = [
-    '统一物理时间轴',
-    '选择性二次识别',
+    text('统一物理时间轴', 'Unified physical timeline'),
+    text('选择性二次识别', 'Selective reprocessing'),
     'EvidenceSpan',
     'Canonical NoteDocument',
   ][sceneIndex]
@@ -65,7 +67,7 @@ export function SynchronizedVideo({
   const sceneAsset = sceneAssets[sceneIndex]
 
   return (
-    <section className="video-console" aria-label="同步视频">
+    <section className="video-console" aria-label={text('同步视频', 'Synchronized video')}>
       <div className="video-stage">
         <div className="video-fixture-badge">
           {src ? 'LOCAL MEDIA / PTS SYNC' : 'LOCAL PREVIEW / EXPLICIT DEMO'}
@@ -80,10 +82,10 @@ export function SynchronizedVideo({
             onPause={() => setPlaying(false)}
             onTimeUpdate={event => onSeek(event.currentTarget.currentTime)}
             onEnded={() => setPlaying(false)}
-            aria-label={`本地视频：${title}`}
+            aria-label={text(`本地视频：${title}`, `Local video: ${title}`)}
           />
         ) : (
-          <div className="fixture-slide" aria-label={`当前演示画面：${sceneTitle}`}>
+          <div className="fixture-slide" aria-label={text(`当前演示画面：${sceneTitle}`, `Current demo frame: ${sceneTitle}`)}>
             <VisualAsset
               className="video-fixture-visual"
               asset={sceneAsset}
@@ -93,12 +95,12 @@ export function SynchronizedVideo({
             <div className="fixture-slide-overlay">
               <small>VIDEO2NOTES / FRAME {Math.floor(currentTimeSeconds * 30)}</small>
               <strong>{sceneTitle}</strong>
-              <span>speech · screen text · visual state · verified claim</span>
+              <span>{text('语音 · 屏幕文字 · 画面状态 · 已核查论点', 'speech · screen text · visual state · verified claim')}</span>
             </div>
           </div>
         )}
         {(!src || ocrConfidence !== undefined) && (
-          <div className="ocr-corner" title="屏幕文字区域">
+          <div className="ocr-corner" title={text('屏幕文字区域', 'On-screen text region')}>
             <ScanText size={16} aria-hidden="true" />
             OCR {(ocrConfidence ?? 0.93).toFixed(2)}
           </div>
@@ -109,13 +111,13 @@ export function SynchronizedVideo({
           type="button"
           className="video-play"
           onClick={togglePlayback}
-          aria-label={playing ? '暂停视频' : '播放视频'}
+          aria-label={playing ? text('暂停视频', 'Pause video') : text('播放视频', 'Play video')}
         >
           {playing ? <Pause size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}
         </button>
         <span className="timecode">{formatTime(currentTimeSeconds)}</span>
         <label className="video-scrubber">
-          <span className="sr-only">视频播放位置</span>
+          <span className="sr-only">{text('视频播放位置', 'Video playback position')}</span>
           <input
             type="range"
             min={0}
@@ -136,7 +138,7 @@ export function SynchronizedVideo({
           }}
         >
           <Maximize2 size={15} aria-hidden="true" />
-          <span>适合窗口</span>
+          <span>{text('适合窗口', 'Fit window')}</span>
         </button>
       </div>
       <p className="video-title" title={title}>

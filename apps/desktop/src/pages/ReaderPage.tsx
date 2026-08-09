@@ -30,10 +30,15 @@ import { VisualAsset } from '../components/VisualAsset'
 import { usePopoverFocus } from '../components/usePopoverFocus'
 import type { EvidenceKind, NoteDocument, ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
+import { useI18n } from '../i18n'
 import { useStudioStore } from '../store'
 import { useUiPreferences } from '../stores/uiPreferences'
 
-const buildMarkdown = (task: ProcessingTask, note: NoteDocument) => {
+const buildMarkdown = (
+  task: ProcessingTask,
+  note: NoteDocument,
+  labels: { selectedFrame: string; source: string },
+) => {
   const sections = note.sections
     .map(section => {
       const claims = section.claims
@@ -46,14 +51,14 @@ const buildMarkdown = (task: ProcessingTask, note: NoteDocument) => {
         .join('\n')
       const screenshot =
         section.screenshotAt !== undefined
-          ? `\n\n![精选关键帧](${
+          ? `\n\n![${labels.selectedFrame}](${
               section.screenshotPath || `assets/frame-${Math.floor(section.screenshotAt)}.jpg`
             })\n`
         : ''
       return `## ${section.title}\n\n${section.summary}${screenshot}\n${claims}`
     })
     .join('\n\n')
-  return `# ${note.title}\n\n> ${note.sourceSummary}\n\n${note.overview}\n\n${sections}\n\n---\n\n来源：${task.source.sourceLabel}\n`
+  return `# ${note.title}\n\n> ${note.sourceSummary}\n\n${note.overview}\n\n${sections}\n\n---\n\n${labels.source}: ${task.source.sourceLabel}\n`
 }
 
 const downloadText = (name: string, content: string, type: string) => {
@@ -67,6 +72,7 @@ const downloadText = (name: string, content: string, type: string) => {
 }
 
 export function ReaderPage() {
+  const { text } = useI18n()
   const tasks = useStudioStore(state => state.tasks)
   const activeTaskId = useStudioStore(state => state.activeTaskId)
   const currentTimeSeconds = useStudioStore(state => state.currentTimeSeconds)
@@ -174,8 +180,8 @@ export function ReaderPage() {
           height={640}
         />
         <FileText size={26} aria-hidden="true" />
-        <h2>还没有可阅读的笔记</h2>
-        <p>任务完成并通过验证后，Markdown 和证据会出现在这里。</p>
+        <h2>{text('还没有可阅读的笔记', 'No readable notes yet')}</h2>
+        <p>{text('任务完成并通过验证后，Markdown 和证据会出现在这里。', 'Markdown and supporting evidence appear here after a task completes and passes verification.')}</p>
       </div>
     )
   }
@@ -186,7 +192,14 @@ export function ReaderPage() {
       downloadArtifact(task.id, 'markdown')
       return
     }
-    downloadText('video2notes-demo.md', buildMarkdown(task, note), 'text/markdown;charset=utf-8')
+    downloadText(
+      'video2notes-demo.md',
+      buildMarkdown(task, note, {
+        selectedFrame: text('精选关键帧', 'Selected keyframe'),
+        source: text('来源', 'Source'),
+      }),
+      'text/markdown;charset=utf-8',
+    )
   }
   const exportHtml = () => {
     dismissExport('action')
@@ -194,7 +207,10 @@ export function ReaderPage() {
       downloadArtifact(task.id, 'html')
       return
     }
-    const markdown = buildMarkdown(task, note)
+    const markdown = buildMarkdown(task, note, {
+      selectedFrame: text('精选关键帧', 'Selected keyframe'),
+      source: text('来源', 'Source'),
+    })
     const escaped = markdown.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     downloadText(
       'video2notes-demo.html',
@@ -237,7 +253,7 @@ export function ReaderPage() {
     void refreshReportRevisions(task.id)
       .catch(error =>
         setReportError(
-          error instanceof Error ? error.message : '报告历史刷新失败。',
+          error instanceof Error ? error.message : text('报告历史刷新失败。', 'Could not refresh report history.'),
         ),
       )
       .finally(() => setReportBusy(false))
@@ -248,7 +264,7 @@ export function ReaderPage() {
     void generateReportRevision(task.id, request)
       .catch(error =>
         setReportError(
-          error instanceof Error ? error.message : '报告生成失败。',
+          error instanceof Error ? error.message : text('报告生成失败。', 'Could not generate the report.'),
         ),
       )
       .finally(() => setReportBusy(false))
@@ -271,11 +287,11 @@ export function ReaderPage() {
       <div className="reader-toolbar">
         <label className="reader-search">
           <Search size={15} aria-hidden="true" />
-          <span className="sr-only">搜索当前笔记</span>
+          <span className="sr-only">{text('搜索当前笔记', 'Search this note')}</span>
           <input
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="搜索当前笔记"
+            placeholder={text('搜索当前笔记', 'Search this note')}
           />
         </label>
         <div className="reader-toolbar-actions">
@@ -285,7 +301,7 @@ export function ReaderPage() {
             onClick={openRework}
           >
             <Wrench size={15} aria-hidden="true" />
-            局部返工
+            {text('局部返工', 'Reprocess selection')}
           </button>
           <button
             className="button button-quiet"
@@ -293,7 +309,7 @@ export function ReaderPage() {
             onClick={openMaterials}
           >
             <Paperclip size={15} aria-hidden="true" />
-            补充资料
+            {text('补充资料', 'Supporting materials')}
             {task.materials.length > 0 && (
               <span className="button-count">{task.materials.length}</span>
             )}
@@ -304,11 +320,11 @@ export function ReaderPage() {
             onClick={openReport}
           >
             <FileOutput size={15} aria-hidden="true" />
-            生成报告
+            {text('生成报告', 'Generate report')}
           </button>
           <button className="button button-quiet" type="button" onClick={toggleContext}>
             <Focus size={15} aria-hidden="true" />
-            专注阅读
+            {text('专注阅读', 'Focus reading')}
           </button>
           <div className="export-control">
             <button
@@ -321,7 +337,7 @@ export function ReaderPage() {
               aria-haspopup="menu"
             >
               <Download size={15} aria-hidden="true" />
-              导出
+              {text('导出', 'Export')}
             </button>
             <MotionPresence
               show={exportOpen}
@@ -333,7 +349,7 @@ export function ReaderPage() {
                 className="export-menu"
                 id="reader-export-menu"
                 role="menu"
-                aria-label="导出格式"
+                aria-label={text('导出格式', 'Export formats')}
               >
                 <button type="button" role="menuitem" onClick={exportMarkdown}>
                   <FileText size={15} aria-hidden="true" />
@@ -341,7 +357,7 @@ export function ReaderPage() {
                 </button>
                 <button type="button" role="menuitem" onClick={exportHtml}>
                   <FileCode2 size={15} aria-hidden="true" />
-                  离线 HTML
+                  {text('离线 HTML', 'Offline HTML')}
                 </button>
                 <button
                   type="button"
@@ -356,7 +372,7 @@ export function ReaderPage() {
                   }}
                 >
                   <Printer size={15} aria-hidden="true" />
-                  打印 / PDF
+                  {text('打印 / PDF', 'Print / PDF')}
                 </button>
               </div>
             </MotionPresence>
@@ -406,8 +422,8 @@ export function ReaderPage() {
             <div className="note-verification">
               <CheckCircle2 size={16} aria-hidden="true" />
               <span>
-                <strong>事实支持度检查已通过</strong>
-                关键 claim 均包含可跳转的原始证据
+                <strong>{text('事实支持度检查已通过', 'Evidence support check passed')}</strong>
+                {text('关键 claim 均包含可跳转的原始证据', 'Every key claim links to its original evidence')}
               </span>
             </div>
           </header>
@@ -424,12 +440,12 @@ export function ReaderPage() {
                   type="button"
                   className="note-frame"
                   onClick={() => setCurrentTime(section.screenshotAt ?? 0)}
-                  aria-label={`跳转到精选关键帧 ${formatTime(section.screenshotAt)}`}
+                  aria-label={text(`跳转到精选关键帧 ${formatTime(section.screenshotAt)}`, `Jump to selected keyframe ${formatTime(section.screenshotAt)}`)}
                 >
                   <span className="frame-toolbar">
                     <span>
                       <Image size={14} aria-hidden="true" />
-                      精选关键帧
+                      {text('精选关键帧', 'Selected keyframe')}
                     </span>
                     <span>{formatTime(section.screenshotAt)}</span>
                   </span>
@@ -437,27 +453,29 @@ export function ReaderPage() {
                     <img
                       className="frame-image"
                       src={section.screenshotUrl}
-                      alt={section.screenshotCaption || `精选关键帧：${section.title}`}
+                      alt={section.screenshotCaption || text(`精选关键帧：${section.title}`, `Selected keyframe: ${section.title}`)}
                       loading="lazy"
                       decoding="async"
                     />
                   ) : (
                     <span className="frame-content">
-                      <small>CANONICAL TIMELINE</small>
+                      <small>{text('规范时间线', 'CANONICAL TIMELINE')}</small>
                       <strong>{section.title}</strong>
                       <span className="frame-flow" aria-hidden="true">
                         <i>ASR</i>
                         <b />
                         <i>OCR</i>
                         <b />
-                        <i>CLAIM</i>
+                        <i>{text('论点', 'CLAIM')}</i>
                       </span>
                     </span>
                   )}
                   <span className="frame-caption">
-                    {section.screenshotCaption ||
-                      '在画面稳定后选取的原分辨率截图'}{' '}
-                    · 点击同步视频
+                    {section.screenshotCaption || text(
+                      '在画面稳定后选取的原分辨率截图',
+                      'Original-resolution frame selected after the image stabilized',
+                    )}{' '}
+                    · {text('点击同步视频', 'Select to sync the video')}
                   </span>
                 </button>
               )}
@@ -485,12 +503,12 @@ export function ReaderPage() {
           {visibleSections.length === 0 && (
             <div className="note-no-results">
               <Search size={18} aria-hidden="true" />
-              当前笔记中没有“{query}”
+              {text(`当前笔记中没有“${query}”`, `No matches for “${query}” in this note`)}
             </div>
           )}
         </article>
 
-        <aside className="evidence-dock" aria-label="证据检查台">
+        <aside className="evidence-dock" aria-label={text('证据检查台', 'Evidence inspector')}>
           <SynchronizedVideo
             title={task.source.title}
             durationSeconds={task.source.durationSeconds}
@@ -508,13 +526,13 @@ export function ReaderPage() {
             onSelect={selectEvidence}
           />
           <section className="evidence-inspector">
-            <div className="evidence-tabs" role="tablist" aria-label="证据类型">
+            <div className="evidence-tabs" role="tablist" aria-label={text('证据类型', 'Evidence types')}>
               {(
                 [
-                  ['all', '全部'],
+                  ['all', text('全部', 'All')],
                   ['asr', 'ASR'],
                   ['ocr', 'OCR'],
-                  ['visual', '视觉'],
+                  ['visual', text('视觉', 'Visual')],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -537,15 +555,15 @@ export function ReaderPage() {
                 <p>{selectedEvidence.rawText}</p>
                 <dl>
                   <div>
-                    <dt>时间</dt>
+                    <dt>{text('时间', 'Time')}</dt>
                     <dd>{formatTime(selectedEvidence.startSeconds)}</dd>
                   </div>
                   <div>
-                    <dt>置信度</dt>
+                    <dt>{text('置信度', 'Confidence')}</dt>
                     <dd>{selectedEvidence.confidence.toFixed(2)}</dd>
                   </div>
                   <div>
-                    <dt>来源</dt>
+                    <dt>{text('来源', 'Source')}</dt>
                     <dd>{selectedEvidence.provider}</dd>
                   </div>
                 </dl>
@@ -572,8 +590,8 @@ export function ReaderPage() {
           <div className="dock-footnote">
             <Eye size={14} aria-hidden="true" />
             <span>
-              <strong>{task.evidence.length} 条主要证据</strong>
-              原始候选与校正结果均保留
+              <strong>{text(`${task.evidence.length} 条主要证据`, `${task.evidence.length} primary evidence items`)}</strong>
+              {text('原始候选与校正结果均保留', 'Original candidates and corrections are retained')}
             </span>
             <Sparkles size={15} aria-hidden="true" />
           </div>

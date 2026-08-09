@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EvidenceItem, EvidenceKind } from '../domain'
 import { makeTaskFixtures, noteFixture } from '../fixtures'
+import { useUiPreferences } from '../stores/uiPreferences'
 import { DetailedEvidenceStudio } from './DetailedEvidenceStudio'
 
 const denseEvidence = (count: number, durationSeconds: number): EvidenceItem[] => {
@@ -22,6 +23,10 @@ const denseEvidence = (count: number, durationSeconds: number): EvidenceItem[] =
 }
 
 describe('DetailedEvidenceStudio', () => {
+  beforeEach(() => {
+    useUiPreferences.getState().resetPreferences()
+  })
+
   it('bounds dense timeline DOM and keeps exact selected-evidence interaction', () => {
     const baseTask = makeTaskFixtures().find(task => task.id === 'task-complete')!
     const evidence = denseEvidence(4_524, baseTask.source.durationSeconds)
@@ -66,5 +71,28 @@ describe('DetailedEvidenceStudio', () => {
     expect(container.querySelectorAll('.timeline-track-canvas > button')).toHaveLength(
       timelineButtons.length,
     )
+  })
+
+  it('renders studio controls and metadata labels in English', () => {
+    useUiPreferences.getState().setLocale('en-US')
+    const task = makeTaskFixtures().find(item => item.id === 'task-complete')!
+
+    render(
+      <DetailedEvidenceStudio
+        task={task}
+        note={noteFixture}
+        currentTimeSeconds={92}
+        onSeek={vi.fn()}
+        onSelectEvidence={vi.fn()}
+        onRequestRework={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('complementary', { name: 'Note structure and metadata' })).toBeInTheDocument()
+    expect(screen.getByText('Processing scope')).toBeInTheDocument()
+    expect(screen.getByText('Audio + video')).toBeInTheDocument()
+    expect(screen.getByText('Chinese platform captions')).toBeInTheDocument()
+    expect(screen.getByText('Minimum confidence')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Set rework range' })).toBeInTheDocument()
   })
 })

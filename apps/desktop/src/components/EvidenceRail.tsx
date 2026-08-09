@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import type { EvidenceItem, EvidenceKind } from '../domain'
 import { formatTime } from '../domain'
+import { useI18n } from '../i18n'
 import {
   bucketEvidenceByPixel,
   pickEvidenceAtTime,
@@ -17,11 +18,11 @@ interface EvidenceRailProps {
   compact?: boolean
 }
 
-const tracks: Array<{ kind: EvidenceKind; short: string; label: string }> = [
-  { kind: 'asr', short: 'A', label: '语音' },
-  { kind: 'ocr', short: 'T', label: '文字' },
-  { kind: 'visual', short: 'F', label: '画面' },
-  { kind: 'chapter', short: 'C', label: '章节' },
+const tracks: Array<{ kind: EvidenceKind; short: string; labelZh: string; labelEn: string }> = [
+  { kind: 'asr', short: 'A', labelZh: '语音', labelEn: 'Speech' },
+  { kind: 'ocr', short: 'T', labelZh: '文字', labelEn: 'Text' },
+  { kind: 'visual', short: 'F', labelZh: '画面', labelEn: 'Frame' },
+  { kind: 'chapter', short: 'C', labelZh: '章节', labelEn: 'Chapter' },
 ]
 
 const percent = (value: number, duration: number) =>
@@ -38,6 +39,7 @@ interface RailEventLayerProps {
   durationSeconds: number
   track: (typeof tracks)[number]
   onSelect: EvidenceRailProps['onSelect']
+  locale: 'zh-CN' | 'en-US'
 }
 
 const RailEventLayer = memo(function RailEventLayer({
@@ -45,6 +47,7 @@ const RailEventLayer = memo(function RailEventLayer({
   durationSeconds,
   track,
   onSelect,
+  locale,
 }: RailEventLayerProps) {
   const selectBucketEvidence = (
     event: MouseEvent<HTMLButtonElement>,
@@ -78,8 +81,11 @@ const RailEventLayer = memo(function RailEventLayer({
           '--event-left': `${percent(leftSeconds, durationSeconds)}%`,
           '--event-width': `${width}%`,
         } as CSSProperties
+        const trackLabel = locale === 'zh-CN' ? track.labelZh : track.labelEn
         const groupDescription = grouped
-          ? `，同一时间像素桶内共 ${bucket.items.length} 条证据，范围 ${formatTime(bucket.evidenceStartSeconds)} 至 ${formatTime(bucket.evidenceEndSeconds)}`
+          ? locale === 'zh-CN'
+            ? `，同一时间像素桶内共 ${bucket.items.length} 条证据，范围 ${formatTime(bucket.evidenceStartSeconds)} 至 ${formatTime(bucket.evidenceEndSeconds)}`
+            : `, ${bucket.items.length} evidence items share this pixel bucket, spanning ${formatTime(bucket.evidenceStartSeconds)} to ${formatTime(bucket.evidenceEndSeconds)}`
           : ''
 
         return (
@@ -88,8 +94,10 @@ const RailEventLayer = memo(function RailEventLayer({
             className={`rail-event ${bucket.selectedItem ? 'is-selected' : ''}`}
             style={style}
             key={`${track.kind}-${bucket.index}`}
-            title={`${item.id} · ${item.label}${grouped ? ` · 聚合 ${bucket.items.length} 条` : ''}`}
-            aria-label={`${track.label}证据 ${item.id}，${formatTime(item.startSeconds)}，${item.label}${groupDescription}`}
+            title={`${item.id} · ${item.label}${grouped ? locale === 'zh-CN' ? ` · 聚合 ${bucket.items.length} 条` : ` · ${bucket.items.length} grouped` : ''}`}
+            aria-label={locale === 'zh-CN'
+              ? `${trackLabel}证据 ${item.id}，${formatTime(item.startSeconds)}，${item.label}${groupDescription}`
+              : `${trackLabel} evidence ${item.id}, ${formatTime(item.startSeconds)}, ${item.label}${groupDescription}`}
             onClick={event => selectBucketEvidence(event, bucket)}
           >
             <span className="sr-only">{item.label}</span>
@@ -109,6 +117,7 @@ export function EvidenceRail({
   onSelect,
   compact = false,
 }: EvidenceRailProps) {
+  const { locale, text } = useI18n()
   const tracksRef = useRef<HTMLDivElement>(null)
   const [bucketCount, setBucketCount] = useState(compact ? 96 : 144)
   const [railWidth, setRailWidth] = useState(0)
@@ -155,7 +164,7 @@ export function EvidenceRail({
       Math.min(1, Math.max(0, currentTimeSeconds / Math.max(1, durationSeconds)))
 
   return (
-    <section className={`evidence-rail ${compact ? 'is-compact' : ''}`} aria-label="证据时间轨">
+    <section className={`evidence-rail ${compact ? 'is-compact' : ''}`} aria-label={text('证据时间轨', 'Evidence timeline')}>
       <div className="rail-ticks" aria-hidden="true">
         {[0, 0.25, 0.5, 0.75, 1].map(tick => (
           <span key={tick} style={{ left: `${tick * 100}%` }}>
@@ -166,7 +175,7 @@ export function EvidenceRail({
       <div className="rail-tracks" ref={tracksRef}>
         {tracks.map(track => (
           <div className={`rail-track track-${track.kind}`} key={track.kind}>
-            <span className="rail-track-label" title={track.label}>
+            <span className="rail-track-label" title={locale === 'zh-CN' ? track.labelZh : track.labelEn}>
               {track.short}
             </span>
             <div className="rail-track-line">
@@ -175,6 +184,7 @@ export function EvidenceRail({
                 durationSeconds={durationSeconds}
                 track={track}
                 onSelect={onSelect}
+                locale={locale}
               />
             </div>
           </div>
@@ -187,8 +197,8 @@ export function EvidenceRail({
             transform: `translate3d(${playheadX}px, 0, 0)`,
           }}
           onClick={() => onSeek(currentTimeSeconds)}
-          title={`当前时间 ${formatTime(currentTimeSeconds)}`}
-          aria-label={`当前播放位置 ${formatTime(currentTimeSeconds)}`}
+          title={text(`当前时间 ${formatTime(currentTimeSeconds)}`, `Current time ${formatTime(currentTimeSeconds)}`)}
+          aria-label={text(`当前播放位置 ${formatTime(currentTimeSeconds)}`, `Current playback position ${formatTime(currentTimeSeconds)}`)}
         >
           <span>{formatTime(currentTimeSeconds)}</span>
         </button>

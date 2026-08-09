@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProcessingTask } from '../domain'
 import { makeTaskFixtures } from '../fixtures'
+import { useUiPreferences } from '../stores/uiPreferences'
 import {
   ProcessingFlowPanel,
   type RunEventLogEntry,
@@ -76,6 +77,7 @@ const setReducedMotion = (matches: boolean) => {
 
 describe('ProcessingFlowPanel', () => {
   beforeEach(() => {
+    useUiPreferences.getState().resetPreferences()
     setReducedMotion(false)
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
       configurable: true,
@@ -359,5 +361,25 @@ describe('ProcessingFlowPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /错误/ }))
     expect(screen.getByText('语音 worker 启动失败。')).toBeInTheDocument()
     expect(screen.queryByText('视觉扫描已由用户取消。')).not.toBeInTheDocument()
+  })
+
+  it('localizes controls and backend state framing in English while preserving raw log messages', () => {
+    useUiPreferences.getState().setLocale('en-US')
+
+    render(<ProcessingFlowPanel task={makeTask()} events={logEvents} />)
+
+    expect(screen.getByRole('heading', { name: 'Processing flow log' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Stage' })).toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Search logs' })).toHaveAttribute(
+      'placeholder',
+      'Search stages, messages, or metrics',
+    )
+    expect(screen.getByRole('checkbox', { name: 'Auto-follow' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Errors/ })).toBeInTheDocument()
+    expect(screen.getByText('OcrWorkerError')).toHaveAttribute(
+      'title',
+      'Safe exception type returned by the backend',
+    )
+    expect(screen.getByText('OCR worker 在重试后仍未返回结果。')).toBeInTheDocument()
   })
 })

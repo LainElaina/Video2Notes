@@ -17,16 +17,61 @@ import { ProcessingFlowPanel } from '../components/ProcessingFlowPanel'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import { VisualAsset } from '../components/VisualAsset'
-import { formatTime, statusLabel } from '../domain'
+import type { StageStatus, TaskStatus } from '../domain'
+import { formatTime } from '../domain'
+import { useI18n } from '../i18n'
 import { useStudioStore } from '../store'
 
-const stageStatusLabel = {
-  pending: '等待',
-  running: '正在运行',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-} as const
+const stageStatusCopy: Record<StageStatus, readonly [string, string]> = {
+  pending: ['等待', 'Waiting'],
+  running: ['正在运行', 'Running'],
+  completed: ['已完成', 'Completed'],
+  failed: ['失败', 'Failed'],
+  cancelled: ['已取消', 'Cancelled'],
+}
+
+const taskStatusCopy: Record<TaskStatus, readonly [string, string]> = {
+  running: ['处理中', 'Processing'],
+  paused: ['已暂停', 'Paused'],
+  cancelled: ['已取消', 'Cancelled'],
+  completed: ['已完成', 'Completed'],
+  failed: ['失败', 'Failed'],
+}
+
+const stageCopy: Record<string, { label: readonly [string, string]; detail: readonly [string, string] }> = {
+  acquire: {
+    label: ['获取', 'Acquire'],
+    detail: ['校验来源、字幕与最佳音视频格式', 'Validate the source, subtitles, and best audio/video formats'],
+  },
+  normalize: {
+    label: ['规范化', 'Normalize'],
+    detail: ['保存 stream time base 与真实 PTS', 'Preserve stream time bases and real presentation timestamps'],
+  },
+  speech: {
+    label: ['语音', 'Speech'],
+    detail: ['VAD、语言识别与词级时间戳', 'Voice activity detection, language identification, and word timestamps'],
+  },
+  vision: {
+    label: ['视觉', 'Vision'],
+    detail: ['变化粗扫、精扫、关键帧与 OCR', 'Coarse and fine change scans, keyframes, and OCR'],
+  },
+  fusion: {
+    label: ['融合', 'Fusion'],
+    detail: ['按时间交叠生成 EvidenceSpan', 'Build EvidenceSpan records from temporal overlap'],
+  },
+  draft: {
+    label: ['写作', 'Compose'],
+    detail: ['证据块、事实卡与章节草稿', 'Evidence blocks, fact cards, and chapter drafts'],
+  },
+  verify: {
+    label: ['验证', 'Verify'],
+    detail: ['检查 claim 支持度与内容覆盖', 'Check claim support and content coverage'],
+  },
+  render: {
+    label: ['导出', 'Render'],
+    detail: ['渲染 Markdown、HTML 与 PDF', 'Render Markdown, HTML, and PDF'],
+  },
+}
 
 interface RunStageSelection {
   taskId: string
@@ -35,6 +80,7 @@ interface RunStageSelection {
 }
 
 export function RunPage() {
+  const { text } = useI18n()
   const tasks = useStudioStore(state => state.tasks)
   const activeTaskId = useStudioStore(state => state.activeTaskId)
   const currentTimeSeconds = useStudioStore(state => state.currentTimeSeconds)
@@ -51,6 +97,17 @@ export function RunPage() {
   const navigate = useStudioStore(state => state.navigate)
   const [stageSelection, setStageSelection] = useState<RunStageSelection>()
   const [showArtifacts, setShowArtifacts] = useState(false)
+  const stageStatusLabel = (status: StageStatus) => text(...stageStatusCopy[status])
+  const taskStatusLabel = (status: TaskStatus) => text(...taskStatusCopy[status])
+  const stageLabel = (stage: { id: string; label: string }) => {
+    const copy = stageCopy[stage.id]?.label
+    return copy ? text(...copy) : stage.label
+  }
+  const stageDetail = (stage?: { id: string; detail: string }) => {
+    if (!stage) return ''
+    const copy = stageCopy[stage.id]?.detail
+    return copy ? text(...copy) : stage.detail
+  }
 
   const task = tasks.find(item => item.id === activeTaskId) ?? tasks[0]
   const currentStageSelection =
@@ -84,8 +141,8 @@ export function RunPage() {
           height={640}
         />
         <TriangleAlert size={24} aria-hidden="true" />
-        <h2>还没有任务</h2>
-        <p>从新建任务页导入一个视频后，处理进度会显示在这里。</p>
+        <h2>{text('还没有任务', 'No tasks yet')}</h2>
+        <p>{text('从新建任务页导入一个视频后，处理进度会显示在这里。', 'Import a video from New task and its processing progress will appear here.')}</p>
       </div>
     )
   }
@@ -136,10 +193,10 @@ export function RunPage() {
           <div>
             <div className="run-summary-kicker">
               <span className="section-kicker">
-                {task.mode.toUpperCase()} / {statusLabel[task.status]}
+                {task.mode.toUpperCase()} / {taskStatusLabel(task.status)}
               </span>
               <span className={`run-scope-badge scope-${task.processingScope}`}>
-                {task.processingScope === 'audio_only' ? '仅音频' : '完整音画'}
+                {task.processingScope === 'audio_only' ? text('仅音频', 'Audio only') : text('完整音画', 'Audio + video')}
               </span>
             </div>
             <h2>{task.source.title}</h2>
@@ -151,9 +208,9 @@ export function RunPage() {
         <div className="run-summary-progress">
           <span>
             <strong>{Math.round(task.progress)}%</strong>
-            {task.status === 'running' && <> · 预计 {formatTime(task.etaSeconds)}</>}
+            {task.status === 'running' && <> · {text('预计', 'ETA')} {formatTime(task.etaSeconds)}</>}
           </span>
-          <div className="progress-track" aria-label={`总体进度 ${Math.round(task.progress)}%`}>
+          <div className="progress-track" aria-label={text(`总体进度 ${Math.round(task.progress)}%`, `Overall progress ${Math.round(task.progress)}%`)}>
             <span style={{ transform: `scaleX(${Math.min(1, Math.max(0, task.progress / 100))})` }} />
           </div>
         </div>
@@ -170,11 +227,11 @@ export function RunPage() {
               {task.status === 'completed' && <ExternalLink size={16} aria-hidden="true" />}
               {task.status === 'running'
                 ? task.realBackend
-                  ? '刷新状态'
-                  : '暂停'
+                  ? text('刷新状态', 'Refresh status')
+                  : text('暂停', 'Pause')
                 : task.status === 'paused'
-                  ? '继续'
-                  : '阅读笔记'}
+                  ? text('继续', 'Resume')
+                  : text('阅读笔记', 'Read note')}
             </button>
           )}
           {['running', 'paused'].includes(task.status) && (
@@ -184,7 +241,7 @@ export function RunPage() {
               onClick={() => cancelTask(task.id)}
             >
               <CircleStop size={16} aria-hidden="true" />
-              取消
+              {text('取消', 'Cancel')}
             </button>
           )}
         </div>
@@ -205,7 +262,7 @@ export function RunPage() {
         onStageFilterChange={setLogStageFilter}
       />
 
-      <section className="stage-rail" aria-label="处理阶段">
+      <section className="stage-rail" aria-label={text('处理阶段', 'Processing stages')}>
         {task.stages.map((stage, index) => (
           <button
             className={`stage-node is-${stage.status} ${
@@ -214,7 +271,10 @@ export function RunPage() {
             type="button"
             key={stage.id}
             onClick={() => selectStage(stage.id)}
-            aria-label={`${stage.label}，${stageStatusLabel[stage.status]}，${stage.progress}%`}
+            aria-label={text(
+              `${stageLabel(stage)}，${stageStatusLabel(stage.status)}，${stage.progress}%`,
+              `${stageLabel(stage)}, ${stageStatusLabel(stage.status)}, ${stage.progress}%`,
+            )}
           >
             <span className="stage-number">
               {stage.status === 'completed' ? (
@@ -224,17 +284,17 @@ export function RunPage() {
               )}
             </span>
             <span>
-              <strong>{stage.label}</strong>
+              <strong>{stageLabel(stage)}</strong>
               <small>
                 {stage.status === 'completed'
                   ? `${(stage.durationSeconds ?? 0).toFixed(1)}s`
                   : stage.status === 'running'
                     ? `${stage.progress}%`
                     : stage.status === 'failed'
-                      ? '失败'
+                      ? text('失败', 'Failed')
                       : stage.status === 'cancelled'
-                        ? '已取消'
-                      : '等待'}
+                        ? text('已取消', 'Cancelled')
+                      : text('等待', 'Waiting')}
               </small>
             </span>
           </button>
@@ -245,20 +305,20 @@ export function RunPage() {
         <section className="stage-inspector">
           <div className="panel-heading">
             <div>
-              <span className="section-kicker">CURRENT STAGE</span>
-              <h3>{selectedStage?.label ?? '等待开始'}</h3>
+              <span className="section-kicker">{text('当前阶段', 'CURRENT STAGE')}</span>
+              <h3>{selectedStage ? stageLabel(selectedStage) : text('等待开始', 'Waiting to start')}</h3>
             </div>
             <span className={`stage-state state-${selectedStage?.status}`}>
-              {stageStatusLabel[selectedStage?.status ?? 'pending']}
+              {stageStatusLabel(selectedStage?.status ?? 'pending')}
             </span>
           </div>
-          <p className="stage-description">{selectedStage?.detail}</p>
+          <p className="stage-description">{stageDetail(selectedStage)}</p>
           <dl className="stage-metrics">
             <div>
-              <dt>执行器</dt>
+              <dt>{text('执行器', 'Executor')}</dt>
               <dd>
                 {task.realBackend
-                  ? '按角色绑定的本地/兼容模型'
+                  ? text('按角色绑定的本地/兼容模型', 'Role-bound local or compatible model')
                   : selectedStage?.id === 'speech'
                     ? 'faster-whisper-large-v3'
                     : selectedStage?.id === 'vision'
@@ -267,16 +327,16 @@ export function RunPage() {
               </dd>
             </div>
             <div>
-              <dt>加速</dt>
-              <dd>{task.realBackend ? '由硬件计划与模型配置决定' : 'DEMO · FP16 / INT8'}</dd>
+              <dt>{text('加速', 'Acceleration')}</dt>
+              <dd>{task.realBackend ? text('由硬件计划与模型配置决定', 'Determined by the hardware plan and model configuration') : 'DEMO · FP16 / INT8'}</dd>
             </div>
             <div>
-              <dt>吞吐</dt>
-              <dd>{selectedStage?.metric ?? '按输入动态计算'}</dd>
+              <dt>{text('吞吐', 'Throughput')}</dt>
+              <dd>{selectedStage?.metric ?? text('按输入动态计算', 'Calculated from the input')}</dd>
             </div>
             <div>
-              <dt>Artifact</dt>
-              <dd>{selectedStage?.artifactCount ?? 0} 个已写入</dd>
+              <dt>{text('产物', 'Artifact')}</dt>
+              <dd>{text(`${selectedStage?.artifactCount ?? 0} 个已写入`, `${selectedStage?.artifactCount ?? 0} written`)}</dd>
             </div>
           </dl>
           <button
@@ -287,7 +347,7 @@ export function RunPage() {
             aria-controls="run-artifact-list"
           >
             <Archive size={16} aria-hidden="true" />
-            {showArtifacts ? '隐藏阶段 artifact' : '查看阶段 artifact'}
+            {showArtifacts ? text('隐藏阶段 artifact', 'Hide stage artifacts') : text('查看阶段 artifact', 'View stage artifacts')}
           </button>
           <MotionPresence
             show={showArtifacts}
@@ -300,7 +360,7 @@ export function RunPage() {
                   type="button"
                   key={`${artifact.relativePath}:${artifact.sha256}`}
                   onClick={() => downloadRunArtifact(task.id, artifact)}
-                  aria-label={`下载产物 ${artifact.relativePath}`}
+                  aria-label={text(`下载产物 ${artifact.relativePath}`, `Download artifact ${artifact.relativePath}`)}
                 >
                   <Download size={15} aria-hidden="true" />
                   <span>
@@ -315,27 +375,30 @@ export function RunPage() {
               {selectedArtifacts.length === 0 && (
                 <p className="artifact-empty">
                   {task.realBackend
-                    ? '该阶段尚未在后端 manifest 中登记产物。'
-                    : '演示模式不会写入真实阶段产物。'}
+                    ? text('该阶段尚未在后端 manifest 中登记产物。', 'No artifact is registered for this stage in the backend manifest yet.')
+                    : text('演示模式不会写入真实阶段产物。', 'Demo mode does not write real stage artifacts.')}
                 </p>
               )}
             </div>
           </MotionPresence>
           <div className="stage-footnote">
             <Clock3 size={14} aria-hidden="true" />
-            列表只显示后端 manifest 已登记的真实文件；阶段内尚未提交的中间状态不承诺可恢复。
+            {text(
+              '列表只显示后端 manifest 已登记的真实文件；阶段内尚未提交的中间状态不承诺可恢复。',
+              'This list only shows real files registered in the backend manifest. Uncommitted intermediate stage state is not guaranteed to be recoverable.',
+            )}
           </div>
         </section>
 
         <section className="live-sample">
           <div className="panel-heading">
             <div>
-              <span className="section-kicker">LIVE SAMPLE</span>
-              <h3>当前处理样本</h3>
+              <span className="section-kicker">{text('实时样本', 'LIVE SAMPLE')}</span>
+              <h3>{text('当前处理样本', 'Current processing sample')}</h3>
             </div>
             <span className="live-pulse">
               <span aria-hidden="true" />
-              {task.status === 'running' ? 'LIVE' : statusLabel[task.status].toUpperCase()}
+              {task.status === 'running' ? 'LIVE' : taskStatusLabel(task.status).toUpperCase()}
             </span>
           </div>
           <SynchronizedVideo
@@ -359,8 +422,8 @@ export function RunPage() {
             {task.realBackend && visibleEvidence.length === 0 && (
               <div>
                 <span>PTS</span>
-                <p>{task.lastMessage || '证据将在对应阶段完成后显示。'}</p>
-                <strong>LIVE</strong>
+                <p>{task.lastMessage || text('证据将在对应阶段完成后显示。', 'Evidence appears after the corresponding stage completes.')}</p>
+                <strong>{text('实时', 'LIVE')}</strong>
               </div>
             )}
           </div>
@@ -370,14 +433,14 @@ export function RunPage() {
       <section className="run-evidence">
         <div className="panel-heading">
           <div>
-            <span className="section-kicker">EVIDENCE BUILD-UP</span>
-            <h3>证据轨正在形成</h3>
+            <span className="section-kicker">{text('证据累积', 'EVIDENCE BUILD-UP')}</span>
+            <h3>{text('证据轨正在形成', 'Evidence timeline in progress')}</h3>
           </div>
           <div className="rail-legend">
-            <span>A 语音</span>
-            <span>T 文字</span>
-            <span>F 画面</span>
-            <span>C 章节</span>
+            <span>{text('A 语音', 'A Speech')}</span>
+            <span>{text('T 文字', 'T Text')}</span>
+            <span>{text('F 画面', 'F Frame')}</span>
+            <span>{text('C 章节', 'C Chapter')}</span>
           </div>
         </div>
         <EvidenceRail

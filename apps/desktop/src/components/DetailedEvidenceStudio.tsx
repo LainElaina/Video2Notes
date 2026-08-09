@@ -27,6 +27,7 @@ import type {
   TelemetryValue,
 } from '../domain'
 import { formatTime } from '../domain'
+import { useI18n } from '../i18n'
 import {
   bucketEvidenceByPixel,
   pickEvidenceAtTime,
@@ -48,11 +49,38 @@ type TimelineKind = Extract<EvidenceKind, 'asr' | 'ocr' | 'visual'>
 
 const trackMeta: Record<
   TimelineKind,
-  { label: string; shortLabel: string; icon: typeof AudioLines }
+  { label: readonly [string, string]; shortLabel: readonly [string, string]; icon: typeof AudioLines }
 > = {
-  asr: { label: '语音证据', shortLabel: 'SPEECH', icon: AudioLines },
-  ocr: { label: '屏幕文字', shortLabel: 'SCREEN TEXT', icon: ScanText },
-  visual: { label: '视觉变化', shortLabel: 'VISUAL', icon: Image },
+  asr: { label: ['语音证据', 'Speech evidence'], shortLabel: ['语音', 'SPEECH'], icon: AudioLines },
+  ocr: { label: ['屏幕文字', 'On-screen text'], shortLabel: ['屏幕文字', 'SCREEN TEXT'], icon: ScanText },
+  visual: { label: ['视觉变化', 'Visual changes'], shortLabel: ['视觉', 'VISUAL'], icon: Image },
+}
+
+const stageLabels: Record<string, readonly [string, string]> = {
+  acquire: ['获取', 'Acquire'],
+  normalize: ['规范化', 'Normalize'],
+  speech: ['语音', 'Speech'],
+  vision: ['视觉', 'Vision'],
+  fusion: ['融合', 'Fusion'],
+  draft: ['写作', 'Compose'],
+  verify: ['验证', 'Verify'],
+  render: ['导出', 'Render'],
+}
+
+const modeLabels: Record<ProcessingTask['mode'], readonly [string, string]> = {
+  fast: ['快速', 'FAST'],
+  balanced: ['均衡', 'BALANCED'],
+  accurate: ['精确', 'ACCURATE'],
+}
+
+const metadataValueCopy: Record<string, readonly [string, string]> = {
+  中文平台字幕: ['中文平台字幕', 'Chinese platform captions'],
+  'English auto captions': ['英文自动字幕', 'English auto captions'],
+  未发现平台字幕: ['未发现平台字幕', 'No platform captions found'],
+  字幕清单: ['字幕清单', 'Caption inventory'],
+  检查同名字幕文件: ['检查同名字幕文件', 'Check matching caption files'],
+  '从任务 artifact 读取': ['从任务 artifact 读取', 'Read from task artifact'],
+  '1920 × 1080 · 待完整探测': ['1920 × 1080 · 待完整探测', '1920 × 1080 · pending full probe'],
 }
 
 const timelineKinds = Object.keys(trackMeta) as TimelineKind[]
@@ -63,12 +91,16 @@ const clamp = (value: number, lower: number, upper: number) =>
 const percentAt = (seconds: number, durationSeconds: number) =>
   `${clamp((seconds / Math.max(1, durationSeconds)) * 100, 0, 100)}%`
 
-const displayMetric = (value: TelemetryValue): string => {
+const displayMetric = (
+  value: TelemetryValue,
+  locale: string,
+  text: (zh: string, en: string) => string,
+): string => {
   if (value === null) return '—'
-  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'boolean') return value ? text('是', 'Yes') : text('否', 'No')
   if (typeof value === 'number') {
     if (value > 0 && value < 1) return `${Math.round(value * 100)}%`
-    return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value)
+    return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value)
   }
   return value
 }
@@ -115,6 +147,7 @@ const TimelineEventLayer = memo(function TimelineEventLayer({
   kind,
   onSelectEvidence,
 }: TimelineEventLayerProps) {
+  const { text } = useI18n()
   const selectBucketEvidence = (
     event: MouseEvent<HTMLButtonElement>,
     bucket: EvidencePixelBucket,
@@ -142,7 +175,10 @@ const TimelineEventLayer = memo(function TimelineEventLayer({
             ? bucket.windowEndSeconds - bucket.windowStartSeconds
             : Math.max(0.5, item.endSeconds - item.startSeconds)
         const groupDescription = grouped
-          ? `，同一时间像素桶内共 ${bucket.items.length} 条证据，范围 ${formatTime(bucket.evidenceStartSeconds)} 至 ${formatTime(bucket.evidenceEndSeconds)}`
+          ? text(
+              `，同一时间像素桶内共 ${bucket.items.length} 条证据，范围 ${formatTime(bucket.evidenceStartSeconds)} 至 ${formatTime(bucket.evidenceEndSeconds)}`,
+              `, ${bucket.items.length} evidence items in the same time pixel bucket, ranging from ${formatTime(bucket.evidenceStartSeconds)} to ${formatTime(bucket.evidenceEndSeconds)}`,
+            )
           : ''
 
         return (
@@ -150,8 +186,8 @@ const TimelineEventLayer = memo(function TimelineEventLayer({
             type="button"
             className={bucket.selectedItem ? 'is-selected' : ''}
             key={`${kind}-${bucket.index}`}
-            title={`${item.label} · ${Math.round(item.confidence * 100)}%${grouped ? ` · 聚合 ${bucket.items.length} 条` : ''}`}
-            aria-label={`${trackMeta[kind].label} ${item.id}，${formatTime(item.startSeconds)}，${item.label}${groupDescription}`}
+            title={`${item.label} · ${Math.round(item.confidence * 100)}%${grouped ? text(` · 聚合 ${bucket.items.length} 条`, ` · ${bucket.items.length} grouped items`) : ''}`}
+            aria-label={`${text(...trackMeta[kind].label)} ${item.id}${text('，', ', ')}${formatTime(item.startSeconds)}${text('，', ', ')}${item.label}${groupDescription}`}
             style={{
               left: percentAt(leftSeconds, durationSeconds),
               width: `max(5px, ${percentAt(widthSeconds, durationSeconds)})`,
@@ -175,6 +211,7 @@ export function DetailedEvidenceStudio({
   onSelectEvidence,
   onRequestRework,
 }: DetailedEvidenceStudioProps) {
+  const { locale, text } = useI18n()
   const duration = Math.max(1, task.source.durationSeconds)
   const [enabledKinds, setEnabledKinds] = useState<Set<TimelineKind>>(
     () => new Set(['asr', 'ocr', 'visual']),
@@ -260,13 +297,13 @@ export function DetailedEvidenceStudio({
         .flatMap(stage =>
           Object.entries(stage.metrics).map(([key, value]) => ({
             id: `${stage.id}:${key}`,
-            stage: stage.label,
+            stage: stageLabels[stage.id] ? text(...stageLabels[stage.id]) : stage.label,
             key,
             value,
           })),
         )
         .slice(-6),
-    [task.stages],
+    [task.stages, text],
   )
   const warnings = useMemo(
     () =>
@@ -308,17 +345,20 @@ export function DetailedEvidenceStudio({
     })
   }
 
+  const metadataValue = (value: string) =>
+    metadataValueCopy[value] ? text(...metadataValueCopy[value]) : value
+
   return (
     <div className="detailed-evidence-studio">
-      <aside className="studio-index" aria-label="笔记结构与元数据">
+      <aside className="studio-index" aria-label={text('笔记结构与元数据', 'Note structure and metadata')}>
         <section className="studio-panel studio-note-list">
           <div className="studio-panel-title">
-            <span>NOTE</span>
+            <span>{text('笔记', 'NOTE')}</span>
             <strong>{note.title}</strong>
           </div>
           <div className="studio-toc">
             <button type="button" onClick={() => onSeek(0)}>
-              <span>概览</span>
+              <span>{text('概览', 'Overview')}</span>
               <time>00:00</time>
             </button>
             {note.sections.map((section, index) => {
@@ -338,43 +378,43 @@ export function DetailedEvidenceStudio({
 
         <section className="studio-panel studio-metadata">
           <div className="studio-panel-title">
-            <span>NOTE METADATA</span>
+            <span>{text('笔记元数据', 'NOTE METADATA')}</span>
           </div>
           <dl>
             <div>
-              <dt>来源</dt>
+              <dt>{text('来源', 'Source')}</dt>
               <dd>{task.source.platform.toUpperCase()}</dd>
             </div>
             <div>
-              <dt>时长</dt>
+              <dt>{text('时长', 'Duration')}</dt>
               <dd>{formatTime(duration)}</dd>
             </div>
             <div>
-              <dt>配置</dt>
-              <dd>{task.mode.toUpperCase()}</dd>
+              <dt>{text('配置', 'Profile')}</dt>
+              <dd>{text(...modeLabels[task.mode])}</dd>
             </div>
             <div>
-              <dt>处理范围</dt>
-              <dd>{task.processingScope === 'audio_only' ? '仅音频' : '完整音画'}</dd>
+              <dt>{text('处理范围', 'Processing scope')}</dt>
+              <dd>{task.processingScope === 'audio_only' ? text('仅音频', 'Audio only') : text('完整音画', 'Audio + video')}</dd>
             </div>
             <div>
-              <dt>画质</dt>
-              <dd>{task.source.quality}</dd>
+              <dt>{text('画质', 'Video quality')}</dt>
+              <dd>{metadataValue(task.source.quality)}</dd>
             </div>
             <div>
-              <dt>字幕</dt>
-              <dd>{task.source.subtitle}</dd>
+              <dt>{text('字幕', 'Captions')}</dt>
+              <dd>{metadataValue(task.source.subtitle)}</dd>
             </div>
             <div>
-              <dt>证据</dt>
-              <dd>{task.evidence.length} 条</dd>
+              <dt>{text('证据', 'Evidence')}</dt>
+              <dd>{task.evidence.length} {text('条', task.evidence.length === 1 ? 'item' : 'items')}</dd>
             </div>
           </dl>
         </section>
 
         <section className="studio-panel studio-warning-summary">
           <div className="studio-panel-title">
-            <span>QUALITY NOTES</span>
+            <span>{text('质量提示', 'QUALITY NOTES')}</span>
           </div>
           {warnings.length ? (
             warnings.slice(0, 3).map(warning => (
@@ -386,7 +426,7 @@ export function DetailedEvidenceStudio({
           ) : (
             <p className="is-clear">
               <Gauge size={13} aria-hidden="true" />
-              当前没有运行时质量警告
+              {text('当前没有运行时质量警告', 'There are no runtime quality warnings')}
             </p>
           )}
         </section>
@@ -395,7 +435,7 @@ export function DetailedEvidenceStudio({
       <section className="studio-center">
         <div className="studio-media-panel">
           <div className="studio-panel-title">
-            <span>VIDEO PREVIEW</span>
+            <span>{text('视频预览', 'VIDEO PREVIEW')}</span>
             <strong>{formatTime(currentTimeSeconds)}</strong>
           </div>
           <SynchronizedVideo
@@ -408,11 +448,11 @@ export function DetailedEvidenceStudio({
           />
         </div>
 
-        <section className="evidence-density-panel" aria-label="证据密度">
+        <section className="evidence-density-panel" aria-label={text('证据密度', 'Evidence density')}>
           <header>
             <div>
-              <span className="studio-label">EVIDENCE DENSITY</span>
-              <small>依据已生成证据计算，不是模拟音频波形</small>
+              <span className="studio-label">{text('证据密度', 'EVIDENCE DENSITY')}</span>
+              <small>{text('依据已生成证据计算，不是模拟音频波形', 'Calculated from generated evidence, not a simulated audio waveform')}</small>
             </div>
             <strong>PTS / {Math.round(currentTimeSeconds * 1_000_000).toLocaleString()}</strong>
           </header>
@@ -420,7 +460,7 @@ export function DetailedEvidenceStudio({
             type="button"
             className="density-plot"
             ref={densityPlotRef}
-            aria-label="证据密度时间线，点击跳转"
+            aria-label={text('证据密度时间线，点击跳转', 'Evidence density timeline; click to seek')}
             onClick={event => {
               const bounds = event.currentTarget.getBoundingClientRect()
               onSeek(((event.clientX - bounds.left) / bounds.width) * duration)
@@ -447,8 +487,8 @@ export function DetailedEvidenceStudio({
         <section className="evidence-timeline-panel">
           <header className="timeline-toolbar">
             <div>
-              <span className="studio-label">EVIDENCE TIMELINE</span>
-              <strong>{evidence.length} 个可见证据区间</strong>
+              <span className="studio-label">{text('证据时间线', 'EVIDENCE TIMELINE')}</span>
+              <strong>{evidence.length} {text('个可见证据区间', evidence.length === 1 ? 'visible evidence interval' : 'visible evidence intervals')}</strong>
             </div>
             <div className="timeline-filters">
               {timelineKinds.map(kind => (
@@ -458,7 +498,7 @@ export function DetailedEvidenceStudio({
                     checked={enabledKinds.has(kind)}
                     onChange={() => toggleKind(kind)}
                   />
-                  {trackMeta[kind].label}
+                  {text(...trackMeta[kind].label)}
                 </label>
               ))}
             </div>
@@ -478,8 +518,8 @@ export function DetailedEvidenceStudio({
                   <div className="timeline-track-label">
                     <Icon size={17} aria-hidden="true" />
                     <span>
-                      <strong>{trackMeta[kind].label}</strong>
-                      <small>{trackMeta[kind].shortLabel}</small>
+                      <strong>{text(...trackMeta[kind].label)}</strong>
+                      <small>{text(...trackMeta[kind].shortLabel)}</small>
                     </span>
                   </div>
                   <div
@@ -510,13 +550,13 @@ export function DetailedEvidenceStudio({
             <div className="range-copy">
               <RotateCcw size={16} aria-hidden="true" />
               <span>
-                <strong>局部返工选区</strong>
+                <strong>{text('局部返工选区', 'Range rework selection')}</strong>
                 <small>
                   {formatTime(rangeStart)} — {formatTime(rangeEnd)}
                 </small>
               </span>
             </div>
-            <div className="dual-range" aria-label="返工时间范围">
+            <div className="dual-range" aria-label={text('返工时间范围', 'Rework time range')}>
               <input
                 type="range"
                 min={0}
@@ -524,7 +564,7 @@ export function DetailedEvidenceStudio({
                 step={0.1}
                 value={rangeStart}
                 onChange={event => setRangeBoundary('start', Number(event.target.value))}
-                aria-label="返工开始时间"
+                aria-label={text('返工开始时间', 'Rework start time')}
               />
               <input
                 type="range"
@@ -533,7 +573,7 @@ export function DetailedEvidenceStudio({
                 step={0.1}
                 value={rangeEnd}
                 onChange={event => setRangeBoundary('end', Number(event.target.value))}
-                aria-label="返工结束时间"
+                aria-label={text('返工结束时间', 'Rework end time')}
               />
               <span
                 style={{
@@ -547,7 +587,7 @@ export function DetailedEvidenceStudio({
               className="studio-action"
               onClick={() => onRequestRework(rangeStart, rangeEnd)}
             >
-              设置返工范围
+              {text('设置返工范围', 'Set rework range')}
               <ChevronRight size={14} aria-hidden="true" />
             </button>
           </div>
@@ -557,7 +597,7 @@ export function DetailedEvidenceStudio({
       <aside className="studio-note-preview">
         <section className="studio-panel studio-markdown">
           <div className="studio-panel-title">
-            <span>NOTE / MARKDOWN</span>
+            <span>{text('笔记 / MARKDOWN', 'NOTE / MARKDOWN')}</span>
             <FileOutput size={14} aria-hidden="true" />
           </div>
           <article>
@@ -584,12 +624,12 @@ export function DetailedEvidenceStudio({
 
         <section className="studio-panel studio-evidence-filter">
           <div className="studio-panel-title">
-            <span>EVIDENCE FILTER</span>
+            <span>{text('证据筛选', 'EVIDENCE FILTER')}</span>
             <SlidersHorizontal size={14} aria-hidden="true" />
           </div>
           <label>
             <span>
-              最低置信度
+              {text('最低置信度', 'Minimum confidence')}
               <strong>{Math.round(confidenceFloor * 100)}%</strong>
             </span>
             <input
@@ -604,7 +644,7 @@ export function DetailedEvidenceStudio({
           <div className="filter-counts">
             {timelineKinds.map(kind => (
               <span key={kind}>
-                {trackMeta[kind].label}
+                {text(...trackMeta[kind].label)}
                 <strong>{evidenceCounts[kind]}</strong>
               </span>
             ))}
@@ -616,8 +656,8 @@ export function DetailedEvidenceStudio({
         <div className="telemetry-title">
           <Activity size={15} aria-hidden="true" />
           <span>
-            <strong>STAGE TELEMETRY</strong>
-            <small>{task.realBackend ? '真实后端事件' : '明确标记的演示样本'}</small>
+            <strong>{text('阶段遥测', 'STAGE TELEMETRY')}</strong>
+            <small>{task.realBackend ? text('真实后端事件', 'Real backend events') : text('明确标记的演示样本', 'Explicitly marked demo samples')}</small>
           </span>
         </div>
         <div className="telemetry-events">
@@ -627,14 +667,14 @@ export function DetailedEvidenceStudio({
                 <span className={`telemetry-state state-${sample.state}`} aria-hidden="true" />
                 <span>
                   <strong>{sample.stage}</strong>
-                  <small>{sample.message || `事件 #${sample.sequence}`}</small>
+                  <small>{sample.message || text(`事件 #${sample.sequence}`, `Event #${sample.sequence}`)}</small>
                 </span>
               </div>
             ))
           ) : (
             <div className="telemetry-empty">
               <Layers3 size={15} aria-hidden="true" />
-              尚无后端事件
+              {text('尚无后端事件', 'No backend events yet')}
             </div>
           )}
         </div>
@@ -643,14 +683,14 @@ export function DetailedEvidenceStudio({
             metrics.map(metric => (
               <div key={metric.id}>
                 <span>{metric.stage}</span>
-                <strong>{displayMetric(metric.value)}</strong>
+                <strong>{displayMetric(metric.value, locale, text)}</strong>
                 <small>{metric.key.replaceAll('_', ' ')}</small>
               </div>
             ))
           ) : (
             <div className="telemetry-empty">
               <Gauge size={15} aria-hidden="true" />
-              后端尚未报告指标
+              {text('后端尚未报告指标', 'The backend has not reported metrics yet')}
             </div>
           )}
         </div>

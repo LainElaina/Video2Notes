@@ -56,7 +56,10 @@ export function serializeSamplingPlan(draft: SamplingDraft): ApiSamplingPlan {
   }
 }
 
-export function validateSamplingDraft(draft: SamplingDraft): SamplingValidationResult {
+export function validateSamplingDraft(
+  draft: SamplingDraft,
+  locale: 'zh-CN' | 'en-US' = 'zh-CN',
+): SamplingValidationResult {
   if (draft.processingScope === 'audio_only') {
     return { errors: [], fixedSampleCount: 0 }
   }
@@ -70,18 +73,21 @@ export function validateSamplingDraft(draft: SamplingDraft): SamplingValidationR
   validateInterval(
     draft.samplingMode,
     draft.samplingIntervalSeconds,
-    '全局固定采样间隔',
+    locale === 'zh-CN' ? '全局固定采样间隔' : 'The global fixed sampling interval',
     errors,
+    locale,
   )
 
   const normalized: NormalizedOverride[] = []
   draft.samplingOverrides.forEach((override, index) => {
-    const label = `时间段 ${index + 1}`
+    const label = locale === 'zh-CN' ? `时间段 ${index + 1}` : `Segment ${index + 1}`
     const startValid = Number.isFinite(override.startSeconds)
     const endValid = Number.isFinite(override.endSeconds)
 
     if (!startValid || !endValid) {
-      errors.push(`${label}的开始和结束时间必须是数字。`)
+      errors.push(locale === 'zh-CN'
+        ? `${label}的开始和结束时间必须是数字。`
+        : `${label} start and end times must be numbers.`)
       return
     }
 
@@ -92,20 +98,30 @@ export function validateSamplingDraft(draft: SamplingDraft): SamplingValidationR
       !Number.isSafeInteger(endUs) ||
       startUs < 0
     ) {
-      errors.push(`${label}的时间必须为非负且在可处理范围内。`)
+      errors.push(locale === 'zh-CN'
+        ? `${label}的时间必须为非负且在可处理范围内。`
+        : `${label} times must be non-negative and within the supported range.`)
       return
     }
     if (endUs <= startUs) {
-      errors.push(`${label}的结束时间必须晚于开始时间。`)
+      errors.push(locale === 'zh-CN'
+        ? `${label}的结束时间必须晚于开始时间。`
+        : `${label} must end after it starts.`)
       return
     }
     if (durationUs !== null && endUs > durationUs) {
-      errors.push(
-        `${label}结束于 ${override.endSeconds}s，超出视频时长 ${durationSeconds}s。`,
-      )
+      errors.push(locale === 'zh-CN'
+        ? `${label}结束于 ${override.endSeconds}s，超出视频时长 ${durationSeconds}s。`
+        : `${label} ends at ${override.endSeconds}s, beyond the ${durationSeconds}s video duration.`)
     }
 
-    validateInterval(override.mode, override.intervalSeconds, `${label}固定采样间隔`, errors)
+    validateInterval(
+      override.mode,
+      override.intervalSeconds,
+      locale === 'zh-CN' ? `${label}固定采样间隔` : `${label} fixed sampling interval`,
+      errors,
+      locale,
+    )
     normalized.push({
       index,
       startUs,
@@ -122,7 +138,9 @@ export function validateSamplingDraft(draft: SamplingDraft): SamplingValidationR
     const previous = ordered[index - 1]
     const current = ordered[index]
     if (current.startUs < previous.endUs) {
-      errors.push(`时间段 ${previous.index + 1} 与时间段 ${current.index + 1} 发生重叠。`)
+      errors.push(locale === 'zh-CN'
+        ? `时间段 ${previous.index + 1} 与时间段 ${current.index + 1} 发生重叠。`
+        : `Segment ${previous.index + 1} overlaps segment ${current.index + 1}.`)
     }
   }
 
@@ -151,9 +169,9 @@ export function validateSamplingDraft(draft: SamplingDraft): SamplingValidationR
   }
 
   if (sampleCount > MAX_FIXED_SAMPLES) {
-    errors.push(
-      `固定采样预计产生 ${sampleCount.toLocaleString('zh-CN')} 帧，超过上限 ${MAX_FIXED_SAMPLES.toLocaleString('zh-CN')} 帧。请增大间隔或缩短固定采样时间段。`,
-    )
+    errors.push(locale === 'zh-CN'
+      ? `固定采样预计产生 ${sampleCount.toLocaleString('zh-CN')} 帧，超过上限 ${MAX_FIXED_SAMPLES.toLocaleString('zh-CN')} 帧。请增大间隔或缩短固定采样时间段。`
+      : `Fixed sampling would produce approximately ${sampleCount.toLocaleString('en-US')} frames, above the ${MAX_FIXED_SAMPLES.toLocaleString('en-US')} frame limit. Increase the interval or shorten the fixed-sampling segments.`)
   }
   return { errors, fixedSampleCount: sampleCount }
 }
@@ -163,15 +181,20 @@ function validateInterval(
   intervalSeconds: number,
   label: string,
   errors: string[],
+  locale: 'zh-CN' | 'en-US',
 ) {
   if (mode !== 'fixed_interval') return
   if (!Number.isFinite(intervalSeconds) || intervalSeconds < MIN_FIXED_INTERVAL_SECONDS) {
-    errors.push(`${label}不能小于 ${MIN_FIXED_INTERVAL_SECONDS}s。`)
+    errors.push(locale === 'zh-CN'
+      ? `${label}不能小于 ${MIN_FIXED_INTERVAL_SECONDS}s。`
+      : `${label} cannot be shorter than ${MIN_FIXED_INTERVAL_SECONDS}s.`)
     return
   }
   const intervalUs = secondsToMicroseconds(intervalSeconds)
   if (!Number.isSafeInteger(intervalUs) || intervalUs < 100_000) {
-    errors.push(`${label}必须是可处理的秒数。`)
+    errors.push(locale === 'zh-CN'
+      ? `${label}必须是可处理的秒数。`
+      : `${label} must be a supported number of seconds.`)
   }
 }
 

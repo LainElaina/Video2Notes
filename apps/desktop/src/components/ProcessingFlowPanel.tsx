@@ -22,6 +22,7 @@ import type {
   TelemetrySample,
   TelemetryValue,
 } from '../domain'
+import { useI18n } from '../i18n'
 import { preferredScrollBehavior } from '../motion'
 import { VisualAsset } from './VisualAsset'
 import './ProcessingFlowPanel.css'
@@ -69,10 +70,12 @@ interface NormalizedRunEvent extends Required<Pick<RunEventLogEntry, 'id' | 'sta
 
 type LevelFilter = 'all' | Extract<RunEventLogLevel, 'warning' | 'error'>
 
-const levelCopy: Record<RunEventLogLevel, { label: string; exportLabel: string }> = {
-  info: { label: '信息', exportLabel: 'INFO' },
-  warning: { label: '警告', exportLabel: 'WARNING' },
-  error: { label: '错误', exportLabel: 'ERROR' },
+type Localize = (zh: string, en: string) => string
+
+const levelCopy: Record<RunEventLogLevel, { label: readonly [string, string]; exportLabel: string }> = {
+  info: { label: ['信息', 'Info'], exportLabel: 'INFO' },
+  warning: { label: ['警告', 'Warning'], exportLabel: 'WARNING' },
+  error: { label: ['错误', 'Error'], exportLabel: 'ERROR' },
 }
 
 // The demo worker only exposes the backend event name, while real stage records
@@ -89,13 +92,40 @@ const defaultStageBackendAliases: Record<string, readonly string[]> = {
   render: ['render.outputs'],
 }
 
-const stateCopy: Record<TelemetrySample['state'], string> = {
-  queued: '排队',
-  running: '运行中',
-  completed: '完成',
-  failed: '失败',
-  cancelled: '已取消',
+const stateCopy: Record<TelemetrySample['state'], readonly [string, string]> = {
+  queued: ['排队', 'Queued'],
+  running: ['运行中', 'Running'],
+  completed: ['完成', 'Completed'],
+  failed: ['失败', 'Failed'],
+  cancelled: ['已取消', 'Cancelled'],
 }
+
+const stageCopy: Record<string, readonly [string, string]> = {
+  acquire: ['获取', 'Acquire'],
+  'source.acquire': ['获取视频', 'Acquire video'],
+  normalize: ['规范化', 'Normalize'],
+  'media.probe': ['媒体探测', 'Probe media'],
+  speech: ['语音', 'Speech'],
+  'audio.extract': ['提取音频', 'Extract audio'],
+  'captions.parse': ['解析字幕', 'Parse captions'],
+  'audio.asr': ['语音识别', 'Speech recognition'],
+  vision: ['视觉', 'Vision'],
+  'vision.scan': ['视觉扫描', 'Visual scan'],
+  'ocr.extract': ['OCR 提取', 'OCR extraction'],
+  fusion: ['融合', 'Fusion'],
+  'evidence.fuse': ['证据融合', 'Fuse evidence'],
+  draft: ['写作', 'Compose'],
+  verify: ['验证', 'Verify'],
+  'notes.compose': ['生成笔记', 'Compose note'],
+  render: ['导出', 'Render'],
+  'render.outputs': ['渲染输出', 'Render outputs'],
+}
+
+const localizedStageLabel = (
+  stage: string,
+  fallback: string | undefined,
+  text: Localize,
+): string => stageCopy[stage] ? text(...stageCopy[stage]) : (fallback ?? stage)
 
 const levelFromState = (
   state?: TelemetrySample['state'],
@@ -105,11 +135,15 @@ const levelFromState = (
   return 'info'
 }
 
-const formatMetricValue = (value: TelemetryValue): string => {
+const formatMetricValue = (
+  value: TelemetryValue,
+  locale: string,
+  text: Localize,
+): string => {
   if (value === null) return '—'
-  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'boolean') return value ? text('是', 'Yes') : text('否', 'No')
   if (typeof value === 'number') {
-    return new Intl.NumberFormat('zh-CN', {
+    return new Intl.NumberFormat(locale, {
       maximumFractionDigits: 3,
     }).format(value)
   }
@@ -121,10 +155,10 @@ const formatProgress = (value: number): string => {
   return `${Math.round(Math.min(100, Math.max(0, percentage)))}%`
 }
 
-const formatClockTime = (value: string): string => {
+const formatClockTime = (value: string, locale: string): string => {
   const timestamp = new Date(value)
   if (Number.isNaN(timestamp.getTime())) return value
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -137,24 +171,33 @@ const exportTimestamp = (value: string): string => {
   return Number.isNaN(timestamp.getTime()) ? value : timestamp.toISOString()
 }
 
-const normalizeSearchValue = (value: string): string => value.trim().toLocaleLowerCase('zh-CN')
+const normalizeSearchValue = (value: string, locale: string): string => value.trim().toLocaleLowerCase(locale)
 
-const eventSearchText = (event: NormalizedRunEvent): string =>
+const eventSearchText = (
+  event: NormalizedRunEvent,
+  locale: string,
+  text: Localize,
+): string =>
   normalizeSearchValue(
     [
       event.stage,
       event.stageLabel,
       event.message,
       event.errorType ?? '',
-      event.state ? stateCopy[event.state] : '',
+      event.state ? text(...stateCopy[event.state]) : '',
       ...Object.entries(event.metrics).flatMap(([key, value]) => [
         key,
-        formatMetricValue(value),
+        formatMetricValue(value, locale, text),
       ]),
     ].join(' '),
+    locale,
   )
 
-const serializeEventsText = (events: readonly NormalizedRunEvent[]): string =>
+const serializeEventsText = (
+  events: readonly NormalizedRunEvent[],
+  locale: string,
+  text: Localize,
+): string =>
   events
     .map(event => {
       const sequence = event.sequence === undefined ? '' : ` #${event.sequence}`
@@ -162,7 +205,7 @@ const serializeEventsText = (events: readonly NormalizedRunEvent[]): string =>
       const errorType = event.errorType ? ` error_type=${event.errorType}` : ''
       const heading = `[${exportTimestamp(event.createdAt)}] [${levelCopy[event.level].exportLabel}] [${event.stage}]${sequence}${progress}${errorType} ${event.message}`
       const metrics = Object.entries(event.metrics).map(
-        ([key, value]) => `  ${key}=${formatMetricValue(value)}`,
+        ([key, value]) => `  ${key}=${formatMetricValue(value, locale, text)}`,
       )
       return [heading, ...metrics].join('\n')
     })
@@ -221,6 +264,7 @@ export function ProcessingFlowPanel({
   onCopy,
   onDownload,
 }: ProcessingFlowPanelProps) {
+  const { locale, text } = useI18n()
   const generatedId = useId().replaceAll(':', '')
   const titleId = `processing-flow-title-${generatedId}`
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -246,20 +290,23 @@ export function ProcessingFlowPanel({
     const labels = new Map<string, string>()
     const filters = new Map<string, { label: string; stages: Set<string> }>()
     task.stages.forEach(stage => {
-      labels.set(stage.id, stage.label)
-      labels.set(stage.label, stage.label)
+      const localizedLabel = localizedStageLabel(stage.id, stage.label, text)
+      labels.set(stage.id, localizedLabel)
+      labels.set(stage.label, localizedLabel)
       const backendStages = new Set([
         ...defaultStageBackendAliases[stage.id] ?? [],
         ...(stage.backendStages ?? []),
       ])
-      backendStages.forEach(backendStage => labels.set(backendStage, stage.label))
+      backendStages.forEach(backendStage =>
+        labels.set(backendStage, localizedStageLabel(backendStage, localizedLabel, text)),
+      )
       filters.set(stage.id, {
-        label: stage.label,
+        label: localizedLabel,
         stages: new Set([stage.id, stage.label, ...backendStages]),
       })
     })
     return { labels, filters }
-  }, [task.stages])
+  }, [task.stages, text])
 
   const normalizedEvents = useMemo<NormalizedRunEvent[]>(() => {
     const source: readonly RunEventLogEntry[] =
@@ -271,7 +318,7 @@ export function ProcessingFlowPanel({
         level: levelFromState(sample.state),
         state: sample.state,
         progress: sample.progress,
-        message: sample.message || `事件 #${sample.sequence}`,
+        message: sample.message || text(`事件 #${sample.sequence}`, `Event #${sample.sequence}`),
         errorType: sample.errorType,
         metrics: sample.metrics,
         createdAt: sample.createdAt,
@@ -282,7 +329,8 @@ export function ProcessingFlowPanel({
       sequence: event.sequence,
       stage: event.stage,
       stageLabel:
-        event.stageLabel ?? stagePresentation.labels.get(event.stage) ?? event.stage,
+        stagePresentation.labels.get(event.stage) ??
+        localizedStageLabel(event.stage, event.stageLabel, text),
       level: event.level ?? levelFromState(event.state),
       state: event.state,
       progress: event.progress,
@@ -291,7 +339,7 @@ export function ProcessingFlowPanel({
       metrics: { ...(event.metrics ?? {}) },
       createdAt: event.createdAt,
     }))
-  }, [events, stagePresentation.labels, task.telemetry])
+  }, [events, stagePresentation.labels, task.telemetry, text])
 
   const stageOptions = useMemo(() => {
     const stages = new Map<string, { label: string; count: number }>(
@@ -374,13 +422,13 @@ export function ProcessingFlowPanel({
     [normalizedEvents],
   )
 
-  const normalizedSearch = normalizeSearchValue(search)
+  const normalizedSearch = normalizeSearchValue(search, locale)
   const filteredEvents = useMemo(
     () =>
       normalizedEvents.filter(event => {
         if (!eventMatchesStageFilter(event, stageFilter)) return false
         if (levelFilter !== 'all' && event.level !== levelFilter) return false
-        return !normalizedSearch || eventSearchText(event).includes(normalizedSearch)
+        return !normalizedSearch || eventSearchText(event, locale, text).includes(normalizedSearch)
       }),
     [
       eventMatchesStageFilter,
@@ -388,6 +436,8 @@ export function ProcessingFlowPanel({
       normalizedEvents,
       normalizedSearch,
       stageFilter,
+      locale,
+      text,
     ],
   )
 
@@ -443,7 +493,7 @@ export function ProcessingFlowPanel({
   }
 
   const copyVisibleEvents = async () => {
-    const content = serializeEventsText(filteredEvents)
+    const content = serializeEventsText(filteredEvents, locale, text)
     if (!content) return
     try {
       if (onCopy) await onCopy(content)
@@ -474,16 +524,16 @@ export function ProcessingFlowPanel({
           <Activity size={18} />
         </span>
         <div>
-          <span className="section-kicker">PROCESS FLOW</span>
-          <h3 id={titleId}>处理流程日志</h3>
-          <p>{task.realBackend ? '本机后端事件与阶段指标' : '当前任务保存的处理事件'}</p>
+          <span className="section-kicker">{text('处理流程', 'PROCESS FLOW')}</span>
+          <h3 id={titleId}>{text('处理流程日志', 'Processing flow log')}</h3>
+          <p>{task.realBackend ? text('本机后端事件与阶段指标', 'Local backend events and stage metrics') : text('当前任务保存的处理事件', 'Processing events saved with this task')}</p>
         </div>
-        <div className="processing-flow-summary" aria-label="日志统计">
+        <div className="processing-flow-summary" aria-label={text('日志统计', 'Log summary')}>
           <strong>{normalizedEvents.length}</strong>
-          <span>条事件</span>
+          <span>{text('条事件', normalizedEvents.length === 1 ? 'event' : 'events')}</span>
           {(levelCounts.warning > 0 || levelCounts.error > 0) && (
             <small>
-              {levelCounts.warning} 警告 · {levelCounts.error} 错误
+              {levelCounts.warning} {text('警告', levelCounts.warning === 1 ? 'warning' : 'warnings')} · {levelCounts.error} {text('错误', levelCounts.error === 1 ? 'error' : 'errors')}
             </small>
           )}
         </div>
@@ -505,22 +555,22 @@ export function ProcessingFlowPanel({
             )}
             <span>
               {task.eventLog.corruptLineCount > 0
-                ? `读取持久化日志时跳过了 ${task.eventLog.corruptLineCount} 条损坏记录；其余事件仍可筛选和导出。`
-                : '未找到持久化事件日志；当前仅显示本次会话仍保留的实时事件。'}
+                ? text(`读取持久化日志时跳过了 ${task.eventLog.corruptLineCount} 条损坏记录；其余事件仍可筛选和导出。`, `${task.eventLog.corruptLineCount} corrupt ${task.eventLog.corruptLineCount === 1 ? 'record was' : 'records were'} skipped while reading the persisted log. The remaining events can still be filtered and exported.`)
+                : text('未找到持久化事件日志；当前仅显示本次会话仍保留的实时事件。', 'No persisted event log was found. Only live events retained in this session are shown.')}
             </span>
           </div>
         )}
 
       <div className="processing-flow-toolbar">
         <label className="processing-flow-stage-filter">
-          <span>阶段</span>
+          <span>{text('阶段', 'Stage')}</span>
           <select
-            aria-label="阶段"
+            aria-label={text('阶段', 'Stage')}
             value={stageFilter}
             disabled={normalizedEvents.length === 0}
             onChange={event => setStageFilter(event.target.value)}
           >
-            <option value="all">全部阶段 · {normalizedEvents.length}</option>
+            <option value="all">{text('全部阶段', 'All stages')} · {normalizedEvents.length}</option>
             {stageOptions.map(option => (
               <option value={option.value} key={option.value}>
                 {option.label} · {option.count}
@@ -529,12 +579,12 @@ export function ProcessingFlowPanel({
           </select>
         </label>
 
-        <div className="processing-flow-levels" role="group" aria-label="日志级别">
+        <div className="processing-flow-levels" role="group" aria-label={text('日志级别', 'Log level')}>
           {(
             [
-              ['all', '全部', normalizedEvents.length],
-              ['warning', '警告', levelCounts.warning],
-              ['error', '错误', levelCounts.error],
+              ['all', text('全部', 'All'), normalizedEvents.length],
+              ['warning', text('警告', 'Warnings'), levelCounts.warning],
+              ['error', text('错误', 'Errors'), levelCounts.error],
             ] as const
           ).map(([value, label, count]) => (
             <button
@@ -554,8 +604,8 @@ export function ProcessingFlowPanel({
           <Search size={15} aria-hidden="true" />
           <input
             type="search"
-            aria-label="搜索日志"
-            placeholder="搜索阶段、消息或指标"
+            aria-label={text('搜索日志', 'Search logs')}
+            placeholder={text('搜索阶段、消息或指标', 'Search stages, messages, or metrics')}
             value={search}
             disabled={normalizedEvents.length === 0}
             onChange={event => setSearch(event.target.value)}
@@ -570,15 +620,15 @@ export function ProcessingFlowPanel({
             onChange={event => setAutoFollow(event.target.checked)}
           />
           <span aria-hidden="true"><i /></span>
-          自动跟随
+          {text('自动跟随', 'Auto-follow')}
         </label>
 
         <div className="processing-flow-actions">
           <button
             className="processing-flow-icon-button"
             type="button"
-            aria-label="复制当前日志"
-            title={copyState === 'success' ? '已复制当前筛选结果' : '复制当前筛选结果'}
+            aria-label={text('复制当前日志', 'Copy current logs')}
+            title={copyState === 'success' ? text('已复制当前筛选结果', 'Copied current filtered results') : text('复制当前筛选结果', 'Copy current filtered results')}
             disabled={filteredEvents.length === 0}
             onClick={() => void copyVisibleEvents()}
           >
@@ -587,8 +637,8 @@ export function ProcessingFlowPanel({
           <button
             className="processing-flow-icon-button"
             type="button"
-            aria-label="下载当前日志"
-            title="下载当前筛选结果（JSONL）"
+            aria-label={text('下载当前日志', 'Download current logs')}
+            title={text('下载当前筛选结果（JSONL）', 'Download current filtered results (JSONL)')}
             disabled={filteredEvents.length === 0}
             onClick={downloadVisibleEvents}
           >
@@ -596,7 +646,7 @@ export function ProcessingFlowPanel({
           </button>
         </div>
         <span className="processing-flow-copy-status" role="status" aria-live="polite">
-          {copyState === 'success' ? '日志已复制' : copyState === 'error' ? '无法访问剪贴板' : ''}
+          {copyState === 'success' ? text('日志已复制', 'Logs copied') : copyState === 'error' ? text('无法访问剪贴板', 'Could not access the clipboard') : ''}
         </span>
       </div>
 
@@ -606,21 +656,21 @@ export function ProcessingFlowPanel({
             <VisualAsset className="inline-empty-visual" asset="emptyProcessingLog" width={192} height={124} />
             <div>
               <FileClock size={22} aria-hidden="true" />
-              <strong>这个任务没有流程日志</strong>
-              <p>早期版本创建的任务可能只保留阶段状态和产物；新任务会在处理时持续写入事件。</p>
+              <strong>{text('这个任务没有流程日志', 'This task has no processing flow log')}</strong>
+              <p>{text('早期版本创建的任务可能只保留阶段状态和产物；新任务会在处理时持续写入事件。', 'Tasks created by earlier versions may retain only stage states and artifacts. New tasks continuously write events while processing.')}</p>
             </div>
           </div>
         ) : filteredEvents.length === 0 ? (
           <div className="processing-flow-empty is-filtered">
             <Search size={22} aria-hidden="true" />
-            <strong>没有匹配的日志</strong>
-            <p>当前阶段、级别和搜索条件没有交集。</p>
+            <strong>{text('没有匹配的日志', 'No matching logs')}</strong>
+            <p>{text('当前阶段、级别和搜索条件没有交集。', 'No events match the current stage, level, and search filters.')}</p>
             <button className="button button-secondary" type="button" onClick={clearFilters}>
-              清除筛选
+              {text('清除筛选', 'Clear filters')}
             </button>
           </div>
         ) : (
-          <ol className="processing-flow-list" aria-label="处理事件">
+          <ol className="processing-flow-list" aria-label={text('处理事件', 'Processing events')}>
             {filteredEvents.map((event, index) => {
               const metricEntries = Object.entries(event.metrics)
               const expanded = expandedEvents.has(event.id)
@@ -640,12 +690,13 @@ export function ProcessingFlowPanel({
                 >
                   <div className="processing-flow-rail" aria-hidden="true">
                     <span />
-                    <time>{formatClockTime(event.createdAt)}</time>
+                    <time>{formatClockTime(event.createdAt, locale)}</time>
                   </div>
                   <article
-                    aria-label={`${levelCopy[event.level].label}日志，${event.stageLabel}${
-                      event.errorType ? `，${event.errorType}` : ''
-                    }`}
+                    aria-label={text(
+                      `${text(...levelCopy[event.level].label)}日志，${event.stageLabel}${event.errorType ? `，${event.errorType}` : ''}`,
+                      `${text(...levelCopy[event.level].label)} log, ${event.stageLabel}${event.errorType ? `, ${event.errorType}` : ''}`,
+                    )}
                   >
                     <header>
                       <div className="processing-flow-event-tags">
@@ -654,7 +705,7 @@ export function ProcessingFlowPanel({
                         </span>
                         {event.state && (
                           <span className={`processing-flow-state state-${event.state}`}>
-                            {stateCopy[event.state]}
+                            {text(...stateCopy[event.state])}
                           </span>
                         )}
                         {event.progress !== undefined && (
@@ -665,7 +716,7 @@ export function ProcessingFlowPanel({
                         {event.errorType && (
                           <span
                             className="processing-flow-error-type"
-                            title="后端返回的安全异常类型"
+                            title={text('后端返回的安全异常类型', 'Safe exception type returned by the backend')}
                           >
                             {event.errorType}
                           </span>
@@ -680,11 +731,14 @@ export function ProcessingFlowPanel({
                         type="button"
                         aria-expanded={expanded}
                         aria-controls={metricId}
-                        aria-label={`${expanded ? '收起' : '展开'}事件 #${sequenceLabel} 指标`}
+                        aria-label={text(
+                          `${expanded ? '收起' : '展开'}事件 #${sequenceLabel} 指标`,
+                          `${expanded ? 'Collapse' : 'Expand'} metrics for event #${sequenceLabel}`,
+                        )}
                         onClick={() => toggleMetrics(event.id)}
                       >
                         <ChevronDown size={14} aria-hidden="true" />
-                        {metricEntries.length} 项指标
+                        {metricEntries.length} {text('项指标', metricEntries.length === 1 ? 'metric' : 'metrics')}
                       </button>
                     )}
                     {expanded && metricEntries.length > 0 && (
@@ -692,7 +746,7 @@ export function ProcessingFlowPanel({
                         {metricEntries.map(([key, value]) => (
                           <div key={key}>
                             <dt title={key}>{key.replaceAll('_', ' ')}</dt>
-                            <dd>{formatMetricValue(value)}</dd>
+                            <dd>{formatMetricValue(value, locale, text)}</dd>
                           </div>
                         ))}
                       </dl>
