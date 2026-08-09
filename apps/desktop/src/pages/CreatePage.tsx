@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import {
   AudioLines,
   ArrowRight,
@@ -91,6 +91,7 @@ export function CreatePage() {
   const setLanguageHints = useStudioStore(state => state.setLanguageHints)
   const [dragActive, setDragActive] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const createTaskButtonRef = useRef<HTMLButtonElement>(null)
   const advancedOptionsId = useId()
   const audioOnlySupported = backendSupportsAudioOnly(backend)
   const scopeLocked = submissionInFlight || draft.status === 'submitting'
@@ -473,48 +474,64 @@ export function CreatePage() {
               <option value="cookie_file">显式 cookies.txt</option>
             </select>
           </label>
-          {draft.authKind === 'browser_profile' && (
-            <>
-              <label className="motion-field-enter">
-                浏览器
-                <select
-                  value={draft.browser}
-                  onChange={event =>
-                    setDraftBrowser(event.target.value as 'chrome' | 'edge' | 'firefox')
-                  }
-                >
-                  <option value="edge">Microsoft Edge</option>
-                  <option value="chrome">Google Chrome</option>
-                  <option value="firefox">Mozilla Firefox</option>
-                </select>
-              </label>
-              <label className="motion-field-enter">
-                已登录 Profile
-                <select
-                  value={draft.profile}
-                  onChange={event => setDraftProfile(event.target.value)}
-                >
-                  <option value="">请选择</option>
-                  {matchingProfiles.map(profile => (
-                    <option value={profile.profileId} key={`${profile.browser}-${profile.path}`}>
-                      {profile.displayName}
-                      {profile.isDefault ? ' · 默认' : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
-          {draft.authKind === 'cookie_file' && (
-            <label className="advanced-span motion-field-enter">
-              cookies.txt 绝对路径
-              <input
-                value={draft.cookieFile}
-                onChange={event => setDraftCookieFile(event.target.value)}
-                placeholder="D:\Private\youtube.cookies.txt"
-              />
-            </label>
-          )}
+          <div className="motion-swap-stack advanced-auth-fields">
+            <MotionPresence
+              show={draft.authKind === 'browser_profile'}
+              className="motion-presence-swap"
+              exitMs={140}
+              animateInitial={false}
+            >
+              {draft.authKind === 'browser_profile' && (
+                <div className="advanced-auth-browser-fields">
+                  <label>
+                    浏览器
+                    <select
+                      value={draft.browser}
+                      onChange={event =>
+                        setDraftBrowser(event.target.value as 'chrome' | 'edge' | 'firefox')
+                      }
+                    >
+                      <option value="edge">Microsoft Edge</option>
+                      <option value="chrome">Google Chrome</option>
+                      <option value="firefox">Mozilla Firefox</option>
+                    </select>
+                  </label>
+                  <label>
+                    已登录 Profile
+                    <select
+                      value={draft.profile}
+                      onChange={event => setDraftProfile(event.target.value)}
+                    >
+                      <option value="">请选择</option>
+                      {matchingProfiles.map(profile => (
+                        <option value={profile.profileId} key={`${profile.browser}-${profile.path}`}>
+                          {profile.displayName}
+                          {profile.isDefault ? ' · 默认' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+            </MotionPresence>
+            <MotionPresence
+              show={draft.authKind === 'cookie_file'}
+              className="motion-presence-swap"
+              exitMs={140}
+              animateInitial={false}
+            >
+              {draft.authKind === 'cookie_file' && (
+                <label className="advanced-span">
+                  cookies.txt 绝对路径
+                  <input
+                    value={draft.cookieFile}
+                    onChange={event => setDraftCookieFile(event.target.value)}
+                    placeholder="D:\Private\youtube.cookies.txt"
+                  />
+                </label>
+              )}
+            </MotionPresence>
+          </div>
               </div>
               <CreateProcessingOptions />
             </div>
@@ -528,6 +545,7 @@ export function CreatePage() {
           <span>产物仅保存在本机</span>
         </div>
         <button
+          ref={createTaskButtonRef}
           className="button button-primary button-large"
           type="button"
           onClick={createTask}
@@ -568,7 +586,7 @@ export function CreatePage() {
         )}
       </MotionPresence>
 
-      <DependencyPreflightDialog />
+      <DependencyPreflightDialog restoreFocusRef={createTaskButtonRef} />
     </div>
   )
 }

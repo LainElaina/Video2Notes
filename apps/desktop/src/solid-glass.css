@@ -603,6 +603,7 @@ textarea {
 
 /* Motion language: short, interruptible, and limited to composited properties. */
 .motion-presence-context-panel {
+  z-index: 20;
   min-width: 0;
   min-height: 0;
   grid-column: 1;
@@ -661,6 +662,17 @@ textarea {
   transform-origin: top;
 }
 
+.motion-swap-stack {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+}
+
+.motion-swap-stack > .motion-presence {
+  min-width: 0;
+  grid-area: 1 / 1;
+}
+
 @starting-style {
   .workspace-page-surface {
     opacity: 0;
@@ -682,7 +694,8 @@ textarea {
 .motion-presence-field > *,
 .motion-presence-benchmark .benchmark-guide-collapse,
 .motion-presence-advanced-options .advanced-options-content,
-.motion-presence-provider-editor .provider-editor {
+.motion-presence-provider-editor .provider-editor,
+.motion-presence-swap > * {
   opacity: 1;
   transform: translateY(0) scale(1);
   transition:
@@ -709,15 +722,22 @@ textarea {
 .motion-presence-advanced-options[data-motion-state="entering"] .advanced-options-content,
 .motion-presence-advanced-options[data-motion-state="exiting"] .advanced-options-content,
 .motion-presence-provider-editor[data-motion-state="entering"] .provider-editor,
-.motion-presence-provider-editor[data-motion-state="exiting"] .provider-editor {
+.motion-presence-provider-editor[data-motion-state="exiting"] .provider-editor,
+.motion-presence-swap[data-motion-state="entering"] > * {
   opacity: 0;
   transform: translateY(-4px) scale(0.985);
+}
+
+.motion-presence-swap[data-motion-state="exiting"] > * {
+  opacity: 0;
+  transform: translateY(4px) scale(0.985);
 }
 
 .motion-presence-source-manifest[data-motion-state="exiting"] .source-manifest,
 .motion-presence-benchmark[data-motion-state="exiting"] .benchmark-guide-collapse,
 .motion-presence-advanced-options[data-motion-state="exiting"] .advanced-options-content,
-.motion-presence-provider-editor[data-motion-state="exiting"] .provider-editor {
+.motion-presence-provider-editor[data-motion-state="exiting"] .provider-editor,
+.motion-presence-swap[data-motion-state="exiting"] > * {
   transition-duration: var(--motion-exit);
 }
 
@@ -740,7 +760,22 @@ textarea {
     box-shadow var(--motion-fast) var(--ease-standard);
 }
 
+.reader-mode-stack {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.motion-presence-reader-mode {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  grid-area: 1 / 1;
+}
+
 .reader-mode-surface {
+  display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1;
@@ -751,11 +786,15 @@ textarea {
     transform var(--motion-fast) var(--ease-out);
 }
 
-@starting-style {
-  .reader-mode-surface {
-    opacity: 0;
-    transform: translateY(4px);
-  }
+.motion-presence-reader-mode[data-motion-state="entering"] .reader-mode-surface {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.motion-presence-reader-mode[data-motion-state="exiting"] .reader-mode-surface {
+  opacity: 0;
+  transform: translateY(4px);
+  transition-duration: var(--motion-exit);
 }
 
 .motion-presence-overlay,
@@ -776,6 +815,12 @@ textarea {
 .motion-presence-overlay > .workbench-overlay,
 .motion-presence-modal > .dependency-dialog-backdrop {
   pointer-events: auto;
+}
+
+.workbench-drawer:focus,
+.dependency-dialog:focus,
+.runtime-packages-panel:focus {
+  outline: none;
 }
 
 .motion-presence[data-motion-state="exiting"] {
@@ -922,9 +967,7 @@ textarea {
 
 .runtime-instance,
 .runtime-release-grid > article {
-  transition:
-    border-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard);
+  transition: border-color var(--motion-fast) var(--ease-standard);
 }
 
 /* Small command surfaces outside the shared button primitive. */
@@ -952,7 +995,7 @@ textarea {
   transform: none;
 }
 
-@media (hover: hover) and (pointer: fine) {
+@media (prefers-reduced-motion: no-preference) and (hover: hover) and (pointer: fine) {
   .top-navigation-button:hover:not(:active),
   .workspace-mode-switch button:hover:not(:active),
   .context-expand:hover:not(:active),
@@ -962,15 +1005,15 @@ textarea {
     transform: translateY(-1px);
   }
 
-  .mode-option:hover:not(.is-selected),
-  .context-task:hover,
-  .contents-list button:hover,
-  .provider-context-list button:hover {
+  .mode-option:hover:not(.is-selected):not(:active),
+  .context-task:hover:not(:active),
+  .contents-list button:hover:not(:active),
+  .provider-context-list button:hover:not(:active) {
     transform: translateY(-1px);
     box-shadow: var(--shadow-control);
   }
 
-  .mode-option:hover:not(.is-selected) {
+  .mode-option:hover:not(.is-selected):not(:active) {
     transform: translateY(-2px);
   }
 
@@ -979,55 +1022,57 @@ textarea {
     box-shadow: var(--shadow-control);
   }
 
-  .processing-scope-options label:hover:not(.is-selected):not(.is-disabled),
-  .preference-grid button:hover:not(.is-selected),
-  .experience-switch button:hover:not([aria-pressed="true"]),
+  .processing-scope-options label:hover:not(.is-selected):not(.is-disabled):not(:active),
+  .preference-grid button:hover:not(.is-selected):not(:active),
+  .experience-switch button:hover:not([aria-pressed="true"]):not(:active),
   .component-refresh-button:not(:disabled):hover:not(:active),
   .diagnostics-artifacts button:hover:not(:active),
-  .create-report-preset:hover:not(.is-selected),
-  .create-output-toggle:hover,
-  .managed-model-card:hover:not(.is-selected) {
+  .create-report-preset:hover:not(.is-selected):not(:active),
+  .create-output-toggle:hover:not(:active),
+  .managed-model-card:hover:not(.is-selected):not(:active) {
     transform: translateY(-1px);
   }
 }
 
 /* Press feedback wins over hover in the later glass layer. */
-.button:not(:disabled):active,
-.icon-button:not(:disabled):active,
-.top-navigation-button:active,
-.workspace-mode-switch button:active,
-.context-expand:active,
-.export-menu button:active,
-.workbench-drawer-header > button:active,
-.drawer-section-heading > button:active,
-.dependency-dialog > header > button:active,
-.notice-bar button:active {
-  transform: scale(0.97);
-  transition-duration: var(--motion-press);
-}
+@media (prefers-reduced-motion: no-preference) {
+  .button:not(:disabled):active,
+  .icon-button:not(:disabled):active,
+  .top-navigation-button:active,
+  .workspace-mode-switch button:active,
+  .context-expand:active,
+  .export-menu button:active,
+  .workbench-drawer-header > button:active,
+  .drawer-section-heading > button:active,
+  .dependency-dialog > header > button:active,
+  .notice-bar button:active {
+    transform: scale(0.97);
+    transition-duration: var(--motion-press);
+  }
 
-.mode-option:active,
-.processing-scope-options label:not(.is-disabled):active,
-.preference-grid button:active,
-.experience-switch button:active,
-.create-report-preset:active,
-.create-output-toggle:active,
-.managed-model-card:active,
-.component-refresh-button:not(:disabled):active,
-.diagnostics-artifacts button:active,
-.benchmark-guide-trigger:active,
-.manifest-reprobe:active,
-.report-revision-downloads button:active {
-  transform: scale(0.985);
-  transition-duration: var(--motion-press);
-}
+  .mode-option:active,
+  .processing-scope-options label:not(.is-disabled):active,
+  .preference-grid button:active,
+  .experience-switch button:active,
+  .create-report-preset:active,
+  .create-output-toggle:active,
+  .managed-model-card:active,
+  .component-refresh-button:not(:disabled):active,
+  .diagnostics-artifacts button:active,
+  .benchmark-guide-trigger:active,
+  .manifest-reprobe:active,
+  .report-revision-downloads button:active {
+    transform: scale(0.985);
+    transition-duration: var(--motion-press);
+  }
 
-.top-navigation-button:hover:active,
-.workspace-mode-switch button:hover:active,
-.button-primary:not(:disabled):hover:active,
-.button-secondary:not(:disabled):hover:active,
-.icon-button:hover:active {
-  transform: scale(0.97);
+  .top-navigation-button:hover:active,
+  .workspace-mode-switch button:hover:active,
+  .button-primary:not(:disabled):hover:active,
+  .button-secondary:not(:disabled):hover:active,
+  .icon-button:hover:active {
+    transform: scale(0.97);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1043,7 +1088,8 @@ textarea {
   .motion-presence-field > *,
   .motion-presence-benchmark .benchmark-guide-collapse,
   .motion-presence-advanced-options .advanced-options-content,
-  .motion-presence-provider-editor .provider-editor {
+  .motion-presence-provider-editor .provider-editor,
+  .motion-presence-swap > * {
     transform: none;
     transition: opacity 120ms ease;
   }
@@ -1052,6 +1098,10 @@ textarea {
   .provider-editor {
     transform: none;
     transition: opacity 120ms ease;
+  }
+
+  .progress-track > span {
+    transition: none;
   }
 
   .motion-presence-overlay .workbench-scrim,

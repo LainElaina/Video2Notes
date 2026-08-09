@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +30,7 @@ def _attach_browser_diagnostics(
     page.on(
         "console",
         lambda message: (
-            console_errors.append(f"{label}: {message.text}")
-            if message.type == "error"
-            else None
+            console_errors.append(f"{label}: {message.text}") if message.type == "error" else None
         ),
     )
     page.on("pageerror", lambda error: page_errors.append(f"{label}: {error}"))
@@ -59,6 +58,25 @@ def _wait_for_finite_motion(page: Any, timeout: int = 3_000) -> None:
         """,
         timeout=timeout,
     )
+
+
+def _wait_for_focus(locator: Any, label: str, timeout_ms: int = 2_000) -> None:
+    deadline = time.monotonic() + timeout_ms / 1_000
+    last_active = "<unknown>"
+    while time.monotonic() < deadline:
+        state = locator.evaluate(
+            """
+            element => ({
+              focused: element === document.activeElement,
+              active: document.activeElement?.outerHTML ?? '<none>',
+            })
+            """
+        )
+        if state["focused"]:
+            return
+        last_active = state["active"]
+        time.sleep(0.02)
+    raise AssertionError(f"{label} did not receive focus; active element: {last_active}")
 
 
 def _assert_single_reader_workspace(page: Any, expect: Any, mode: str) -> None:
@@ -135,22 +153,40 @@ def _exercise_models_mode_switching(page: Any, expect: Any) -> None:
 
 def _exercise_export_menu(page: Any, expect: Any) -> None:
     export_button = page.get_by_role("button", name="导出", exact=True)
-    menu = page.locator(".export-menu")
+    menu = page.get_by_role("menu", name="导出格式", exact=True)
+    markdown = page.get_by_role("menuitem", name="Markdown", exact=True)
+    html = page.get_by_role("menuitem", name="离线 HTML", exact=True)
+    pdf = page.get_by_role("menuitem", name="打印 / PDF", exact=True)
 
     export_button.click()
     expect(export_button).to_have_attribute("aria-expanded", "true")
     expect(menu).to_have_count(1)
+    _wait_for_focus(markdown, "Markdown export menu item")
 
-    export_button.click()
+    page.keyboard.press("ArrowDown")
+    _wait_for_focus(html, "HTML export menu item")
+    page.keyboard.press("End")
+    _wait_for_focus(pdf, "PDF export menu item")
+    page.keyboard.press("ArrowDown")
+    _wait_for_focus(markdown, "wrapped Markdown export menu item")
+    page.keyboard.press("ArrowUp")
+    _wait_for_focus(pdf, "wrapped PDF export menu item")
+    page.keyboard.press("Home")
+    _wait_for_focus(markdown, "home Markdown export menu item")
+
+    page.keyboard.press("Escape")
     expect(export_button).to_have_attribute("aria-expanded", "false")
     expect(menu).to_have_count(0, timeout=2_000)
+    _wait_for_focus(export_button, "export trigger after Escape")
 
     export_button.click()
     expect(export_button).to_have_attribute("aria-expanded", "true")
-    expect(page.get_by_role("button", name="Markdown", exact=True)).to_be_visible()
-    page.locator(".reader-search input").click()
+    _wait_for_focus(markdown, "Markdown export menu item after reopen")
+    search = page.locator(".reader-search input")
+    search.click()
     expect(export_button).to_have_attribute("aria-expanded", "false")
     expect(menu).to_have_count(0, timeout=2_000)
+    _wait_for_focus(search, "reader search after outside dismissal")
 
 
 def _exercise_provider_editor(page: Any, expect: Any) -> None:
@@ -217,21 +253,41 @@ def _exercise_drawers(page: Any, expect: Any) -> None:
     for opener_name, closer_name in drawers:
         opener = page.get_by_role("button", name=opener_name, exact=True)
         opener.click()
-        expect(page.get_by_role("dialog")).to_have_count(1)
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_have_count(1)
+        _wait_for_focus(dialog, f"{opener_name} dialog")
         expect(page.locator(".workbench-overlay")).to_have_count(1)
 
+        page.keyboard.press("Shift+Tab")
+        assert dialog.evaluate("element => element.contains(document.activeElement)"), (
+            f"{opener_name} allowed Shift+Tab to leave the dialog."
+        )
+        page.keyboard.press("Tab")
+        assert dialog.evaluate("element => element.contains(document.activeElement)"), (
+            f"{opener_name} allowed Tab to leave the dialog."
+        )
+
         page.get_by_role("button", name=closer_name, exact=True).last.click()
+        expect(page.locator(".motion-presence-overlay")).to_have_attribute(
+            "data-motion-state",
+            "exiting",
+        )
         opener.dispatch_event("click")
         expect(page.locator(".motion-presence-overlay")).to_have_attribute(
             "data-motion-state",
             "entered",
         )
-        expect(page.get_by_role("dialog")).to_have_count(1)
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_have_count(1)
+        _wait_for_focus(dialog, f"reopened {opener_name} dialog")
         expect(page.locator(".workbench-overlay")).to_have_count(1)
 
         page.keyboard.press("Escape")
+        _wait_for_focus(opener, f"{opener_name} opener after Escape")
         expect(page.locator(".workbench-overlay")).to_have_count(0, timeout=2_000)
         expect(page.locator(".motion-presence-overlay")).to_have_count(0)
+        page.wait_for_timeout(180)
+        _wait_for_focus(opener, f"stable {opener_name} opener")
 
 
 def _css_motion_style(page: Any, selector: str) -> dict[str, Any]:
@@ -270,18 +326,18 @@ def _assert_reduced_motion_style(page: Any, selector: str) -> None:
         "under prefers-reduced-motion."
     )
     assert style["transform"] == "none", (
-        f"{selector} retained transform {style['transform']!r} "
-        "under prefers-reduced-motion."
+        f"{selector} retained transform {style['transform']!r} under prefers-reduced-motion."
     )
 
 
 def _assert_reduced_motion(page: Any, expect: Any) -> None:
-    assert page.evaluate(
-        "matchMedia('(prefers-reduced-motion: reduce)').matches"
-    ), "The reduced-motion media query was not active."
+    assert page.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches"), (
+        "The reduced-motion media query was not active."
+    )
 
     page.get_by_role("button", name="数据工作室").click()
     expect(page.locator(".detailed-evidence-studio")).to_be_visible()
+    _wait_for_finite_motion(page)
 
     page.get_by_role("button", name="导出", exact=True).click()
     expect(page.locator(".export-menu")).to_be_visible()
@@ -307,6 +363,7 @@ def _assert_extended_reduced_motion(page: Any, expect: Any) -> None:
     navigation = page.get_by_role("navigation", name="主导航")
     models = navigation.get_by_role("button", name="模型设置", exact=True)
     create = navigation.get_by_role("button", name="新建任务", exact=True)
+    tasks = navigation.get_by_role("button", name="任务运行", exact=True)
 
     models.click()
     expect(page.locator(".models-page")).to_be_visible()
@@ -354,6 +411,15 @@ def _assert_extended_reduced_motion(page: Any, expect: Any) -> None:
     expect(page.locator(".motion-presence-benchmark")).to_have_count(
         0,
         timeout=2_000,
+    )
+
+    tasks.click()
+    expect(page.locator(".run-page")).to_be_visible()
+    progress = page.locator(".progress-track > span").first
+    expect(progress).to_be_visible()
+    style = _css_motion_style(page, ".progress-track > span")
+    assert style["transitionMs"] == 0, (
+        "The live progress fill retained a transition under prefers-reduced-motion."
     )
 
 

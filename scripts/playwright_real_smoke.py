@@ -41,9 +41,9 @@ def main() -> int:
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.on(
                 "console",
-                lambda message: console_errors.append(message.text)
-                if message.type == "error"
-                else None,
+                lambda message: (
+                    console_errors.append(message.text) if message.type == "error" else None
+                ),
             )
             page.goto(args.base_url, wait_until="networkidle")
             page.get_by_text("后端 0.2.0", exact=True).wait_for(timeout=15_000)
@@ -86,9 +86,13 @@ def main() -> int:
                 full_page=True,
             )
             page.get_by_role("button", name="导出").click()
-            page.get_by_role("button", name="Markdown", exact=True).wait_for()
+            page.get_by_role("menuitem", name="Markdown", exact=True).wait_for()
             if args.pdf:
-                page.get_by_role("button", name="打印 / PDF", exact=True).wait_for()
+                page.get_by_role(
+                    "menuitem",
+                    name="打印 / PDF",
+                    exact=True,
+                ).wait_for()
             browser.close()
     except Error as error:
         raise SystemExit(f"Real API Playwright smoke failed: {error}") from error

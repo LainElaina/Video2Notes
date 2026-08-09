@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, type RefObject } from 'react'
 import {
   Archive,
   Check,
@@ -27,7 +27,13 @@ const formatBytes = (bytes: number): string => {
   return `${value.toFixed(value >= 100 || exponent === 0 ? 0 : value >= 10 ? 1 : 2)} ${units[exponent]}`
 }
 
-export function DependencyPreflightDialog() {
+interface DependencyPreflightDialogProps {
+  restoreFocusRef?: RefObject<HTMLElement | null>
+}
+
+export function DependencyPreflightDialog({
+  restoreFocusRef,
+}: DependencyPreflightDialogProps) {
   const open = useStudioStore(state => state.jobPreflightDialogOpen)
   const preflight = useStudioStore(state => state.jobPreflight)
   const inventory = useStudioStore(state => state.runtimePackages)
@@ -62,6 +68,8 @@ export function DependencyPreflightDialog() {
         show={false}
         className="motion-presence-modal"
         exitMs={160}
+        focusMode="modal"
+        restoreFocusRef={restoreFocusRef}
       >
         {null}
       </MotionPresence>
@@ -93,10 +101,12 @@ export function DependencyPreflightDialog() {
     dismiss()
     navigate('models')
     window.setTimeout(() => {
-      document.getElementById('runtime-packages')?.scrollIntoView({
+      const runtimePackages = document.getElementById('runtime-packages')
+      runtimePackages?.scrollIntoView({
         behavior: preferredScrollBehavior(),
         block: 'start',
       })
+      runtimePackages?.focus({ preventScroll: true })
     }, 80)
   }
 
@@ -105,6 +115,8 @@ export function DependencyPreflightDialog() {
       show={visible}
       className="motion-presence-modal"
       exitMs={160}
+      focusMode="modal"
+      restoreFocusRef={restoreFocusRef}
     >
       <div className="dependency-dialog-backdrop" role="presentation">
         <section
@@ -112,6 +124,7 @@ export function DependencyPreflightDialog() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="dependency-dialog-title"
+          tabIndex={-1}
         >
         <header>
           <span className="dependency-dialog-icon">
@@ -169,29 +182,44 @@ export function DependencyPreflightDialog() {
           ))}
         </div>
 
-        {waitingForCompletion && (
-          <div className="dependency-install-progress" aria-live="polite">
-            <LoaderCircle className="spin" size={16} aria-hidden="true" />
-            <div>
-              <strong>组件任务正在执行，完成后自动重检</strong>
-              <span>
-                {activeOperations.length > 0
-                  ? activeOperations.map(operation => `${operation.packageId} ${Math.round(operation.progress * 100)}%`).join('；')
-                  : '正在等待后端返回最新安装状态。'}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {!waitingForCompletion && runtimePackageError && (
-          <div className="dependency-install-progress is-error" role="alert">
-            <TriangleAlert size={16} aria-hidden="true" />
-            <div>
-              <strong>依赖准备未完成</strong>
-              <span>{runtimePackageError}</span>
-            </div>
-          </div>
-        )}
+        <div className="motion-swap-stack dependency-install-status">
+          <MotionPresence
+            show={waitingForCompletion}
+            className="motion-presence-swap"
+            exitMs={140}
+            animateInitial={false}
+          >
+            {waitingForCompletion && (
+              <div className="dependency-install-progress" aria-live="polite">
+                <LoaderCircle className="spin" size={16} aria-hidden="true" />
+                <div>
+                  <strong>组件任务正在执行，完成后自动重检</strong>
+                  <span>
+                    {activeOperations.length > 0
+                      ? activeOperations.map(operation => `${operation.packageId} ${Math.round(operation.progress * 100)}%`).join('；')
+                      : '正在等待后端返回最新安装状态。'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </MotionPresence>
+          <MotionPresence
+            show={!waitingForCompletion && Boolean(runtimePackageError)}
+            className="motion-presence-swap"
+            exitMs={140}
+            animateInitial={false}
+          >
+            {!waitingForCompletion && runtimePackageError && (
+              <div className="dependency-install-progress is-error" role="alert">
+                <TriangleAlert size={16} aria-hidden="true" />
+                <div>
+                  <strong>依赖准备未完成</strong>
+                  <span>{runtimePackageError}</span>
+                </div>
+              </div>
+            )}
+          </MotionPresence>
+        </div>
 
         <footer>
           <span><Check size={14} aria-hidden="true" />现有视频、模型权重和用户目录不会被安装操作覆盖。</span>

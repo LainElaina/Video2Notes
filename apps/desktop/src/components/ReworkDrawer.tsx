@@ -163,6 +163,8 @@ export function ReworkDrawer({
         type="button"
         className="workbench-scrim"
         aria-label="关闭局部返工面板"
+        aria-hidden="true"
+        tabIndex={-1}
         onClick={onClose}
       />
       <aside
@@ -170,6 +172,7 @@ export function ReworkDrawer({
         role="dialog"
         aria-modal="true"
         aria-labelledby="rework-title"
+        tabIndex={-1}
       >
         <header className="workbench-drawer-header">
           <div>

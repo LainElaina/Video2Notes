@@ -108,8 +108,15 @@ export function CreateProcessingOptions() {
           </div>
         </div>
 
-        {audioOnly ? (
-          <div className="create-audio-only-contract motion-swap-surface" role="note">
+        <div className="motion-swap-stack create-processing-contract-stack">
+          <MotionPresence
+            show={audioOnly}
+            className="motion-presence-swap"
+            exitMs={140}
+            animateInitial={false}
+          >
+            {audioOnly && (
+          <div className="create-audio-only-contract" role="note">
             <AudioLines size={20} aria-hidden="true" />
             <div>
               <strong>保留音频识别与报告生成</strong>
@@ -119,8 +126,16 @@ export function CreateProcessingOptions() {
               </p>
             </div>
           </div>
-        ) : (
-          <div className="create-visual-contract motion-swap-surface">
+            )}
+          </MotionPresence>
+          <MotionPresence
+            show={!audioOnly}
+            className="motion-presence-swap"
+            exitMs={140}
+            animateInitial={false}
+          >
+            {!audioOnly && (
+          <div className="create-visual-contract">
             <div className="create-sampling-default">
           <label>
             全局采样方式
@@ -285,7 +300,9 @@ export function CreateProcessingOptions() {
               )}
             </MotionPresence>
           </div>
-        )}
+            )}
+          </MotionPresence>
+        </div>
       </section>
 
       <section className="create-advanced-panel" aria-labelledby="report-preset-title">

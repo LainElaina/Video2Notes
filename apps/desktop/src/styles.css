@@ -1333,7 +1333,7 @@ button:disabled {
   font-weight: 650;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
+    transform var(--motion-fast) var(--ease-out);
 }
 
 .manifest-reprobe:hover {
@@ -1508,7 +1508,7 @@ button:disabled {
 }
 
 .advanced-options-trigger svg {
-  transition: transform var(--motion-base) var(--ease-emphasized);
+  transition: transform var(--motion-base) var(--ease-in-out);
 }
 
 .advanced-options[data-expanded="true"] .advanced-options-trigger svg {
@@ -3203,6 +3203,16 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.advanced-auth-fields {
+  grid-column: 1 / -1;
+}
+
+.advanced-auth-browser-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .advanced-grid .advanced-check {
   display: flex;
   align-items: center;
@@ -3553,6 +3563,11 @@ button:disabled {
 @media (max-width: 900px) {
   body {
     overflow: auto;
+  }
+
+  .advanced-grid,
+  .advanced-auth-browser-fields {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .app-shell,
@@ -5766,9 +5781,7 @@ button:disabled {
   border: 1px solid var(--rule);
   border-radius: var(--radius-control);
   background: var(--paper);
-  transition:
-    border-color var(--motion-base) var(--ease-standard),
-    box-shadow var(--motion-base) var(--ease-standard);
+  transition: border-color var(--motion-base) var(--ease-standard);
 }
 
 .benchmark-guide:hover,
@@ -5793,7 +5806,7 @@ button:disabled {
   text-align: left;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
-    transform var(--motion-fast) var(--ease-standard);
+    transform var(--motion-fast) var(--ease-out);
 }
 
 .benchmark-guide-trigger:hover {
@@ -5851,7 +5864,7 @@ button:disabled {
 
 .benchmark-guide-chevron {
   color: var(--muted);
-  transition: transform var(--motion-slow) var(--ease-emphasized);
+  transition: transform var(--motion-slow) var(--ease-in-out);
 }
 
 .benchmark-guide.is-expanded .benchmark-guide-chevron {
@@ -6520,6 +6533,12 @@ button:disabled {
   color: var(--danger);
 }
 
+.report-revision-drawer .motion-presence-inline-feedback > .report-revision-error {
+  padding-right: 26px;
+  padding-left: 26px;
+  border-bottom: 1px solid var(--rule);
+}
+
 .report-revision-error svg {
   flex: none;
   margin-top: 1px;
@@ -6838,9 +6857,9 @@ button:disabled {
   color: var(--lens);
   text-align: left;
   transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    transform 160ms ease;
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-out);
 }
 
 .report-revision-downloads button:hover:not(:disabled) {
@@ -6849,7 +6868,7 @@ button:disabled {
 }
 
 .report-revision-downloads button:active:not(:disabled) {
-  transform: translateY(1px);
+  border-color: var(--lens);
 }
 
 .report-revision-downloads button:disabled {
@@ -6939,6 +6958,11 @@ button:disabled {
 
   .report-revision-header,
   .report-revision-drawer .workbench-drawer-body > section {
+    padding-right: 17px;
+    padding-left: 17px;
+  }
+
+  .report-revision-drawer .motion-presence-inline-feedback > .report-revision-error {
     padding-right: 17px;
     padding-left: 17px;
   }
@@ -7179,7 +7203,6 @@ button:disabled {
 .component-refresh-button:not(:disabled):hover {
   border-color: var(--rule-strong);
   color: var(--lens);
-  transform: translateY(-1px);
 }
 
 .component-refresh-button:disabled {

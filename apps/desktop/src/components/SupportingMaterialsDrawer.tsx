@@ -94,6 +94,8 @@ export function SupportingMaterialsDrawer({
         type="button"
         className="workbench-scrim"
         aria-label="关闭补充资料面板"
+        aria-hidden="true"
+        tabIndex={-1}
         onClick={onClose}
       />
       <aside
@@ -101,6 +103,7 @@ export function SupportingMaterialsDrawer({
         role="dialog"
         aria-modal="true"
         aria-labelledby="materials-title"
+        tabIndex={-1}
       >
         <header className="workbench-drawer-header">
           <div>

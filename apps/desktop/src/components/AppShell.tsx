@@ -405,11 +405,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [contextSlotOpen, setContextSlotOpen] = useState(contextShouldShow)
 
   useEffect(() => {
-    if (professionalReader) {
-      setContextSlotOpen(false)
-      return
-    }
-
     if (contextShouldShow) {
       setContextSlotOpen(true)
       return
@@ -417,7 +412,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
     const closeTimer = window.setTimeout(() => setContextSlotOpen(false), 140)
     return () => window.clearTimeout(closeTimer)
-  }, [contextShouldShow, professionalReader])
+  }, [contextShouldShow])
 
   const layoutContextCollapsed = contextCollapsed && !contextSlotOpen
 
@@ -430,15 +425,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       data-workspace-mode={workspaceMode}
     >
       <TopNavigation />
-      {!professionalReader && (
-        <MotionPresence
-          show={!contextCollapsed}
-          className="motion-presence-context-panel"
-          exitMs={140}
-        >
-          {!contextCollapsed && <ContextPanel />}
-        </MotionPresence>
-      )}
+      <MotionPresence
+        show={contextShouldShow}
+        className="motion-presence-context-panel"
+        exitMs={140}
+      >
+        {contextShouldShow && <ContextPanel />}
+      </MotionPresence>
       <section className="workspace">
         <WorkspaceHeader />
         {contextCollapsed && !professionalReader && (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CheckCircle2,
   Download,
@@ -26,6 +26,7 @@ import { ReworkDrawer } from '../components/ReworkDrawer'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SupportingMaterialsDrawer } from '../components/SupportingMaterialsDrawer'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
+import { usePopoverFocus } from '../components/usePopoverFocus'
 import type { EvidenceKind, NoteDocument, ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
 import { useStudioStore } from '../store'
@@ -98,7 +99,15 @@ export function ReaderPage() {
     startSeconds: number
     endSeconds: number
   }>()
-  const exportControlRef = useRef<HTMLDivElement>(null)
+  const exportButtonRef = useRef<HTMLButtonElement>(null)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+  const closeExport = useCallback(() => setExportOpen(false), [])
+  const dismissExport = usePopoverFocus({
+    open: exportOpen,
+    triggerRef: exportButtonRef,
+    panelRef: exportMenuRef,
+    onDismiss: closeExport,
+  })
 
   const activeTask = tasks.find(task => task.id === activeTaskId)
   const terminalTask =
@@ -125,33 +134,19 @@ export function ReaderPage() {
     task?.evidence.filter(item => evidenceFilter === 'all' || item.kind === evidenceFilter) ?? []
 
   useEffect(() => {
-    if (!exportOpen) return
-
-    const dismissOutside = (event: PointerEvent) => {
-      if (!exportControlRef.current?.contains(event.target as Node)) {
-        setExportOpen(false)
-      }
-    }
-
-    document.addEventListener('pointerdown', dismissOutside)
-    return () => document.removeEventListener('pointerdown', dismissOutside)
-  }, [exportOpen])
-
-  useEffect(() => {
-    if (!exportOpen && !materialsOpen && !reworkOpen && !reportOpen) return
+    if (!materialsOpen && !reworkOpen && !reportOpen) return
 
     const dismissTopLayer = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
       if (reportOpen) setReportOpen(false)
       else if (reworkOpen) setReworkOpen(false)
-      else if (materialsOpen) setMaterialsOpen(false)
-      else setExportOpen(false)
+      else setMaterialsOpen(false)
     }
 
     document.addEventListener('keydown', dismissTopLayer)
     return () => document.removeEventListener('keydown', dismissTopLayer)
-  }, [exportOpen, materialsOpen, reportOpen, reworkOpen])
+  }, [materialsOpen, reportOpen, reworkOpen])
 
   if (terminalTask) {
     return (
@@ -179,7 +174,7 @@ export function ReaderPage() {
   }
 
   const exportMarkdown = () => {
-    setExportOpen(false)
+    dismissExport('action')
     if (task.realBackend) {
       downloadArtifact(task.id, 'markdown')
       return
@@ -187,7 +182,7 @@ export function ReaderPage() {
     downloadText('video2notes-demo.md', buildMarkdown(task, note), 'text/markdown;charset=utf-8')
   }
   const exportHtml = () => {
-    setExportOpen(false)
+    dismissExport('action')
     if (task.realBackend) {
       downloadArtifact(task.id, 'html')
       return
@@ -201,7 +196,7 @@ export function ReaderPage() {
     )
   }
   const openRework = () => {
-    setExportOpen(false)
+    dismissExport('transfer')
     setMaterialsOpen(false)
     setReportOpen(false)
     const startSeconds =
@@ -219,13 +214,13 @@ export function ReaderPage() {
     setReworkOpen(true)
   }
   const openMaterials = () => {
-    setExportOpen(false)
+    dismissExport('transfer')
     setReworkOpen(false)
     setReportOpen(false)
     setMaterialsOpen(true)
   }
   const openReport = () => {
-    setExportOpen(false)
+    dismissExport('transfer')
     setMaterialsOpen(false)
     setReworkOpen(false)
     setReportOpen(true)
@@ -308,13 +303,15 @@ export function ReaderPage() {
             <Focus size={15} aria-hidden="true" />
             专注阅读
           </button>
-          <div className="export-control" ref={exportControlRef}>
+          <div className="export-control">
             <button
+              ref={exportButtonRef}
               className="button button-secondary"
               type="button"
               onClick={() => setExportOpen(value => !value)}
               aria-expanded={exportOpen}
               aria-controls="reader-export-menu"
+              aria-haspopup="menu"
             >
               <Download size={15} aria-hidden="true" />
               导出
@@ -324,19 +321,26 @@ export function ReaderPage() {
               className="motion-presence-popover"
               exitMs={120}
             >
-              <div className="export-menu" id="reader-export-menu">
-                <button type="button" onClick={exportMarkdown}>
+              <div
+                ref={exportMenuRef}
+                className="export-menu"
+                id="reader-export-menu"
+                role="menu"
+                aria-label="导出格式"
+              >
+                <button type="button" role="menuitem" onClick={exportMarkdown}>
                   <FileText size={15} aria-hidden="true" />
                   Markdown
                 </button>
-                <button type="button" onClick={exportHtml}>
+                <button type="button" role="menuitem" onClick={exportHtml}>
                   <FileCode2 size={15} aria-hidden="true" />
                   离线 HTML
                 </button>
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => {
-                    setExportOpen(false)
+                    dismissExport('action')
                     if (task.realBackend && task.artifactPaths?.pdf) {
                       downloadArtifact(task.id, 'pdf')
                     } else {
@@ -353,22 +357,39 @@ export function ReaderPage() {
         </div>
       </div>
 
-      <div className="reader-mode-surface" key={workspaceMode}>
-        {workspaceMode === 'professional' ? (
-          <DetailedEvidenceStudio
-            task={task}
-            note={note}
-            currentTimeSeconds={currentTimeSeconds}
-            selectedEvidenceId={selectedEvidenceId}
-            onSeek={setCurrentTime}
-            onSelectEvidence={selectEvidence}
-            onRequestRework={(startSeconds, endSeconds) => {
-              setReworkRange({ startSeconds, endSeconds })
-              setReworkOpen(true)
-            }}
-          />
-        ) : (
-          <div className="reader-split">
+      <div className="reader-mode-stack">
+        <MotionPresence
+          show={workspaceMode === 'professional'}
+          className="motion-presence-reader-mode"
+          exitMs={140}
+          animateInitial={false}
+        >
+          {workspaceMode === 'professional' && (
+            <div className="reader-mode-surface">
+              <DetailedEvidenceStudio
+                task={task}
+                note={note}
+                currentTimeSeconds={currentTimeSeconds}
+                selectedEvidenceId={selectedEvidenceId}
+                onSeek={setCurrentTime}
+                onSelectEvidence={selectEvidence}
+                onRequestRework={(startSeconds, endSeconds) => {
+                  setReworkRange({ startSeconds, endSeconds })
+                  setReworkOpen(true)
+                }}
+              />
+            </div>
+          )}
+        </MotionPresence>
+        <MotionPresence
+          show={workspaceMode === 'guided'}
+          className="motion-presence-reader-mode"
+          exitMs={140}
+          animateInitial={false}
+        >
+          {workspaceMode === 'guided' && (
+            <div className="reader-mode-surface">
+              <div className="reader-split">
         <article className="note-paper">
           <header className="note-title-block" id="note-overview">
             <span className="section-kicker">VERIFIED NOTE / {note.generatedAt}</span>
@@ -549,14 +570,17 @@ export function ReaderPage() {
             </span>
             <Sparkles size={15} aria-hidden="true" />
           </div>
-        </aside>
-          </div>
-        )}
+                </aside>
+              </div>
+            </div>
+          )}
+        </MotionPresence>
       </div>
       <MotionPresence
         show={materialsOpen}
         className="motion-presence-overlay"
         exitMs={160}
+        focusMode="modal"
       >
         <SupportingMaterialsDrawer
           task={task}
@@ -569,6 +593,7 @@ export function ReaderPage() {
         show={reworkOpen}
         className="motion-presence-overlay"
         exitMs={160}
+        focusMode="modal"
       >
         <ReworkDrawer
           task={task}
@@ -582,6 +607,7 @@ export function ReaderPage() {
         show={reportOpen}
         className="motion-presence-overlay"
         exitMs={160}
+        focusMode="modal"
       >
         <ReportRevisionDrawer
           taskTitle={task.source.title}

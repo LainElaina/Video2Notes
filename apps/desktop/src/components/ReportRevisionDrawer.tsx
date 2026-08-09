@@ -11,6 +11,7 @@ import {
   RefreshCcw,
   X,
 } from 'lucide-react'
+import { MotionPresence } from './MotionPresence'
 
 export type ReportRevisionPreset =
   | 'concise'
@@ -152,6 +153,8 @@ export function ReportRevisionDrawer({
         type="button"
         className="workbench-scrim"
         aria-label="关闭报告重生成面板"
+        aria-hidden="true"
+        tabIndex={-1}
         onClick={onClose}
       />
       <aside
@@ -161,6 +164,7 @@ export function ReportRevisionDrawer({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         aria-busy={busy}
+        tabIndex={-1}
       >
         <header className="workbench-drawer-header report-revision-header">
           <div>
@@ -211,15 +215,22 @@ export function ReportRevisionDrawer({
             </p>
           </section>
 
-          {error && (
-            <section className="report-revision-error" role="alert">
-              <AlertTriangle size={17} aria-hidden="true" />
-              <div>
-                <strong>报告生成失败</strong>
-                <p>{error}</p>
-              </div>
-            </section>
-          )}
+          <MotionPresence
+            show={Boolean(error)}
+            className="motion-presence-inline-feedback"
+            exitMs={120}
+            animateInitial={false}
+          >
+            {error && (
+              <section className="report-revision-error" role="alert">
+                <AlertTriangle size={17} aria-hidden="true" />
+                <div>
+                  <strong>报告生成失败</strong>
+                  <p>{error}</p>
+                </div>
+              </section>
+            )}
+          </MotionPresence>
 
           <section className="report-revision-contract">
             <div className="drawer-section-heading">
@@ -332,8 +343,15 @@ export function ReportRevisionDrawer({
               </div>
               <Clock3 size={16} aria-hidden="true" />
             </div>
-            {revisions.length > 0 ? (
-              <div className="report-revision-list">
+            <div className="motion-swap-stack report-revision-history-stack">
+              <MotionPresence
+                show={revisions.length > 0}
+                className="motion-presence-swap"
+                exitMs={140}
+                animateInitial={false}
+              >
+                {revisions.length > 0 && (
+                  <div className="report-revision-list">
                 {revisions.map((revision, index) => {
                   const isCurrentEvidence =
                     revision.evidenceRevisionId === activeEvidenceRevisionId
@@ -411,18 +429,28 @@ export function ReportRevisionDrawer({
                     </article>
                   )
                 })}
-              </div>
-            ) : (
-              <div className="report-revision-empty">
-                <RefreshCcw size={19} aria-hidden="true" />
-                <div>
-                  <strong>还没有重新生成的报告</strong>
-                  <p>
-                    选择报告类型和输出格式后创建第一个不可变 revision；原始报告不会被覆盖。
-                  </p>
-                </div>
-              </div>
-            )}
+                  </div>
+                )}
+              </MotionPresence>
+              <MotionPresence
+                show={revisions.length === 0}
+                className="motion-presence-swap"
+                exitMs={140}
+                animateInitial={false}
+              >
+                {revisions.length === 0 && (
+                  <div className="report-revision-empty">
+                    <RefreshCcw size={19} aria-hidden="true" />
+                    <div>
+                      <strong>还没有重新生成的报告</strong>
+                      <p>
+                        选择报告类型和输出格式后创建第一个不可变 revision；原始报告不会被覆盖。
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </MotionPresence>
+            </div>
           </section>
         </div>
 

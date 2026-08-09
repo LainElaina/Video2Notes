@@ -31,6 +31,7 @@ import type {
   RuntimePackageSource,
 } from '../domain'
 import { useStudioStore } from '../store'
+import { MotionPresence } from './MotionPresence'
 
 interface RuntimePackagesPanelProps {
   experienceMode: ExperienceMode
@@ -270,6 +271,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
       className="runtime-packages-panel models-surface"
       id="runtime-packages"
       aria-labelledby="runtime-packages-title"
+      tabIndex={-1}
     >
       <div className="models-section-heading runtime-packages-heading">
         <div className="section-heading-icon">
@@ -335,39 +337,60 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
       </div>
 
       {experienceMode === 'guided' && (
-        <div className={`runtime-guidance motion-swap-surface ${missingRequirements.length === 0 ? 'is-ready' : ''}`}>
-          <span className="runtime-guidance-mark">
-            {missingRequirements.length === 0 ? (
-              <ShieldCheck size={18} aria-hidden="true" />
-            ) : (
-              <PackageCheck size={18} aria-hidden="true" />
+        <div className="motion-swap-stack motion-swap-surface runtime-guidance-stack">
+          <MotionPresence
+            show={missingRequirements.length === 0}
+            className="motion-presence-swap"
+            exitMs={140}
+            animateInitial={false}
+          >
+            {missingRequirements.length === 0 && (
+              <div className="runtime-guidance is-ready">
+                <span className="runtime-guidance-mark">
+                  <ShieldCheck size={18} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>常用本地能力已经绑定</strong>
+                  <span>
+                    创建任务时仍会按处理范围再次预检，不需要手工选择 DLL 或 Python 环境。
+                  </span>
+                </div>
+              </div>
             )}
-          </span>
-          <div>
-            <strong>
-              {missingRequirements.length === 0
-                ? '常用本地能力已经绑定'
-                : `还有 ${missingRequirements.length} 项能力未绑定`}
-            </strong>
-            <span>
-              {missingRequirements.length === 0
-                ? '创建任务时仍会按处理范围再次预检，不需要手工选择 DLL 或 Python 环境。'
-                : recommendedRelease
-                  ? `${recommendedRelease.displayName} 与当前硬件匹配，安装前会再次显示下载来源、体积和目录。`
-                  : '当前可信目录没有可自动下载的匹配归档，可检测本机环境或登记自描述运行时目录。'}
-            </span>
-          </div>
-          {recommendedRelease && missingRequirements.length > 0 && (
-            <button
-              className="button button-primary"
-              type="button"
-              disabled={!canMutate || activeOperations.length > 0}
-              onClick={() => installRelease(recommendedRelease)}
-            >
-              <Download size={14} aria-hidden="true" />
-              安装推荐运行时
-            </button>
-          )}
+          </MotionPresence>
+          <MotionPresence
+            show={missingRequirements.length > 0}
+            className="motion-presence-swap"
+            exitMs={140}
+            animateInitial={false}
+          >
+            {missingRequirements.length > 0 && (
+              <div className="runtime-guidance">
+                <span className="runtime-guidance-mark">
+                  <PackageCheck size={18} aria-hidden="true" />
+                </span>
+                <div>
+                  <strong>还有 {missingRequirements.length} 项能力未绑定</strong>
+                  <span>
+                    {recommendedRelease
+                      ? `${recommendedRelease.displayName} 与当前硬件匹配，安装前会再次显示下载来源、体积和目录。`
+                      : '当前可信目录没有可自动下载的匹配归档，可检测本机环境或登记自描述运行时目录。'}
+                  </span>
+                </div>
+                {recommendedRelease && (
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    disabled={!canMutate || activeOperations.length > 0}
+                    onClick={() => installRelease(recommendedRelease)}
+                  >
+                    <Download size={14} aria-hidden="true" />
+                    安装推荐运行时
+                  </button>
+                )}
+              </div>
+            )}
+          </MotionPresence>
         </div>
       )}
 
