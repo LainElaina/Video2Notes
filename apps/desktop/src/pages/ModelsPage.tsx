@@ -12,6 +12,7 @@ import {
   HardDrive,
   KeyRound,
   Link2,
+  Languages,
   LoaderCircle,
   LockKeyhole,
   Plus,
@@ -44,6 +45,7 @@ import { MotionPresence } from '../components/MotionPresence'
 import { RuntimePackagesPanel } from '../components/RuntimePackagesPanel'
 import { VisualAsset } from '../components/VisualAsset'
 import { useStudioStore } from '../store'
+import { useI18n } from '../i18n'
 import {
   useUiPreferences,
   type FontSizePreset,
@@ -66,6 +68,23 @@ const capabilityLabels: Record<ModelCapability, string> = {
   video_frame_metrics: '画面变化指标',
 }
 
+const capabilityLabelsEn: Record<ModelCapability, string> = {
+  text: 'Text understanding',
+  vision: 'Image understanding',
+  structured_output: 'Structured output',
+  long_context: 'Long context',
+  embeddings: 'Embeddings',
+  asr: 'Speech recognition',
+  language_id: 'Language identification',
+  segment_timestamps: 'Segment timestamps',
+  word_timestamps: 'Word timestamps',
+  word_confidence: 'Word confidence',
+  ocr: 'Text recognition',
+  ocr_boxes: 'OCR bounding boxes',
+  ocr_confidence: 'OCR confidence',
+  video_frame_metrics: 'Frame-change metrics',
+}
+
 const providerKindLabels: Record<ProviderKind, string> = {
   local: '本机引擎',
   openai: 'OpenAI',
@@ -76,6 +95,22 @@ const providerKindLabels: Record<ProviderKind, string> = {
   custom: '自定义服务',
 }
 
+const providerKindLabelsEn: Record<ProviderKind, string> = {
+  local: 'Local engine',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  google: 'Google',
+  openai_compatible: 'OpenAI-compatible service',
+  ollama: 'Ollama',
+  custom: 'Custom service',
+}
+
+const protocolLabelsEn: Partial<Record<ProviderProtocol, string>> = {
+  local: 'Local in-process engine',
+  ollama_native_chat: 'Ollama native chat',
+  custom_http: 'Custom HTTP (experimental)',
+}
+
 const authLabels: Record<ProviderAuthScheme, string> = {
   none: '无需认证',
   bearer: 'Bearer Token',
@@ -84,20 +119,34 @@ const authLabels: Record<ProviderAuthScheme, string> = {
   custom_header: '自定义请求头',
 }
 
+const authLabelsEn: Record<ProviderAuthScheme, string> = {
+  none: 'No authentication',
+  bearer: 'Bearer token',
+  x_api_key: 'x-api-key',
+  x_goog_api_key: 'x-goog-api-key',
+  custom_header: 'Custom request header',
+}
+
 const preferenceCopy = {
   responsive: {
     title: '保持电脑流畅',
+    titleEn: 'Keep the computer responsive',
     detail: '为浏览器、播放器和其他前台应用保留更多资源。',
+    detailEn: 'Reserve more resources for browsers, players, and other foreground apps.',
     icon: Zap,
   },
   balanced: {
     title: '平衡处理',
+    titleEn: 'Balanced processing',
     detail: '在处理速度、温度和前台响应之间取得平衡。',
+    detailEn: 'Balance processing speed, temperature, and foreground responsiveness.',
     icon: Gauge,
   },
   throughput: {
     title: '尽快完成',
+    titleEn: 'Finish as soon as possible',
     detail: '允许任务使用更多空闲资源，适合离开电脑时批处理。',
+    detailEn: 'Let tasks use more idle resources when the computer is unattended.',
     icon: Radar,
   },
 } as const
@@ -160,6 +209,25 @@ const hardwareTierCopy: Record<HardwareTier, { label: string; reason: string }> 
   },
 }
 
+const hardwareTierCopyEn: typeof hardwareTierCopy = {
+  cpu_igpu: {
+    label: 'CPU / integrated GPU',
+    reason: 'Uses lightweight ASR and mobile OCR with serial inference to preserve foreground responsiveness.',
+  },
+  gpu_8gb: {
+    label: '8 GB VRAM',
+    reason: 'Prioritizes larger speech recognition with lightweight OCR while controlling peak VRAM.',
+  },
+  gpu_12gb: {
+    label: '12 GB VRAM',
+    reason: 'Runs large-v3 ASR and higher-capacity OCR serially for detail with safe VRAM use.',
+  },
+  gpu_24gb_plus: {
+    label: '24 GB+ VRAM',
+    reason: 'Uses the highest-accuracy local ASR and OCR combination in the catalog.',
+  },
+}
+
 const componentStateCopy: Record<
   ComponentInventoryItemDefinition['state'],
   string
@@ -168,6 +236,13 @@ const componentStateCopy: Record<
   missing: '待下载',
   incomplete: '可续传',
   degraded: '需修复',
+}
+
+const componentStateCopyEn: typeof componentStateCopy = {
+  ready: 'Ready',
+  missing: 'Download needed',
+  incomplete: 'Resumable',
+  degraded: 'Repair needed',
 }
 
 const clampNumber = (value: string, min: number, max: number): number =>
@@ -212,29 +287,104 @@ type ModelDraft = {
 const numericControls: Array<{
   key: keyof PerformanceOverrides
   label: string
+  labelEn: string
   hint: string
+  hintEn: string
   min: number
   max: number
   step?: number
   group: '调度' | '视觉扫描' | 'OCR' | 'ASR' | '验证'
 }> = [
-  { key: 'cpuWorkers', label: 'CPU worker', hint: '并行 CPU 工作线程', min: 1, max: 256, group: '调度' },
-  { key: 'remoteModelConcurrency', label: '远程模型并发', hint: '同时进行的 API 请求', min: 1, max: 16, group: '调度' },
-  { key: 'concurrentGpuStages', label: 'GPU 引擎槽位', hint: '0 强制 CPU；1 允许串行 GPU 推理', min: 0, max: 1, group: '调度' },
-  { key: 'visualDecodeThreads', label: '视频解码线程', hint: '视觉解码线程数量', min: 1, max: 64, group: '视觉扫描' },
-  { key: 'analysisWidth', label: '场景检测宽度', hint: '仅用于画面变化检测（px）', min: 320, max: 1920, step: 32, group: '视觉扫描' },
-  { key: 'cheapScanFps', label: '粗扫 FPS', hint: '低成本变化检测频率', min: 0.25, max: 30, step: 0.25, group: '视觉扫描' },
-  { key: 'expensiveScanFps', label: '精扫 FPS', hint: '候选区间精细扫描频率', min: 0.25, max: 60, step: 0.25, group: '视觉扫描' },
-  { key: 'maxFixedSamples', label: '固定采样上限', hint: '单段最多允许的固定帧数', min: 1, max: 20000, group: '视觉扫描' },
-  { key: 'ocrInferenceMaxWidth', label: 'OCR 推理宽度', hint: '关键帧文字识别的独立缩放上限（px）', min: 320, max: 4096, step: 32, group: 'OCR' },
-  { key: 'ocrCpuThreads', label: 'OCR CPU 线程', hint: 'OCR 在 CPU 上的线程数', min: 1, max: 64, group: 'OCR' },
-  { key: 'asrCpuThreads', label: 'ASR CPU 线程', hint: 'ASR 在 CPU 上的线程数', min: 1, max: 64, group: 'ASR' },
-  { key: 'asrBeamSize', label: 'ASR beam', hint: '语音解码搜索宽度', min: 1, max: 10, group: 'ASR' },
-  { key: 'verificationPasses', label: '验证轮次', hint: '最终事实校验次数', min: 0, max: 4, group: '验证' },
-  { key: 'screenshotBudgetPerSection', label: '每节截图上限', hint: '每个笔记章节最多截图数', min: 0, max: 16, group: '验证' },
+  { key: 'cpuWorkers', label: 'CPU worker', labelEn: 'CPU workers', hint: '并行 CPU 工作线程', hintEn: 'Parallel CPU worker threads', min: 1, max: 256, group: '调度' },
+  { key: 'remoteModelConcurrency', label: '远程模型并发', labelEn: 'Remote model concurrency', hint: '同时进行的 API 请求', hintEn: 'Concurrent API requests', min: 1, max: 16, group: '调度' },
+  { key: 'concurrentGpuStages', label: 'GPU 引擎槽位', labelEn: 'GPU engine slots', hint: '0 强制 CPU；1 允许串行 GPU 推理', hintEn: '0 forces CPU; 1 allows serial GPU inference', min: 0, max: 1, group: '调度' },
+  { key: 'visualDecodeThreads', label: '视频解码线程', labelEn: 'Video decode threads', hint: '视觉解码线程数量', hintEn: 'Threads used for visual decoding', min: 1, max: 64, group: '视觉扫描' },
+  { key: 'analysisWidth', label: '场景检测宽度', labelEn: 'Scene detection width', hint: '仅用于画面变化检测（px）', hintEn: 'Used only for frame-change detection (px)', min: 320, max: 1920, step: 32, group: '视觉扫描' },
+  { key: 'cheapScanFps', label: '粗扫 FPS', labelEn: 'Coarse scan FPS', hint: '低成本变化检测频率', hintEn: 'Low-cost change detection frequency', min: 0.25, max: 30, step: 0.25, group: '视觉扫描' },
+  { key: 'expensiveScanFps', label: '精扫 FPS', labelEn: 'Detailed scan FPS', hint: '候选区间精细扫描频率', hintEn: 'Detailed scan frequency inside candidate ranges', min: 0.25, max: 60, step: 0.25, group: '视觉扫描' },
+  { key: 'maxFixedSamples', label: '固定采样上限', labelEn: 'Fixed-sample limit', hint: '单段最多允许的固定帧数', hintEn: 'Maximum fixed frames per range', min: 1, max: 20000, group: '视觉扫描' },
+  { key: 'ocrInferenceMaxWidth', label: 'OCR 推理宽度', labelEn: 'OCR inference width', hint: '关键帧文字识别的独立缩放上限（px）', hintEn: 'Independent keyframe OCR resize limit (px)', min: 320, max: 4096, step: 32, group: 'OCR' },
+  { key: 'ocrCpuThreads', label: 'OCR CPU 线程', labelEn: 'OCR CPU threads', hint: 'OCR 在 CPU 上的线程数', hintEn: 'CPU threads used by OCR', min: 1, max: 64, group: 'OCR' },
+  { key: 'asrCpuThreads', label: 'ASR CPU 线程', labelEn: 'ASR CPU threads', hint: 'ASR 在 CPU 上的线程数', hintEn: 'CPU threads used by ASR', min: 1, max: 64, group: 'ASR' },
+  { key: 'asrBeamSize', label: 'ASR beam', labelEn: 'ASR beam size', hint: '语音解码搜索宽度', hintEn: 'Speech decoding search width', min: 1, max: 10, group: 'ASR' },
+  { key: 'verificationPasses', label: '验证轮次', labelEn: 'Verification passes', hint: '最终事实校验次数', hintEn: 'Final fact-check pass count', min: 0, max: 4, group: '验证' },
+  { key: 'screenshotBudgetPerSection', label: '每节截图上限', labelEn: 'Screenshots per section', hint: '每个笔记章节最多截图数', hintEn: 'Maximum screenshots per note section', min: 0, max: 16, group: '验证' },
 ]
 
+const performanceGroupLabelsEn = {
+  调度: 'Scheduling',
+  视觉扫描: 'Visual scan',
+  OCR: 'OCR',
+  ASR: 'ASR',
+  验证: 'Verification',
+} as const
+
+const roleCopyEn: Record<string, { label: string; description: string }> = {
+  'vision.change_detector': { label: 'Frame-change detection', description: 'Scan content changes cheaply and locate candidate ranges' },
+  'vision.text_detector': { label: 'On-screen text detection', description: 'Locate text regions and preserve bounding boxes' },
+  'vision.frame_explainer': { label: 'Keyframe explanation', description: 'Explain the selected high-value frames' },
+  'ocr.primary': { label: 'Primary OCR', description: 'Read on-screen text and positions' },
+  'ocr.escalation': { label: 'OCR visual review', description: 'Review only low-confidence or complex layouts' },
+  'asr.primary': { label: 'Primary speech recognition', description: 'Produce timestamped transcript segments by default' },
+  'asr.secondary': { label: 'Low-confidence review', description: 'Handle only noisy, conflicting, or uncertain segments' },
+  'asr.adjudicator': { label: 'Speech result adjudication', description: 'Select the most credible text among recognition candidates' },
+  'notes.fact_extractor': { label: 'Fact extraction', description: 'Turn aligned evidence into structured fact cards' },
+  'notes.drafter': { label: 'Section drafting', description: 'Create structured long-form notes from fact cards' },
+  'notes.verifier': { label: 'Fact verification', description: 'Check statement support and section coverage' },
+  translation: { label: 'Translation & terminology', description: 'Handle multilingual content and normalize terminology' },
+}
+
 type DeviceSelection = NonNullable<PerformanceOverrides['asrDevice']>
+
+const settingsNavigation = [
+  {
+    id: 'appearance-settings',
+    labelKey: 'settings.appearance',
+    detailKey: 'settings.appearance.detail',
+    icon: ScanText,
+  },
+  {
+    id: 'runtime-packages',
+    labelKey: 'settings.runtime',
+    detailKey: 'settings.runtime.detail',
+    icon: ServerCog,
+  },
+  {
+    id: 'component-setup',
+    labelKey: 'settings.components',
+    detailKey: 'settings.components.detail',
+    icon: HardDrive,
+  },
+  {
+    id: 'performance-settings',
+    labelKey: 'settings.performance',
+    detailKey: 'settings.performance.detail',
+    icon: Gauge,
+  },
+  {
+    id: 'provider-workbench',
+    labelKey: 'settings.providers',
+    detailKey: 'settings.providers.detail',
+    icon: Cloud,
+  },
+  {
+    id: 'model-registry',
+    labelKey: 'settings.registry',
+    detailKey: 'settings.registry.detail',
+    icon: Database,
+  },
+  {
+    id: 'role-routing',
+    labelKey: 'settings.routing',
+    detailKey: 'settings.routing.detail',
+    icon: Bot,
+  },
+] as const
+
+type SettingsSectionId = (typeof settingsNavigation)[number]['id']
+
+const isSettingsSectionId = (value: string): value is SettingsSectionId =>
+  settingsNavigation.some(item => item.id === value)
 
 const availableDeviceSelection = (
   value: string | undefined,
@@ -273,6 +423,17 @@ const normalizeUnavailableCudaOverrides = (
 export function ModelsPage() {
   const fontSizePreset = useUiPreferences(state => state.fontSizePreset)
   const setFontSizePreset = useUiPreferences(state => state.setFontSizePreset)
+  const locale = useUiPreferences(state => state.locale)
+  const setLocale = useUiPreferences(state => state.setLocale)
+  const { t, text } = useI18n()
+  const capabilityLabel = (capability: ModelCapability) =>
+    (locale === 'zh-CN' ? capabilityLabels : capabilityLabelsEn)[capability]
+  const providerKindLabel = (kind: ProviderKind) =>
+    (locale === 'zh-CN' ? providerKindLabels : providerKindLabelsEn)[kind]
+  const authLabel = (auth: ProviderAuthScheme) =>
+    (locale === 'zh-CN' ? authLabels : authLabelsEn)[auth]
+  const protocolLabel = (protocol: ProviderProtocol, displayName: string) =>
+    locale === 'en-US' ? protocolLabelsEn[protocol] ?? displayName : displayName
   const providers = useStudioStore(state => state.providers)
   const models = useStudioStore(state => state.models)
   const roles = useStudioStore(state => state.roles)
@@ -325,6 +486,10 @@ export function ModelsPage() {
   const [providerEditorKind, setProviderEditorKind] = useState<'new' | 'edit'>('edit')
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>(emptyProviderDraft)
   const [providerFormError, setProviderFormError] = useState('')
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionId>(
+    settingsNavigation[0].id,
+  )
+  const settingsContentRef = useRef<HTMLDivElement>(null)
   const providerEditorId = useId()
   const providerEditorTitleId = `${providerEditorId}-title`
   const providerEditorRef = useRef<HTMLDivElement>(null)
@@ -349,11 +514,15 @@ export function ModelsPage() {
     item => item.kind === 'local_model',
   ) ?? []
   const componentTier = componentReport
-    ? hardwareTierCopy[componentReport.hardwareTier]
+    ? (locale === 'zh-CN' ? hardwareTierCopy : hardwareTierCopyEn)[componentReport.hardwareTier]
     : undefined
   const componentPreparing = componentPreparationStatus === 'preparing'
-  const preparationRoleLabel = (roleId: string): string =>
-    roles.find(role => role.id === roleId)?.label ?? roleId
+  const preparationRoleLabel = (roleId: string): string => {
+    const role = roles.find(item => item.id === roleId)
+    return locale === 'en-US'
+      ? roleCopyEn[roleId]?.label ?? role?.id ?? roleId
+      : role?.label ?? roleId
+  }
   const asrCudaAvailable = systemReport?.acceleration.asr.cudaAvailable === true
   const ocrCudaAvailable = systemReport?.acceleration.ocr.cudaAvailable === true
 
@@ -514,6 +683,51 @@ export function ModelsPage() {
     [],
   )
 
+  useEffect(() => {
+    const root = settingsContentRef.current?.closest('.workspace-main')
+    const sections = settingsNavigation
+      .map(item => document.getElementById(item.id))
+      .filter((section): section is HTMLElement => section !== null)
+    if (!root || sections.length === 0) return
+
+    let animationFrame: number | undefined
+    const updateActiveSection = () => {
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame)
+      animationFrame = window.requestAnimationFrame(() => {
+        const rootRect = root.getBoundingClientRect()
+        const activationLine = rootRect.top + Math.min(72, rootRect.height * 0.12)
+        let active = sections[0]
+        for (const section of sections) {
+          if (section.getBoundingClientRect().top > activationLine) break
+          active = section
+        }
+        if (active && isSettingsSectionId(active.id)) setActiveSettingsSection(active.id)
+      })
+    }
+
+    root.addEventListener('scroll', updateActiveSection, { passive: true })
+    window.addEventListener('resize', updateActiveSection)
+    updateActiveSection()
+    return () => {
+      root.removeEventListener('scroll', updateActiveSection)
+      window.removeEventListener('resize', updateActiveSection)
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame)
+    }
+  }, [provider])
+
+  const scrollToSettingsSection = (sectionId: SettingsSectionId) => {
+    const target = document.getElementById(sectionId)
+    if (!target) return
+    setActiveSettingsSection(sectionId)
+    target.focus({ preventScroll: true })
+    target.scrollIntoView?.({
+      behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : 'smooth',
+      block: 'start',
+    })
+  }
+
   const openNewProvider = (trigger: HTMLButtonElement) => {
     rememberProviderEditorTrigger(trigger)
     setProviderEditorKind('new')
@@ -551,7 +765,7 @@ export function ModelsPage() {
     try {
       const protocolOptions = JSON.parse(providerDraft.protocolOptionsText || '{}') as unknown
       if (!protocolOptions || Array.isArray(protocolOptions) || typeof protocolOptions !== 'object') {
-        throw new Error('协议选项必须是 JSON 对象。')
+        throw new Error(text('协议选项必须是 JSON 对象。', 'Protocol options must be a JSON object.'))
       }
       setProviderFormError('')
       saveProvider({
@@ -569,7 +783,11 @@ export function ModelsPage() {
       })
       closeProviderEditor()
     } catch (error) {
-      setProviderFormError(error instanceof Error ? error.message : '协议选项格式不正确。')
+      setProviderFormError(
+        error instanceof Error
+          ? error.message
+          : text('协议选项格式不正确。', 'Protocol options are invalid.'),
+      )
     }
   }
 
@@ -605,11 +823,11 @@ export function ModelsPage() {
           loading="eager"
         />
         <div>
-          <span className="section-kicker">Video2Notes 偏好设置</span>
-          <h1>设置中心</h1>
-          <p>统一管理界面可读性、电脑性能余量、本地依赖和各处理角色的模型路由。</p>
+          <span className="section-kicker">{t('settings.kicker')}</span>
+          <h1>{t('settings.title')}</h1>
+          <p>{t('settings.description')}</p>
         </div>
-        <div className="experience-switch" aria-label="性能配置模式">
+        <div className="experience-switch" aria-label={text('性能配置模式', 'Performance configuration mode')}>
           <button
             type="button"
             aria-pressed={performanceDraft.experienceMode === 'guided'}
@@ -622,7 +840,7 @@ export function ModelsPage() {
             }
           >
             <WandSparkles size={15} aria-hidden="true" />
-            自动配置
+            {t('settings.auto')}
           </button>
           <button
             type="button"
@@ -635,24 +853,70 @@ export function ModelsPage() {
             }
           >
             <Settings2 size={15} aria-hidden="true" />
-            自定义性能
+            {t('settings.custom')}
           </button>
         </div>
       </header>
 
-      <section className="appearance-settings-panel models-surface" aria-labelledby="appearance-settings-title">
+      <div className="models-settings-layout">
+        <aside className="models-settings-sidebar" aria-label={t('settings.directory')}>
+          <div className="models-settings-nav-heading">
+            <span className="section-kicker">{t('settings.directory')}</span>
+            <strong>{t('settings.sections')}</strong>
+          </div>
+          <nav className="models-settings-nav" aria-label={text('设置分区', 'Settings sections')}>
+            {settingsNavigation
+              .filter(item => item.id !== 'model-registry' || Boolean(provider))
+              .map(item => {
+                const Icon = item.icon
+                const active = activeSettingsSection === item.id
+                return (
+                  <a
+                    href={`#${item.id}`}
+                    className={active ? 'is-active' : undefined}
+                    aria-current={active ? 'location' : undefined}
+                    key={item.id}
+                    onClick={event => {
+                      event.preventDefault()
+                      scrollToSettingsSection(item.id)
+                    }}
+                  >
+                    <span className="models-settings-nav-icon"><Icon size={15} aria-hidden="true" /></span>
+                    <span className="models-settings-nav-copy">
+                      <strong>{t(item.labelKey)}</strong>
+                      <small>{t(item.detailKey)}</small>
+                    </span>
+                  </a>
+                )
+              })}
+          </nav>
+        </aside>
+
+        <div className="models-settings-content" ref={settingsContentRef}>
+      <section className="appearance-settings-panel models-surface" id="appearance-settings" aria-labelledby="appearance-settings-title" tabIndex={-1}>
         <div className="models-section-heading">
           <div className="section-heading-icon">
             <ScanText size={19} aria-hidden="true" />
           </div>
           <div>
-            <span className="section-kicker">显示与可读性</span>
-            <h2 id="appearance-settings-title">全局字体大小</h2>
-            <p>字号档位会统一作用于所有页面，同时保留标题、正文、说明和数据标签的层级。</p>
+            <span className="section-kicker">{t('settings.appearance')}</span>
+            <h2 id="appearance-settings-title">{t('settings.font.title')}</h2>
+            <p>{t('settings.font.description')}</p>
+          </div>
+        </div>
+        <div className="language-setting-row">
+          <span className="language-setting-icon"><Languages size={18} aria-hidden="true" /></span>
+          <div>
+            <strong>{t('nav.language')}</strong>
+            <small>{text('所有面向用户的标题、按钮、状态和错误摘要都会同步切换。', 'All user-facing titles, controls, statuses, and error summaries switch together.')}</small>
+          </div>
+          <div className="language-setting-control" role="radiogroup" aria-label={t('nav.language')}>
+            <button type="button" role="radio" aria-checked={locale === 'zh-CN'} onClick={() => setLocale('zh-CN')}>{t('language.zh')}</button>
+            <button type="button" role="radio" aria-checked={locale === 'en-US'} onClick={() => setLocale('en-US')}>{t('language.en')}</button>
           </div>
         </div>
         <div className="font-size-settings-layout">
-          <div className="font-size-options" role="radiogroup" aria-label="全局字体大小">
+          <div className="font-size-options" role="radiogroup" aria-label={t('settings.font.title')}>
             {fontSizeOptions.map(option => (
               <button
                 key={option.value}
@@ -663,48 +927,48 @@ export function ModelsPage() {
               >
                 <span className="font-size-option-mark" aria-hidden="true">Aa</span>
                 <span>
-                  <strong>{option.label}</strong>
-                  <small>{option.detail}</small>
+                  <strong>{t(`settings.font.${option.value}`)}</strong>
+                  <small>{t(`settings.font.${option.value}.detail`)}</small>
                 </span>
                 {fontSizePreset === option.value && <Check size={16} aria-hidden="true" />}
               </button>
             ))}
           </div>
           <div className="typography-preview" aria-live="polite">
-            <span>当前预览 · {fontSizeOptions.find(option => option.value === fontSizePreset)?.label}</span>
-            <strong>画面证据与语音时间线已经对齐</strong>
-            <p>正文用于阅读笔记内容，辅助文字补充置信度、时间码和模型来源，不再使用难以辨认的微小字号。</p>
+            <span>{text('当前预览', 'Current preview')} · {t(`settings.font.${fontSizePreset}`)}</span>
+            <strong>{text('画面证据与语音时间线已经对齐', 'Visual evidence and speech are aligned on one timeline')}</strong>
+            <p>{text('正文用于阅读笔记内容，辅助文字补充置信度、时间码和模型来源，不再使用难以辨认的微小字号。', 'Body text carries the note while supporting text adds confidence, timecodes, and model provenance without unreadably small type.')}</p>
           </div>
         </div>
       </section>
 
       <RuntimePackagesPanel experienceMode={performanceDraft.experienceMode} />
 
-      <section className="component-setup-panel models-surface" aria-labelledby="component-setup-title">
+      <section className="component-setup-panel models-surface" id="component-setup" aria-labelledby="component-setup-title" tabIndex={-1}>
         <div className="models-section-heading">
           <div className="section-heading-icon">
             <HardDrive size={19} aria-hidden="true" />
           </div>
           <div>
-            <span className="section-kicker">本地运行环境</span>
-            <h2 id="component-setup-title">本地识别模型权重</h2>
-            <p>运行时就绪后，再按当前硬件下载 ASR / OCR 模型权重；权重与执行环境独立管理。</p>
+            <span className="section-kicker">{text('本地运行环境', 'Local runtime environment')}</span>
+            <h2 id="component-setup-title">{text('本地识别模型权重', 'Local recognition model weights')}</h2>
+            <p>{text('运行时就绪后，再按当前硬件下载 ASR / OCR 模型权重；权重与执行环境独立管理。', 'After the runtime is ready, download ASR and OCR weights selected for this hardware. Weights and execution runtimes are managed separately.')}</p>
           </div>
           <div className="component-heading-actions">
-            {backend.mode === 'demo' && <span className="component-demo-badge">演示状态样例</span>}
+            {backend.mode === 'demo' && <span className="component-demo-badge">{text('演示状态样例', 'Demo status sample')}</span>}
             {componentReport && (
               <span
                 className={`component-overall-state ${componentReport.inventory.ready ? 'is-ready' : ''}`}
               >
                 {componentReport.inventory.ready ? <Check size={13} aria-hidden="true" /> : <CircleDot size={13} aria-hidden="true" />}
-                {componentReport.inventory.ready ? '全部就绪' : '需要准备'}
+                {componentReport.inventory.ready ? text('全部就绪', 'All ready') : text('需要准备', 'Setup needed')}
               </span>
             )}
             <button
               className="component-refresh-button"
               type="button"
-              aria-label="重新扫描本地组件"
-              title="重新扫描本地组件"
+              aria-label={text('重新扫描本地组件', 'Rescan local components')}
+              title={text('重新扫描本地组件', 'Rescan local components')}
               onClick={refreshComponents}
               disabled={backend.mode !== 'real' || componentPreparing}
             >
@@ -721,7 +985,7 @@ export function ModelsPage() {
             >
               <span className="component-tier-mark"><Cpu size={17} aria-hidden="true" /></span>
               <div>
-                <span>已识别硬件档位</span>
+                <span>{text('已识别硬件档位', 'Detected hardware tier')}</span>
                 <strong>{componentTier?.label ?? componentReport.hardwareTier}</strong>
                 <p>{componentTier?.reason ?? componentReport.recommendation.reason}</p>
               </div>
@@ -734,9 +998,9 @@ export function ModelsPage() {
                     {recommendedPlan?.asrComputeType ?? componentReport.recommendation.asrComputeType}
                     {systemReport
                       ? systemReport.acceleration.asr.cudaAvailable
-                        ? ' · CUDA 运行时就绪'
-                        : ' · CPU 回退'
-                      : ' · 加速能力检测中'}
+                        ? text(' · CUDA 运行时就绪', ' · CUDA runtime ready')
+                        : text(' · CPU 回退', ' · CPU fallback')
+                      : text(' · 加速能力检测中', ' · Detecting acceleration')}
                   </dd>
                 </div>
                 <div>
@@ -745,9 +1009,9 @@ export function ModelsPage() {
                     {recommendedPlan?.ocrDevice ?? componentReport.recommendation.ocrDevice}
                     {systemReport
                       ? systemReport.acceleration.ocr.cudaAvailable
-                        ? ' · CUDA 运行时就绪'
-                        : ' · CPU 运行时'
-                      : ' · 加速能力检测中'}
+                        ? text(' · CUDA 运行时就绪', ' · CUDA runtime ready')
+                        : text(' · CPU 运行时', ' · CPU runtime')
+                      : text(' · 加速能力检测中', ' · Detecting acceleration')}
                   </dd>
                 </div>
               </dl>
@@ -757,20 +1021,20 @@ export function ModelsPage() {
               <section className="managed-models" aria-labelledby="managed-models-title">
                 <header>
                   <div>
-                    <span className="section-kicker">推荐权重</span>
-                    <h3 id="managed-models-title">ASR / OCR 本地模型</h3>
+                    <span className="section-kicker">{text('推荐权重', 'Recommended weights')}</span>
+                    <h3 id="managed-models-title">{text('ASR / OCR 本地模型', 'Local ASR / OCR models')}</h3>
                   </div>
-                  <span>{localModelComponents.filter(item => item.ready).length} / {localModelComponents.length} 就绪</span>
+                  <span>{localModelComponents.filter(item => item.ready).length} / {localModelComponents.length} {text('就绪', 'ready')}</span>
                 </header>
 
                 <div className="component-download-note">
                   <Download size={16} aria-hidden="true" />
-                  <p><strong>模型权重不会随 EXE 预装。</strong>首次使用时按需下载到本机应用数据目录，已完成的文件会复用，未完成的文件可续传。</p>
+                  <p><strong>{text('模型权重不会随 EXE 预装。', 'Model weights are not bundled with the EXE.')}</strong>{text('首次使用时按需下载到本机应用数据目录，已完成的文件会复用，未完成的文件可续传。', ' They download on demand into local app data. Completed files are reused and partial downloads can resume.')}</p>
                 </div>
 
                 <fieldset className="managed-model-list">
                   <legend className="sr-only">
-                    {performanceDraft.experienceMode === 'professional' ? '选择要准备的本地模型组件' : '推荐的本地模型组件'}
+                    {performanceDraft.experienceMode === 'professional' ? text('选择要准备的本地模型组件', 'Choose local model components to prepare') : text('推荐的本地模型组件', 'Recommended local model components')}
                   </legend>
                   {localModelComponents.map(item => {
                     const isAsr = item.id === componentReport.recommendation.asrComponentId
@@ -783,7 +1047,7 @@ export function ModelsPage() {
                         {performanceDraft.experienceMode === 'professional' && (
                           <input
                             type="checkbox"
-                            aria-label={`选择组件 ${item.displayName}`}
+                            aria-label={`${text('选择组件', 'Select component')} ${item.displayName}`}
                             checked={selected}
                             disabled={componentPreparing}
                             onChange={event => setComponentSelected(item.id, event.target.checked)}
@@ -793,13 +1057,13 @@ export function ModelsPage() {
                           {isAsr ? <Bot size={17} aria-hidden="true" /> : <ScanText size={17} aria-hidden="true" />}
                         </span>
                         <span className="managed-model-copy">
-                          <span>{isAsr ? '语音识别 · ASR' : '画面文字 · OCR'}</span>
+                          <span>{isAsr ? text('语音识别 · ASR', 'Speech recognition · ASR') : text('画面文字 · OCR', 'On-screen text · OCR')}</span>
                           <strong>{item.displayName}</strong>
-                          <small>{item.version ? `版本 ${item.version}` : '受管本地权重'} · {isAsr ? componentReport.recommendation.asrDevice : componentReport.recommendation.ocrDevice}</small>
+                          <small>{item.version ? `${text('版本', 'Version')} ${item.version}` : text('受管本地权重', 'Managed local weights')} · {isAsr ? componentReport.recommendation.asrDevice : componentReport.recommendation.ocrDevice}</small>
                         </span>
                         <span className={`component-state-badge state-${item.state}`}>
                           {item.ready && <Check size={12} aria-hidden="true" />}
-                          {componentStateCopy[item.state]}
+                          {(locale === 'zh-CN' ? componentStateCopy : componentStateCopyEn)[item.state]}
                         </span>
                       </label>
                     )
@@ -810,10 +1074,10 @@ export function ModelsPage() {
                   <div className="component-action-copy">
                     {backend.mode === 'real' ? (
                       performanceDraft.experienceMode === 'professional'
-                        ? <span>只下载所选权重；全部推荐项就绪后自动写入模型路由。</span>
-                        : <span>自动选择当前硬件档位的推荐组合并在完成后激活。</span>
+                        ? <span>{text('只下载所选权重；全部推荐项就绪后自动写入模型路由。', 'Download only selected weights; recommended roles are routed automatically after setup.')}</span>
+                        : <span>{text('自动选择当前硬件档位的推荐组合并在完成后激活。', 'Select the recommended combination for this hardware and activate it after setup.')}</span>
                     ) : (
-                      <span>连接真实本机后端后可下载；演示模式不会创建模型文件。</span>
+                      <span>{text('连接真实本机后端后可下载；演示模式不会创建模型文件。', 'Connect the local backend to download. Demo mode does not create model files.')}</span>
                     )}
                   </div>
                   <button
@@ -835,12 +1099,12 @@ export function ModelsPage() {
                   >
                     {componentPreparing ? <LoaderCircle className="spin" size={15} aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
                     {componentPreparing
-                      ? '正在下载并校验…'
+                      ? text('正在下载并校验…', 'Downloading and verifying...')
                       : performanceDraft.experienceMode === 'professional'
-                        ? '准备所选组件'
+                        ? text('准备所选组件', 'Prepare selected components')
                         : componentReport.inventory.ready
-                          ? '校验并激活推荐模型'
-                          : '一键准备推荐模型'}
+                          ? text('校验并激活推荐模型', 'Verify and activate recommended models')
+                          : text('一键准备推荐模型', 'Prepare recommended models')}
                   </button>
                 </div>
 
@@ -851,28 +1115,28 @@ export function ModelsPage() {
                       <div>
                         <strong>
                           {componentPreparationBlockedRoles.length > 0
-                            ? '组件已准备，部分角色仍不可用'
+                            ? text('组件已准备，部分角色仍不可用', 'Components are ready, but some roles remain unavailable')
                             : componentPreparationActivatedRoles.length > 0 || componentPreparationActivated
-                              ? '本地模型角色已激活'
-                              : '所选组件已准备'}
+                              ? text('本地模型角色已激活', 'Local model roles activated')
+                              : text('所选组件已准备', 'Selected components are ready')}
                         </strong>
                         <span>
                           {componentPreparationResults.map(result =>
-                            `${result.componentId}：${result.status === 'reused' ? '已复用' : result.resumed ? '已续传完成' : '已准备'}`,
+                            `${result.componentId}${locale === 'zh-CN' ? '：' : ': '}${result.status === 'reused' ? text('已复用', 'reused') : result.resumed ? text('已续传完成', 'resumed and completed') : text('已准备', 'ready')}`,
                           ).join(' · ')}
                         </span>
                         {componentPreparationActivatedRoles.length > 0 && (
                           <span>
-                            已激活：{componentPreparationActivatedRoles.map(preparationRoleLabel).join('、')}
+                            {text('已激活：', 'Activated: ')}{componentPreparationActivatedRoles.map(preparationRoleLabel).join(locale === 'zh-CN' ? '、' : ', ')}
                           </span>
                         )}
                         {componentPreparationBlockedRoles.length > 0 && (
                           <span>
-                            未激活：{componentPreparationBlockedRoles.map(preparationRoleLabel).join('、')}
+                            {text('未激活：', 'Not activated: ')}{componentPreparationBlockedRoles.map(preparationRoleLabel).join(locale === 'zh-CN' ? '、' : ', ')}
                           </span>
                         )}
                         {componentPreparationWarnings.map(warning => (
-                          <span key={warning}>提示：{warning}</span>
+                          <span key={warning}>{text('提示：', 'Details: ')}{warning}</span>
                         ))}
                       </div>
                     </div>
@@ -880,7 +1144,7 @@ export function ModelsPage() {
                   {componentPreparationStatus === 'error' && componentPreparationError && (
                     <div className="component-feedback is-error motion-inline-feedback" role="alert">
                       <TriangleAlert size={15} aria-hidden="true" />
-                      <div><strong>组件准备未完成</strong><span>{componentPreparationError}</span></div>
+                      <div><strong>{text('组件准备未完成', 'Component setup did not complete')}</strong><span>{text('底层详情：', 'Technical details: ')}{componentPreparationError}</span></div>
                     </div>
                   )}
                 </div>
@@ -891,33 +1155,33 @@ export function ModelsPage() {
           <div className="component-empty-state">
             <LoaderCircle className={backend.mode === 'connecting' ? 'spin' : ''} size={18} aria-hidden="true" />
             <div>
-              <strong>{backend.mode === 'connecting' ? '正在扫描本机组件' : '尚未取得组件清单'}</strong>
-              <span>{backend.mode === 'offline' ? '请重启桌面应用以重新连接本机后端。' : '连接后会显示工具、运行时和推荐模型状态。'}</span>
+              <strong>{backend.mode === 'connecting' ? text('正在扫描本机组件', 'Scanning local components') : text('尚未取得组件清单', 'Component inventory is unavailable')}</strong>
+              <span>{backend.mode === 'offline' ? text('请重启桌面应用以重新连接本机后端。', 'Restart the desktop app to reconnect the local backend.') : text('连接后会显示工具、运行时和推荐模型状态。', 'Tools, runtimes, and recommended models appear after the backend connects.')}</span>
             </div>
           </div>
         )}
       </section>
 
-      <section className="performance-panel models-surface">
+      <section className="performance-panel models-surface" id="performance-settings" aria-labelledby="performance-settings-title" tabIndex={-1}>
         <div className="models-section-heading">
           <div className="section-heading-icon">
             <Gauge size={19} aria-hidden="true" />
           </div>
           <div>
-            <span className="section-kicker">性能策略</span>
-            <h2>这台电脑应该如何工作</h2>
-            <p>笔记质量模式与资源占用相互独立；这里不会降低你选择的识别精度。</p>
+            <span className="section-kicker">{text('性能策略', 'Performance policy')}</span>
+            <h2 id="performance-settings-title">{text('这台电脑应该如何工作', 'How this computer should work')}</h2>
+            <p>{text('笔记质量模式与资源占用相互独立；这里不会降低你选择的识别精度。', 'Note quality and resource usage are independent; these settings do not reduce the recognition quality you select.')}</p>
           </div>
-          <div className="hardware-summary" aria-label="硬件建议摘要">
+          <div className="hardware-summary" aria-label={text('硬件建议摘要', 'Hardware recommendation summary')}>
             <span><Cpu size={14} aria-hidden="true" />{recommendation?.budget.cpuWorkers ?? '—'} CPU worker</span>
-            <span><Database size={14} aria-hidden="true" />{formatBytes(recommendation?.budget.memoryBudgetBytes)} 可用内存</span>
-            <span><Zap size={14} aria-hidden="true" />{recommendedPlan?.concurrentGpuStages ?? 0} 可用 GPU 阶段</span>
+            <span><Database size={14} aria-hidden="true" />{formatBytes(recommendation?.budget.memoryBudgetBytes)} {text('可用内存', 'available memory')}</span>
+            <span><Zap size={14} aria-hidden="true" />{recommendedPlan?.concurrentGpuStages ?? 0} {text('可用 GPU 阶段', 'available GPU stages')}</span>
           </div>
         </div>
 
         {performanceDraft.experienceMode === 'guided' ? (
           <div className="guided-performance motion-swap-surface" key="guided-performance">
-            <div className="preference-grid" role="radiogroup" aria-label="性能偏好">
+            <div className="preference-grid" role="radiogroup" aria-label={text('性能偏好', 'Performance preference')}>
               {(Object.keys(preferenceCopy) as Array<keyof typeof preferenceCopy>).map(value => {
                 const item = preferenceCopy[value]
                 const Icon = item.icon
@@ -934,8 +1198,8 @@ export function ModelsPage() {
                     }
                   >
                     <span className="preference-icon"><Icon size={18} aria-hidden="true" /></span>
-                    <strong>{item.title}</strong>
-                    <small>{item.detail}</small>
+                    <strong>{text(item.title, item.titleEn)}</strong>
+                    <small>{text(item.detail, item.detailEn)}</small>
                     <span className="preference-check"><Check size={13} aria-hidden="true" /></span>
                   </button>
                 )
@@ -944,11 +1208,11 @@ export function ModelsPage() {
 
             <div className="headroom-card">
               <div>
-                <strong>给系统保留余量</strong>
-                <span>预留 {headroomPercent}% 的 CPU、内存与显存空间</span>
+                <strong>{text('给系统保留余量', 'Reserve system headroom')}</strong>
+                <span>{text(`预留 ${headroomPercent}% 的 CPU、内存与显存空间`, `Reserve ${headroomPercent}% of CPU, memory, and VRAM`)}</span>
               </div>
               <label>
-                <span className="sr-only">系统资源保留百分比</span>
+                <span className="sr-only">{text('系统资源保留百分比', 'System resource reserve percentage')}</span>
                 <input
                   type="range"
                   min="10"
@@ -976,16 +1240,20 @@ export function ModelsPage() {
             <div className="recommendation-card">
               <span className="recommendation-mark"><Sparkles size={18} aria-hidden="true" /></span>
               <div>
-                <strong>算法建议 · {systemReport?.recommendedTier ?? '正在识别硬件'}</strong>
+                <strong>{text('算法建议', 'Algorithm recommendation')} · {systemReport?.recommendedTier ?? text('正在识别硬件', 'Detecting hardware')}</strong>
                 <p>
-                  {recommendation?.notes[0] ??
-                    '系统会根据实时 CPU、内存、GPU 与显存余量，为每种质量模式生成安全计划。'}
+                  {locale === 'zh-CN' && recommendation?.notes[0]
+                    ? recommendation.notes[0]
+                    : text(
+                        '系统会根据实时 CPU、内存、GPU 与显存余量，为每种质量模式生成安全计划。',
+                        'The system creates a safe plan for each quality mode from current CPU, memory, GPU, and VRAM headroom.',
+                      )}
                 </p>
               </div>
               <dl>
-                <div><dt>远程并发</dt><dd>{recommendation?.budget.remoteModelConcurrency ?? '—'}</dd></div>
-                <div><dt>显存预算</dt><dd>{formatBytes(recommendation?.budget.vramBudgetBytes)}</dd></div>
-                <div><dt>CPU 预算</dt><dd>{recommendation?.budget.cpuBudgetEquivalent.toFixed(1) ?? '—'}</dd></div>
+                <div><dt>{text('远程并发', 'Remote concurrency')}</dt><dd>{recommendation?.budget.remoteModelConcurrency ?? '—'}</dd></div>
+                <div><dt>{text('显存预算', 'VRAM budget')}</dt><dd>{formatBytes(recommendation?.budget.vramBudgetBytes)}</dd></div>
+                <div><dt>{text('CPU 预算', 'CPU budget')}</dt><dd>{recommendation?.budget.cpuBudgetEquivalent.toFixed(1) ?? '—'}</dd></div>
               </dl>
             </div>
           </div>
@@ -993,8 +1261,8 @@ export function ModelsPage() {
           <div className="professional-performance motion-swap-surface" key="professional-performance">
             <div className="professional-toolbar">
               <div>
-                <strong>专业参数覆盖</strong>
-                <span>空白参数继续跟随硬件建议；保存时后端会校验安全边界。</span>
+                <strong>{text('专业参数覆盖', 'Professional parameter overrides')}</strong>
+                <span>{text('空白参数继续跟随硬件建议；保存时后端会校验安全边界。', 'Unset parameters continue to follow hardware recommendations; the backend validates safety limits when saving.')}</span>
               </div>
               <button
                 className="button button-secondary"
@@ -1003,12 +1271,12 @@ export function ModelsPage() {
                 disabled={!recommendedPlan}
               >
                 <RefreshCw size={14} aria-hidden="true" />
-                填入当前建议
+                {text('填入当前建议', 'Apply current recommendation')}
               </button>
             </div>
 
             <div className="professional-selects">
-              <label>OCR 设备
+              <label>{text('OCR 设备', 'OCR device')}
                 <select
                   value={availableDeviceSelection(
                     performanceDraft.overrides.ocrDevice ?? recommendedPlan?.ocrDevice,
@@ -1016,12 +1284,12 @@ export function ModelsPage() {
                   )}
                   onChange={event => updateOverride('ocrDevice', event.target.value as 'auto' | 'cpu' | 'cuda')}
                 >
-                  <option value="auto">自动</option>
+                  <option value="auto">{text('自动', 'Automatic')}</option>
                   <option value="cpu">CPU</option>
                   {ocrCudaAvailable && <option value="cuda">CUDA</option>}
                 </select>
               </label>
-              <label>ASR 设备
+              <label>{text('ASR 设备', 'ASR device')}
                 <select
                   value={availableDeviceSelection(
                     performanceDraft.overrides.asrDevice ?? recommendedPlan?.asrDevice,
@@ -1029,17 +1297,17 @@ export function ModelsPage() {
                   )}
                   onChange={event => updateOverride('asrDevice', event.target.value as 'auto' | 'cpu' | 'cuda')}
                 >
-                  <option value="auto">自动</option>
+                  <option value="auto">{text('自动', 'Automatic')}</option>
                   <option value="cpu">CPU</option>
                   {asrCudaAvailable && <option value="cuda">CUDA</option>}
                 </select>
               </label>
-              <label>ASR 计算精度
+              <label>{text('ASR 计算精度', 'ASR compute precision')}
                 <select
                   value={performanceDraft.overrides.asrComputeType ?? recommendedPlan?.asrComputeType ?? 'default'}
                   onChange={event => updateOverride('asrComputeType', event.target.value as NonNullable<PerformanceOverrides['asrComputeType']>)}
                 >
-                  <option value="default">自动</option><option value="int8">INT8</option><option value="int8_float16">INT8 / FP16</option><option value="float16">FP16</option><option value="float32">FP32</option>
+                  <option value="default">{text('自动', 'Automatic')}</option><option value="int8">INT8</option><option value="int8_float16">INT8 / FP16</option><option value="float16">FP16</option><option value="float32">FP32</option>
                 </select>
               </label>
             </div>
@@ -1047,13 +1315,13 @@ export function ModelsPage() {
             <div className="parameter-groups">
               {(['调度', '视觉扫描', 'OCR', 'ASR', '验证'] as const).map(group => (
                 <section key={group}>
-                  <header><strong>{group}</strong><span>{numericControls.filter(item => item.group === group).length} 项</span></header>
+                  <header><strong>{text(group, performanceGroupLabelsEn[group])}</strong><span>{text(`${numericControls.filter(item => item.group === group).length} 项`, `${numericControls.filter(item => item.group === group).length} items`)}</span></header>
                   <div>
                     {numericControls.filter(item => item.group === group).map(control => (
                       <label key={control.key}>
-                        <span><strong>{control.label}</strong><small>{control.hint}</small></span>
+                        <span><strong>{text(control.label, control.labelEn)}</strong><small>{text(control.hint, control.hintEn)}</small></span>
                         <input
-                          aria-label={control.label}
+                          aria-label={text(control.label, control.labelEn)}
                           type="number"
                           min={control.min}
                           max={control.max}
@@ -1076,7 +1344,7 @@ export function ModelsPage() {
         )}
 
         <footer className="performance-actions">
-          <span><ShieldCheck size={15} aria-hidden="true" />设置只保存在本机，并由后端再次校验。</span>
+          <span><ShieldCheck size={15} aria-hidden="true" />{text('设置只保存在本机，并由后端再次校验。', 'Settings stay on this computer and are validated again by the backend.')}</span>
           <button
             className="button button-primary"
             type="button"
@@ -1091,18 +1359,18 @@ export function ModelsPage() {
             }
           >
             <Save size={15} aria-hidden="true" />
-            保存性能设置
+            {text('保存性能设置', 'Save performance settings')}
           </button>
         </footer>
       </section>
 
-      <section className="provider-workbench models-surface">
+      <section className="provider-workbench models-surface" id="provider-workbench" aria-labelledby="provider-workbench-title" tabIndex={-1}>
         <div className="models-section-heading">
           <div className="section-heading-icon"><ServerCog size={19} aria-hidden="true" /></div>
           <div>
-            <span className="section-kicker">模型供应商</span>
-            <h2>协议、认证与模型目录</h2>
-            <p>协议决定请求格式；模型能力必须由你明确确认，发现结果不会自动推断。</p>
+            <span className="section-kicker">{t('settings.providers')}</span>
+            <h2 id="provider-workbench-title">{text('协议、认证与模型目录', 'Protocols, authentication, and model registry')}</h2>
+            <p>{text('协议决定请求格式；模型能力必须由你明确确认，发现结果不会自动推断。', 'The protocol defines the request format. Model capabilities must be explicitly confirmed and are never inferred from discovery.')}</p>
           </div>
           <button
             className="button button-secondary"
@@ -1111,7 +1379,7 @@ export function ModelsPage() {
             aria-controls={providerEditorId}
             onClick={event => openNewProvider(event.currentTarget)}
           >
-            <Plus size={15} aria-hidden="true" />新增供应商
+            <Plus size={15} aria-hidden="true" />{text('新增供应商', 'Add provider')}
           </button>
         </div>
 
@@ -1122,15 +1390,15 @@ export function ModelsPage() {
                 {provider.locality === 'local' ? <Database size={21} aria-hidden="true" /> : <Cloud size={21} aria-hidden="true" />}
               </span>
               <div><strong>{provider.name}</strong><small>{provider.endpoint}</small></div>
-              <span className="protocol-badge">{selectedProtocol?.displayName ?? provider.protocol}</span>
+              <span className="protocol-badge">{selectedProtocol ? protocolLabel(selectedProtocol.protocol, selectedProtocol.displayName) : provider.protocol}</span>
             </div>
             <div className="provider-actions">
               <span className={`provider-connection connection-${provider.status}`}>
                 {provider.status === 'testing' ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <CircleDot size={14} aria-hidden="true" />}
-                {provider.status === 'testing' ? '测试中' : provider.status === 'connected' ? '连接正常' : '未测试'}
+                {provider.status === 'testing' ? text('测试中', 'Testing') : provider.status === 'connected' ? text('连接正常', 'Connected') : text('未测试', 'Not tested')}
               </span>
               <button className="button button-secondary" type="button" onClick={() => testProvider(provider.id)} disabled={provider.status === 'testing'}>
-                <Link2 size={14} aria-hidden="true" />测试连接
+                <Link2 size={14} aria-hidden="true" />{text('测试连接', 'Test connection')}
               </button>
               <button
                 className="button button-secondary"
@@ -1139,7 +1407,7 @@ export function ModelsPage() {
                 aria-controls={providerEditorId}
                 onClick={event => openExistingProvider(event.currentTarget)}
               >
-                <Settings2 size={14} aria-hidden="true" />编辑
+                <Settings2 size={14} aria-hidden="true" />{text('编辑', 'Edit')}
               </button>
             </div>
 
@@ -1147,12 +1415,12 @@ export function ModelsPage() {
               <div className="credential-strip motion-surface-enter">
                 <LockKeyhole size={16} aria-hidden="true" />
                 <div>
-                  <strong>{provider.credentialState === 'stored-locally' ? '凭据已保存在 Windows 凭据库' : '还没有保存凭据'}</strong>
-                  <small>应用只保存 credential reference，不读取或回显原值。</small>
+                  <strong>{provider.credentialState === 'stored-locally' ? text('凭据已保存在 Windows 凭据库', 'Credential saved in Windows Credential Manager') : text('还没有保存凭据', 'No credential saved')}</strong>
+                  <small>{text('应用只保存 credential reference，不读取或回显原值。', 'The app stores only a credential reference and never reads or reveals the original value.')}</small>
                 </div>
-                <label><span className="sr-only">供应商凭据</span><input type="password" value={secret} onChange={event => setSecret(event.target.value)} placeholder="输入新值以保存或替换" autoComplete="new-password" /></label>
-                <button className="button button-primary" type="button" onClick={() => { saveProviderSecret(provider.id, secret); setSecret('') }} disabled={!secret.trim() || backend.mode !== 'real'}><KeyRound size={14} aria-hidden="true" />保存凭据</button>
-                {provider.credentialState === 'stored-locally' && <button className="button button-quiet" type="button" onClick={() => deleteProviderSecret(provider.id)}>删除</button>}
+                <label><span className="sr-only">{text('供应商凭据', 'Provider credential')}</span><input type="password" value={secret} onChange={event => setSecret(event.target.value)} placeholder={text('输入新值以保存或替换', 'Enter a new value to save or replace')} autoComplete="new-password" /></label>
+                <button className="button button-primary" type="button" onClick={() => { saveProviderSecret(provider.id, secret); setSecret('') }} disabled={!secret.trim() || backend.mode !== 'real'}><KeyRound size={14} aria-hidden="true" />{text('保存凭据', 'Save credential')}</button>
+                {provider.credentialState === 'stored-locally' && <button className="button button-quiet" type="button" onClick={() => deleteProviderSecret(provider.id)}>{text('删除', 'Delete')}</button>}
               </div>
             )}
           </div>
@@ -1161,8 +1429,8 @@ export function ModelsPage() {
             <VisualAsset className="inline-empty-visual" asset="emptyProvider" width={192} height={124} />
             <div>
               <Cloud size={24} aria-hidden="true" />
-              <strong>还没有供应商</strong>
-              <span>先添加一个协议端点，再发现或手工登记模型。</span>
+              <strong>{text('还没有供应商', 'No providers yet')}</strong>
+              <span>{text('先添加一个协议端点，再发现或手工登记模型。', 'Add a protocol endpoint, then discover or register models manually.')}</span>
             </div>
           </div>
         )}
@@ -1181,26 +1449,26 @@ export function ModelsPage() {
               aria-labelledby={providerEditorTitleId}
             >
             <header>
-              <div><strong id={providerEditorTitleId}>{providerDraft.id ? '编辑供应商' : '新增供应商'}</strong><span>连接信息和密钥仅写入本机。</span></div>
-              <button type="button" aria-label="关闭供应商编辑器" onClick={closeProviderEditor}><X size={17} aria-hidden="true" /></button>
+              <div><strong id={providerEditorTitleId}>{providerDraft.id ? text('编辑供应商', 'Edit provider') : text('新增供应商', 'Add provider')}</strong><span>{text('连接信息和密钥仅写入本机。', 'Connection details and secrets are stored only on this computer.')}</span></div>
+              <button type="button" aria-label={text('关闭供应商编辑器', 'Close provider editor')} onClick={closeProviderEditor}><X size={17} aria-hidden="true" /></button>
             </header>
             <div className="provider-editor-grid">
-              <label>供应商 ID<input value={providerDraft.id} disabled={Boolean(provider && providerDraft.id === provider.id)} onChange={event => setProviderDraft(current => ({ ...current, id: event.target.value }))} placeholder="my-provider" /></label>
-              <label>显示名称<input value={providerDraft.name} onChange={event => setProviderDraft(current => ({ ...current, name: event.target.value }))} placeholder="我的模型服务" /></label>
-              <label>服务类型<select value={providerDraft.kind} onChange={event => setProviderDraft(current => ({ ...current, kind: event.target.value as ProviderKind }))}>{(Object.keys(providerKindLabels) as ProviderKind[]).map(kind => <option value={kind} key={kind}>{providerKindLabels[kind]}</option>)}</select></label>
-              <label>请求协议<select aria-label="请求协议" value={providerDraft.protocol} onChange={event => changeProtocol(event.target.value as ProviderProtocol)}>{catalog.protocols.map(item => <option value={item.protocol} key={item.protocol}>{item.displayName}</option>)}</select></label>
-              <label>认证方式<select value={providerDraft.authScheme} onChange={event => setProviderDraft(current => ({ ...current, authScheme: event.target.value as ProviderAuthScheme }))}>{(Object.keys(authLabels) as ProviderAuthScheme[]).map(auth => <option value={auth} key={auth}>{authLabels[auth]}</option>)}</select></label>
+              <label>{text('供应商 ID', 'Provider ID')}<input value={providerDraft.id} disabled={Boolean(provider && providerDraft.id === provider.id)} onChange={event => setProviderDraft(current => ({ ...current, id: event.target.value }))} placeholder="my-provider" /></label>
+              <label>{text('显示名称', 'Display name')}<input value={providerDraft.name} onChange={event => setProviderDraft(current => ({ ...current, name: event.target.value }))} placeholder={text('我的模型服务', 'My model service')} /></label>
+              <label>{text('服务类型', 'Service type')}<select value={providerDraft.kind} onChange={event => setProviderDraft(current => ({ ...current, kind: event.target.value as ProviderKind }))}>{(Object.keys(providerKindLabels) as ProviderKind[]).map(kind => <option value={kind} key={kind}>{providerKindLabel(kind)}</option>)}</select></label>
+              <label>{text('请求协议', 'Request protocol')}<select aria-label={text('请求协议', 'Request protocol')} value={providerDraft.protocol} onChange={event => changeProtocol(event.target.value as ProviderProtocol)}>{catalog.protocols.map(item => <option value={item.protocol} key={item.protocol}>{protocolLabel(item.protocol, item.displayName)}</option>)}</select></label>
+              <label>{text('认证方式', 'Authentication')}<select value={providerDraft.authScheme} onChange={event => setProviderDraft(current => ({ ...current, authScheme: event.target.value as ProviderAuthScheme }))}>{(Object.keys(authLabels) as ProviderAuthScheme[]).map(auth => <option value={auth} key={auth}>{authLabel(auth)}</option>)}</select></label>
               <label className="provider-editor-wide">Base URL<input value={providerDraft.baseUrl} disabled={providerDraft.protocol === 'local'} onChange={event => setProviderDraft(current => ({ ...current, baseUrl: event.target.value }))} placeholder={protocol?.defaultBaseUrl ?? 'https://api.example.com/v1'} /></label>
-              <label>模型位置<select value={providerDraft.locality} onChange={event => setProviderDraft(current => ({ ...current, locality: event.target.value as 'local' | 'cloud' }))}><option value="local">本机</option><option value="cloud">云端</option></select></label>
-              <label>请求超时（秒）<input type="number" min="1" value={providerDraft.timeoutSeconds} onChange={event => setProviderDraft(current => ({ ...current, timeoutSeconds: clampNumber(event.target.value, 1, 3600) }))} /></label>
-              {providerDraft.authScheme !== 'none' && <label className="provider-editor-wide motion-field-enter">保存凭据（可选）<input type="password" value={providerDraft.credential} onChange={event => setProviderDraft(current => ({ ...current, credential: event.target.value }))} placeholder="留空则保留现有凭据" autoComplete="new-password" /></label>}
-              <label className="provider-editor-wide">协议选项（JSON）<textarea value={providerDraft.protocolOptionsText} onChange={event => setProviderDraft(current => ({ ...current, protocolOptionsText: event.target.value }))} rows={4} spellCheck={false} /></label>
-              <label className="provider-enable"><input type="checkbox" checked={providerDraft.enabled} onChange={event => setProviderDraft(current => ({ ...current, enabled: event.target.checked }))} />启用这个供应商</label>
+              <label>{text('模型位置', 'Model location')}<select value={providerDraft.locality} onChange={event => setProviderDraft(current => ({ ...current, locality: event.target.value as 'local' | 'cloud' }))}><option value="local">{text('本机', 'Local')}</option><option value="cloud">{text('云端', 'Cloud')}</option></select></label>
+              <label>{text('请求超时（秒）', 'Request timeout (seconds)')}<input type="number" min="1" value={providerDraft.timeoutSeconds} onChange={event => setProviderDraft(current => ({ ...current, timeoutSeconds: clampNumber(event.target.value, 1, 3600) }))} /></label>
+              {providerDraft.authScheme !== 'none' && <label className="provider-editor-wide motion-field-enter">{text('保存凭据（可选）', 'Save credential (optional)')}<input type="password" value={providerDraft.credential} onChange={event => setProviderDraft(current => ({ ...current, credential: event.target.value }))} placeholder={text('留空则保留现有凭据', 'Leave blank to keep the existing credential')} autoComplete="new-password" /></label>}
+              <label className="provider-editor-wide">{text('协议选项（JSON）', 'Protocol options (JSON)')}<textarea value={providerDraft.protocolOptionsText} onChange={event => setProviderDraft(current => ({ ...current, protocolOptionsText: event.target.value }))} rows={4} spellCheck={false} /></label>
+              <label className="provider-enable"><input type="checkbox" checked={providerDraft.enabled} onChange={event => setProviderDraft(current => ({ ...current, enabled: event.target.checked }))} />{text('启用这个供应商', 'Enable this provider')}</label>
             </div>
             {providerFormError && <p className="provider-form-error motion-inline-feedback"><TriangleAlert size={14} aria-hidden="true" />{providerFormError}</p>}
             <footer>
-              <span>{protocol?.discoveryPath ? `支持从 ${protocol.discoveryPath} 发现模型` : '此协议没有标准模型发现接口'}</span>
-              <button className="button button-primary" type="button" onClick={submitProvider} disabled={backend.mode !== 'real'}><Save size={14} aria-hidden="true" />保存供应商</button>
+              <span>{protocol?.discoveryPath ? text(`支持从 ${protocol.discoveryPath} 发现模型`, `Model discovery is available at ${protocol.discoveryPath}`) : text('此协议没有标准模型发现接口', 'This protocol has no standard model discovery endpoint')}</span>
+              <button className="button button-primary" type="button" onClick={submitProvider} disabled={backend.mode !== 'real'}><Save size={14} aria-hidden="true" />{text('保存供应商', 'Save provider')}</button>
             </footer>
             </div>
           )}
@@ -1208,26 +1476,26 @@ export function ModelsPage() {
       </section>
 
       {provider && (
-        <section className="model-registry-layout">
+        <section className="model-registry-layout" id="model-registry" aria-label={t('settings.registry')} tabIndex={-1}>
           <div className="model-discovery models-surface">
             <div className="models-section-heading compact">
               <div>
-                <span className="section-kicker">发现模型</span>
-                <h2>从目录选择，或手工填写</h2>
-                <p>目录只返回 ID 与上下文长度，不代表模型一定支持某项能力。</p>
+                <span className="section-kicker">{text('发现模型', 'Discover models')}</span>
+                <h2>{text('从目录选择，或手工填写', 'Choose from the registry or enter one manually')}</h2>
+                <p>{text('目录只返回 ID 与上下文长度，不代表模型一定支持某项能力。', 'Discovery only returns IDs and context lengths; it does not prove that a model supports a capability.')}</p>
               </div>
               <button className="button button-secondary" type="button" onClick={() => discoverProviderModels(provider.id)} disabled={backend.mode !== 'real' || discoveryStatus === 'loading' || !selectedProtocol?.discoveryPath}>
                 {discoveryStatus === 'loading' ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Radar size={14} aria-hidden="true" />}
-                发现模型
+                {text('发现模型', 'Discover models')}
               </button>
             </div>
 
             {discoveryProviderId === provider.id && discoveredModels.length > 0 && (
-              <div className="discovery-results motion-surface-enter" aria-label="发现的模型">
+              <div className="discovery-results motion-surface-enter" aria-label={text('发现的模型', 'Discovered models')}>
                 {discoveredModels.slice(0, 12).map(model => (
                   <button type="button" key={model.modelId} onClick={() => selectDiscoveredModel(model.modelId)}>
                     <span><strong>{model.displayName}</strong><small>{model.modelId}</small></span>
-                    <span>{model.contextWindow ? `${model.contextWindow.toLocaleString()} tokens` : '上下文未知'}</span>
+                    <span>{model.contextWindow ? `${model.contextWindow.toLocaleString()} tokens` : text('上下文未知', 'Context unknown')}</span>
                     <ChevronRight size={15} aria-hidden="true" />
                   </button>
                 ))}
@@ -1235,74 +1503,81 @@ export function ModelsPage() {
             )}
 
             <div className="model-create-form">
-              <label>模型 ID<input aria-label="模型 ID" value={modelDraft.modelId} onChange={event => setModelDraft(current => ({ ...current, modelId: event.target.value }))} placeholder="模型目录中的真实 ID" /></label>
-              <label>显示名称<input value={modelDraft.displayName} onChange={event => setModelDraft(current => ({ ...current, displayName: event.target.value }))} placeholder="便于自己识别的名称" /></label>
-              <label>上下文长度<input type="number" min="1" value={modelDraft.contextWindow} onChange={event => setModelDraft(current => ({ ...current, contextWindow: event.target.value }))} placeholder="可选" /></label>
-              <label>运行位置<select value={modelDraft.locality} onChange={event => setModelDraft(current => ({ ...current, locality: event.target.value as 'local' | 'cloud' }))}><option value="local">本机</option><option value="cloud">云端</option></select></label>
+              <label>{text('模型 ID', 'Model ID')}<input aria-label={text('模型 ID', 'Model ID')} value={modelDraft.modelId} onChange={event => setModelDraft(current => ({ ...current, modelId: event.target.value }))} placeholder={text('模型目录中的真实 ID', 'Exact ID from the model registry')} /></label>
+              <label>{text('显示名称', 'Display name')}<input value={modelDraft.displayName} onChange={event => setModelDraft(current => ({ ...current, displayName: event.target.value }))} placeholder={text('便于自己识别的名称', 'A name you can recognize')} /></label>
+              <label>{text('上下文长度', 'Context length')}<input type="number" min="1" value={modelDraft.contextWindow} onChange={event => setModelDraft(current => ({ ...current, contextWindow: event.target.value }))} placeholder={text('可选', 'Optional')} /></label>
+              <label>{text('运行位置', 'Execution location')}<select value={modelDraft.locality} onChange={event => setModelDraft(current => ({ ...current, locality: event.target.value as 'local' | 'cloud' }))}><option value="local">{text('本机', 'Local')}</option><option value="cloud">{text('云端', 'Cloud')}</option></select></label>
               <fieldset>
-                <legend>明确声明能力 <span>（必须人工确认）</span></legend>
+                <legend>{text('明确声明能力', 'Declare capabilities explicitly')} <span>{text('（必须人工确认）', '(manual confirmation required)')}</span></legend>
                 <div className="capability-picker">
                   {catalog.capabilities.map(capability => (
                     <label className={modelDraft.capabilities.includes(capability) ? 'is-selected' : ''} key={capability}>
                       <input type="checkbox" checked={modelDraft.capabilities.includes(capability)} onChange={() => toggleCapability(capability)} />
-                      {capabilityLabels[capability]}
+                      {capabilityLabel(capability)}
                     </label>
                   ))}
                 </div>
               </fieldset>
-              <div className="capability-warning"><TriangleAlert size={15} aria-hidden="true" />请根据供应商文档或实际测试确认能力；发现模型不会自动勾选任何项。</div>
-              <button className="button button-primary" type="button" disabled={!modelDraft.modelId.trim() || modelDraft.capabilities.length === 0 || backend.mode !== 'real'} onClick={() => { createModel({ providerId: provider.id, modelId: modelDraft.modelId, displayName: modelDraft.displayName, contextWindow: modelDraft.contextWindow ? Number(modelDraft.contextWindow) : undefined, capabilities: modelDraft.capabilities, locality: modelDraft.locality }); setModelDraft(current => ({ ...current, modelId: '', displayName: '', contextWindow: '', capabilities: [] })) }}><Plus size={14} aria-hidden="true" />创建已确认模型</button>
+              <div className="capability-warning"><TriangleAlert size={15} aria-hidden="true" />{text('请根据供应商文档或实际测试确认能力；发现模型不会自动勾选任何项。', 'Confirm capabilities from provider documentation or real tests. Discovery never selects capabilities automatically.')}</div>
+              <button className="button button-primary" type="button" disabled={!modelDraft.modelId.trim() || modelDraft.capabilities.length === 0 || backend.mode !== 'real'} onClick={() => { createModel({ providerId: provider.id, modelId: modelDraft.modelId, displayName: modelDraft.displayName, contextWindow: modelDraft.contextWindow ? Number(modelDraft.contextWindow) : undefined, capabilities: modelDraft.capabilities, locality: modelDraft.locality }); setModelDraft(current => ({ ...current, modelId: '', displayName: '', contextWindow: '', capabilities: [] })) }}><Plus size={14} aria-hidden="true" />{text('创建已确认模型', 'Create confirmed model')}</button>
             </div>
           </div>
 
           <div className="model-catalog models-surface">
             <div className="models-section-heading compact">
-              <div><span className="section-kicker">已登记模型</span><h2>{provider.name}</h2></div>
-              <label className="compact-search"><Search size={14} aria-hidden="true" /><span className="sr-only">搜索模型</span><input value={modelQuery} onChange={event => setModelQuery(event.target.value)} placeholder="搜索模型" /></label>
+              <div><span className="section-kicker">{text('已登记模型', 'Registered models')}</span><h2>{provider.name}</h2></div>
+              <label className="compact-search"><Search size={14} aria-hidden="true" /><span className="sr-only">{text('搜索模型', 'Search models')}</span><input value={modelQuery} onChange={event => setModelQuery(event.target.value)} placeholder={text('搜索模型', 'Search models')} /></label>
             </div>
             <div className="model-list">
               {providerModels.map(model => (
                 <article key={model.id}>
                   <span className="model-icon">{model.locality === 'local' ? <Database size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}</span>
-                  <div><strong>{model.label}</strong><small>{model.modelId}{model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}</small><span className="capability-list">{model.capabilities.map(capability => <span key={capability}>{capabilityLabels[capability]}</span>)}</span></div>
-                  <span className={model.enabled ? 'model-ready' : 'model-disabled'}>{model.enabled ? <Check size={13} aria-hidden="true" /> : <X size={13} aria-hidden="true" />}{model.enabled ? '可用' : '已停用'}</span>
+                  <div><strong>{model.label}</strong><small>{model.modelId}{model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}</small><span className="capability-list">{model.capabilities.map(capability => <span key={capability}>{capabilityLabel(capability)}</span>)}</span></div>
+                  <span className={model.enabled ? 'model-ready' : 'model-disabled'}>{model.enabled ? <Check size={13} aria-hidden="true" /> : <X size={13} aria-hidden="true" />}{model.enabled ? text('可用', 'Available') : text('已停用', 'Disabled')}</span>
                 </article>
               ))}
-              {providerModels.length === 0 && <div className="model-empty">该供应商下还没有匹配的模型。</div>}
+              {providerModels.length === 0 && <div className="model-empty">{text('该供应商下还没有匹配的模型。', 'No matching models are registered for this provider.')}</div>}
             </div>
           </div>
         </section>
       )}
 
-      <section className="role-routing models-surface">
+      <section className="role-routing models-surface" id="role-routing" aria-labelledby="role-routing-title" tabIndex={-1}>
         <div className="models-section-heading">
           <div className="section-heading-icon"><Bot size={19} aria-hidden="true" /></div>
-          <div><span className="section-kicker">处理角色</span><h2>为每个阶段选择兼容模型</h2><p>下拉框只列出能力完整匹配、模型启用且供应商启用的选项。</p></div>
-          <div className="routing-valid"><ShieldCheck size={16} aria-hidden="true" />{roles.filter(role => role.modelId).length} / {roles.length} 已绑定</div>
+          <div><span className="section-kicker">{t('settings.routing')}</span><h2 id="role-routing-title">{text('为每个阶段选择兼容模型', 'Choose a compatible model for every stage')}</h2><p>{text('下拉框只列出能力完整匹配、模型启用且供应商启用的选项。', 'Selectors only list enabled models from enabled providers whose capabilities fully match the role.')}</p></div>
+          <div className="routing-valid"><ShieldCheck size={16} aria-hidden="true" />{roles.filter(role => role.modelId).length} / {roles.length} {text('已绑定', 'bound')}</div>
         </div>
         <div className="role-groups">
           {(['语音', '视觉', '笔记'] as const).map(group => (
             <section className="role-group" key={group}>
-              <header><span>{group}</span><small>{roles.filter(role => role.group === group).length} 个角色</small></header>
+              <header><span>{text(group, group === '语音' ? 'Speech' : group === '视觉' ? 'Vision' : 'Notes')}</span><small>{text(`${roles.filter(role => role.group === group).length} 个角色`, `${roles.filter(role => role.group === group).length} roles`)}</small></header>
               {roles.filter(role => role.group === group).map(role => {
                 const compatibleModels = models.filter(model => {
                   const modelProvider = providers.find(item => item.id === model.providerId)
                   return model.enabled && Boolean(modelProvider?.enabled) && role.requiredCapabilities.every(capability => model.capabilities.includes(capability))
                 })
                 const currentModel = compatibleModels.find(model => model.id === role.modelId)
+                const roleCopy = roleCopyEn[role.id]
+                const roleLabel = locale === 'en-US' ? roleCopy?.label ?? role.id : role.label
+                const roleDescription = locale === 'en-US'
+                  ? roleCopy?.description ?? 'Processing role supplied by the backend catalog'
+                  : role.description
                 return (
                   <div className="role-row" key={role.id}>
-                    <div className="role-copy"><strong>{role.label}</strong><small>{role.description}</small><span>{role.requiredCapabilities.map(capability => capabilityLabels[capability]).join(' · ')}</span></div>
-                    <label className="role-select"><span className="sr-only">为{role.label}选择模型</span><select value={currentModel?.id ?? ''} onChange={event => bindRole(role.id, event.target.value)}><option value="">未绑定</option>{compatibleModels.map(model => <option value={model.id} key={model.id}>{model.label} · {model.locality === 'local' ? '本机' : '云端'}</option>)}</select></label>
-                    <span className={`role-state ${currentModel ? 'is-ready' : ''}`}>{currentModel ? <Check size={13} aria-hidden="true" /> : <TriangleAlert size={13} aria-hidden="true" />}{currentModel ? '能力匹配' : '等待绑定'}</span>
+                    <div className="role-copy"><strong>{roleLabel}</strong><small>{roleDescription}</small><span>{role.requiredCapabilities.map(capabilityLabel).join(' · ')}</span></div>
+                    <label className="role-select"><span className="sr-only">{text(`为${roleLabel}选择模型`, `Choose a model for ${roleLabel}`)}</span><select value={currentModel?.id ?? ''} onChange={event => bindRole(role.id, event.target.value)}><option value="">{text('未绑定', 'Unbound')}</option>{compatibleModels.map(model => <option value={model.id} key={model.id}>{model.label} · {model.locality === 'local' ? text('本机', 'Local') : text('云端', 'Cloud')}</option>)}</select></label>
+                    <span className={`role-state ${currentModel ? 'is-ready' : ''}`}>{currentModel ? <Check size={13} aria-hidden="true" /> : <TriangleAlert size={13} aria-hidden="true" />}{currentModel ? text('能力匹配', 'Capabilities match') : text('等待绑定', 'Awaiting binding')}</span>
                   </div>
                 )
               })}
             </section>
           ))}
         </div>
-        <div className="routing-footnote"><ShieldCheck size={15} aria-hidden="true" />角色要求完全来自后端 configuration catalog；前端不会用近似标签代替真实能力。</div>
+        <div className="routing-footnote"><ShieldCheck size={15} aria-hidden="true" />{text('角色要求完全来自后端 configuration catalog；前端不会用近似标签代替真实能力。', 'Role requirements come directly from the backend configuration catalog; the frontend never substitutes approximate labels for real capabilities.')}</div>
       </section>
+        </div>
+      </div>
     </div>
   )
 }

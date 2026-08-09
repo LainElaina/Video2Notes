@@ -14,6 +14,8 @@ import {
   Video2NotesApi,
   bundledDemoVideoPath,
   localArtifactUrl,
+  pickLocalToolDirectoryWithNativeDialog,
+  pickLocalToolFileWithNativeDialog,
   pickRuntimeDirectoryWithNativeDialog,
   pickVideoWithNativeDialog,
   resolveBackendConnection,
@@ -39,6 +41,7 @@ describe('real local API client', () => {
     fetchMock.mockReset()
     invokeMock.mockReset()
     convertFileSrcMock.mockClear()
+    document.documentElement.lang = 'zh-CN'
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
   })
 
@@ -71,6 +74,8 @@ describe('real local API client', () => {
       })
       .mockResolvedValueOnce('D:/captures/lecture.mp4')
       .mockResolvedValueOnce('D:/AI-Runtimes/faster-whisper')
+      .mockResolvedValueOnce('C:/Tools/ffmpeg/bin/ffmpeg.exe')
+      .mockResolvedValueOnce('D:/Python/Lib/site-packages')
       .mockResolvedValueOnce('C:/Program Files/Video2Notes/demo/evidence-demo.mp4')
       .mockResolvedValueOnce('C:/Video2Notes/runs/run_01/media/source.mp4')
 
@@ -87,6 +92,12 @@ describe('real local API client', () => {
     await expect(pickRuntimeDirectoryWithNativeDialog()).resolves.toBe(
       'D:/AI-Runtimes/faster-whisper',
     )
+    await expect(pickLocalToolFileWithNativeDialog()).resolves.toBe(
+      'C:/Tools/ffmpeg/bin/ffmpeg.exe',
+    )
+    await expect(pickLocalToolDirectoryWithNativeDialog()).resolves.toBe(
+      'D:/Python/Lib/site-packages',
+    )
     await expect(bundledDemoVideoPath()).resolves.toBe(
       'C:/Program Files/Video2Notes/demo/evidence-demo.mp4',
     )
@@ -94,12 +105,39 @@ describe('real local API client', () => {
       'asset://localhost/C:/Video2Notes/runs/run_01/media/source.mp4',
     )
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'backend_connection')
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'pick_video')
-    expect(invokeMock).toHaveBeenNthCalledWith(3, 'pick_runtime_directory')
-    expect(invokeMock).toHaveBeenNthCalledWith(4, 'demo_video_path')
-    expect(invokeMock).toHaveBeenNthCalledWith(5, 'artifact_file_path', {
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'pick_video', { locale: 'zh-CN' })
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'pick_runtime_directory', {
+      locale: 'zh-CN',
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(4, 'pick_local_tool_file', {
+      locale: 'zh-CN',
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(5, 'pick_local_tool_directory', {
+      locale: 'zh-CN',
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(6, 'demo_video_path')
+    expect(invokeMock).toHaveBeenNthCalledWith(7, 'artifact_file_path', {
       runId: 'run_01',
       relativePath: 'media/source.mp4',
+    })
+  })
+
+  it('passes the active English locale to native dependency dialogs', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    })
+    document.documentElement.lang = 'en-US'
+    invokeMock.mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+
+    await pickLocalToolFileWithNativeDialog()
+    await pickLocalToolDirectoryWithNativeDialog()
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'pick_local_tool_file', {
+      locale: 'en-US',
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'pick_local_tool_directory', {
+      locale: 'en-US',
     })
   })
 

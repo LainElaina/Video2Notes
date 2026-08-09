@@ -50,6 +50,29 @@ describe('desktop workflow', () => {
     })
   })
 
+  it('switches navigation and settings copy to English and updates the document language', () => {
+    render(<App />)
+
+    expect(document.documentElement).toHaveAttribute('lang', 'zh-CN')
+    fireEvent.change(screen.getByLabelText('界面语言'), {
+      target: { value: 'en-US' },
+    })
+
+    expect(document.documentElement).toHaveAttribute('lang', 'en-US')
+    expect(screen.getByRole('button', { name: 'New task' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Runs' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reader' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Guided view' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.getByRole('heading', { name: 'Settings center' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Keep long reading comfortable' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Local runtime environment')).toBeInTheDocument()
+  })
+
   it('probes a source and starts an Accurate task from the workbench', () => {
     render(<App />)
 
@@ -59,7 +82,7 @@ describe('desktop workflow', () => {
     expect(screen.getByText('1080p · 60 fps')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /开始处理/ }))
-    expect(screen.getByText(/EVIDENCE BUILD-UP/)).toBeInTheDocument()
+    expect(screen.getByText('证据累积')).toBeInTheDocument()
     expect(useStudioStore.getState().tasks[0].mode).toBe('accurate')
   })
 
@@ -330,7 +353,7 @@ describe('desktop workflow', () => {
     useUiPreferences.setState({ workspaceMode: 'professional' })
     render(<App />)
 
-    expect(screen.getByText('EVIDENCE TIMELINE')).toBeInTheDocument()
+    expect(screen.getByText('证据时间线')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '局部返工' }))
     expect(screen.getByRole('heading', { name: '局部返工' })).toBeInTheDocument()

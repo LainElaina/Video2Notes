@@ -2,10 +2,68 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ModelsPage } from './ModelsPage'
 import { useStudioStore } from '../store'
+import { useUiPreferences } from '../stores/uiPreferences'
 
 describe('models and performance workspace', () => {
   beforeEach(() => {
     useStudioStore.getState().resetDemo()
+    useUiPreferences.setState({ locale: 'zh-CN' })
+  })
+
+  it('switches the settings workspace and professional controls to English', () => {
+    render(<ModelsPage />)
+
+    fireEvent.click(screen.getByRole('radio', { name: 'English' }))
+
+    expect(useUiPreferences.getState().locale).toBe('en-US')
+    expect(screen.getByRole('heading', { name: 'Settings center' })).toBeInTheDocument()
+
+    const navigation = screen.getByRole('navigation', { name: 'Settings sections' })
+    expect(within(navigation).getByRole('link', { name: /Display & type/ })).toBeInTheDocument()
+    expect(within(navigation).getByRole('link', { name: /Performance & resources/ })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'How this computer should work' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', {
+        name: 'Protocols, authentication, and model registry',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', {
+        name: 'Choose a compatible model for every stage',
+      }),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Text understanding')).toBeInTheDocument()
+    expect(
+      screen.getByLabelText('Choose a model for Frame-change detection'),
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Custom performance' }))
+    expect(screen.getByLabelText('CPU workers')).toBeInTheDocument()
+    expect(screen.getByLabelText('OCR inference width')).toBeInTheDocument()
+  })
+
+  it('provides an accessible settings directory that focuses the selected section', () => {
+    render(<ModelsPage />)
+
+    const navigation = screen.getByRole('navigation', { name: '设置分区' })
+    const appearanceLink = within(navigation).getByRole('link', {
+      name: /显示与字体/,
+    })
+    const runtimeLink = within(navigation).getByRole('link', {
+      name: /依赖与运行时/,
+    })
+    const runtimeSection = screen
+      .getByRole('heading', { name: '依赖与运行时' })
+      .closest('section')
+
+    expect(appearanceLink).toHaveAttribute('aria-current', 'location')
+    expect(runtimeSection).toHaveAttribute('id', 'runtime-packages')
+    expect(runtimeSection).toHaveAttribute('tabindex', '-1')
+
+    fireEvent.click(runtimeLink)
+
+    expect(runtimeLink).toHaveAttribute('aria-current', 'location')
+    expect(runtimeSection).toHaveFocus()
   })
 
   it('renders every catalog role and only lists fully compatible enabled models', () => {

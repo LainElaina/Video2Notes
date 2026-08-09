@@ -84,6 +84,7 @@ summary:focus-visible {
 .top-navigation-button,
 .workspace-mode-switch,
 .theme-preset-control,
+.locale-control,
 .topbar-backend {
   -webkit-backdrop-filter: none;
 }
@@ -106,13 +107,15 @@ summary:focus-visible {
 
 .workspace-mode-switch,
 .theme-preset-control,
+.locale-control,
 .topbar-backend {
   border-color: var(--glass-outline);
   background: color-mix(in srgb, var(--glass-solid) 64%, transparent);
 }
 
 .workspace-mode-switch button,
-.theme-preset-control {
+.theme-preset-control,
+.locale-control {
   transition:
     transform var(--motion-fast) var(--ease-emphasized),
     background-color var(--motion-fast) var(--ease-standard),

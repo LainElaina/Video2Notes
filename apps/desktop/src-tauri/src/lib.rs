@@ -178,10 +178,20 @@ fn backend_connection(
 /// Opens Windows' native file picker.  The selected path is absolute and is
 /// only used as an input to the local pipeline; no file contents cross IPC.
 #[tauri::command]
-fn pick_video() -> Option<String> {
+fn pick_video(locale: Option<String>) -> Option<String> {
+    let is_english = locale.as_deref() == Some("en-US");
     rfd::FileDialog::new()
+        .set_title(if is_english {
+            "Select a local video"
+        } else {
+            "选择本地视频"
+        })
         .add_filter(
-            "Video files",
+            if is_english {
+                "Video files"
+            } else {
+                "视频文件"
+            },
             &["mp4", "mkv", "mov", "webm", "avi", "m4v", "flv", "wmv"],
         )
         .pick_file()
@@ -193,9 +203,42 @@ fn pick_video() -> Option<String> {
 /// The Python backend still validates `runtime-package.json`, hashes, platform
 /// compatibility, and ownership before the directory can be registered.
 #[tauri::command]
-fn pick_runtime_directory() -> Option<String> {
+fn pick_runtime_directory(locale: Option<String>) -> Option<String> {
     rfd::FileDialog::new()
-        .set_title("Select a Video2Notes runtime package directory")
+        .set_title(if locale.as_deref() == Some("en-US") {
+            "Select a Video2Notes runtime package directory"
+        } else {
+            "选择 Video2Notes 运行时包目录"
+        })
+        .pick_folder()
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Opens the native file picker for a user-owned executable or script. The
+/// backend probes the selected file for the requested dependency before it is
+/// persisted; selecting a file never grants Video2Notes ownership of it.
+#[tauri::command]
+fn pick_local_tool_file(locale: Option<String>) -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title(if locale.as_deref() == Some("en-US") {
+            "Select an installed program or script"
+        } else {
+            "选择已安装的程序或脚本"
+        })
+        .pick_file()
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn pick_local_tool_directory(locale: Option<String>) -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title(if locale.as_deref() == Some("en-US") {
+            "Select a dependency or Python environment directory"
+        } else {
+            "选择依赖或 Python 环境目录"
+        })
         .pick_folder()
         .and_then(|path| path.canonicalize().ok())
         .map(|path| path.to_string_lossy().into_owned())
@@ -486,6 +529,8 @@ pub fn run() {
             backend_connection,
             pick_video,
             pick_runtime_directory,
+            pick_local_tool_file,
+            pick_local_tool_directory,
             demo_video_path,
             artifact_file_path
         ])

@@ -4,6 +4,8 @@ import {
   Video2NotesApiError,
   bundledDemoVideoPath,
   localArtifactUrl,
+  pickLocalToolDirectoryWithNativeDialog,
+  pickLocalToolFileWithNativeDialog,
   pickRuntimeDirectoryWithNativeDialog,
   pickVideoWithNativeDialog,
   resolveBackendConnection,
@@ -20,6 +22,7 @@ import type {
   ApiJobEvent,
   ApiJobPreflight,
   ApiJobSnapshot,
+  ApiLocalToolInventory,
   ApiModelRegistry,
   ApiPerformanceSettings,
   ApiProcessingEstimate,
@@ -65,6 +68,7 @@ import type {
   DraftState,
   EvidenceItem,
   JobPreflightDefinition,
+  LocalToolInventoryDefinition,
   MachineProfile,
   ModelDefinition,
   ModelCapability,
@@ -256,6 +260,12 @@ interface StudioActions {
   refreshRuntimePackages: () => void
   discoverRuntimePackages: () => void
   registerCustomRuntimeDirectory: () => void
+  bindLocalToolPath: (
+    dependencyId: string,
+    selection: 'file' | 'directory',
+    knownPath?: string,
+  ) => void
+  unbindLocalToolPath: (dependencyId: string) => void
   installRuntimePackage: (
     packageId: string,
     version?: string,
@@ -656,6 +666,66 @@ const demoDraft = (): DraftState => ({
   mode: 'accurate',
 })
 
+const demoLocalTools = (): LocalToolInventoryDefinition => {
+  const checkedAtUtc = '2026-08-04T12:00:00Z'
+  const definitions = [
+    ['tool.ffmpeg', 'FFmpeg', '视频处理（FFmpeg）', 'executable', 'C:\\Tools\\ffmpeg\\bin\\ffmpeg.exe', '7.1.1', true],
+    ['tool.ffprobe', 'FFprobe', '媒体探测（FFprobe）', 'executable', 'C:\\Tools\\ffmpeg\\bin\\ffprobe.exe', '7.1.1', true],
+    ['download.ytdlp', 'yt-dlp', '多平台下载（yt-dlp）', 'executable', 'C:\\Tools\\yt-dlp.exe', '2026.08.02', false],
+    ['render.chromium_pdf', 'Chromium browser', '网页/PDF 浏览器（Chromium）', 'executable', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', '139.0', false],
+    ['runtime.python', 'Python', 'Python 运行时', 'executable', 'C:\\Python312\\python.exe', '3.12.9', false],
+    ['asr.faster_whisper', 'faster-whisper', '语音识别（faster-whisper）', 'python_module', 'C:\\Python312\\Lib\\site-packages\\faster_whisper', '1.1.1', true],
+    ['asr.ctranslate2', 'CTranslate2', '语音推理引擎（CTranslate2）', 'python_module', 'C:\\Python312\\Lib\\site-packages\\ctranslate2', '4.6.0', true],
+    ['ocr.paddleocr', 'PaddleOCR', '画面文字识别（PaddleOCR）', 'python_module', 'C:\\Python312\\Lib\\site-packages\\paddleocr', '3.0.0', true],
+    ['ocr.paddlepaddle', 'PaddlePaddle', 'OCR 推理引擎（PaddlePaddle）', 'python_module', undefined, undefined, false],
+    ['acceleration.cuda', 'CUDA / NVIDIA runtime', 'CUDA / NVIDIA 加速运行时', 'cuda_runtime', 'C:\\Windows\\System32\\nvidia-smi.exe', '576.88', true],
+  ] as const
+  const tools = definitions.map(([
+    dependencyId,
+    displayName,
+    displayNameZh,
+    kind,
+    path,
+    version,
+    cudaSupported,
+  ]) => ({
+    dependencyId,
+    displayName,
+    displayNameZh,
+    kind,
+    status: path ? 'ready' as const : 'missing' as const,
+    compatible: Boolean(path),
+    path,
+    version,
+    source: path ? 'path' as const : 'none' as const,
+    capabilities: [dependencyId],
+    cpuSupported: true,
+    cudaSupported,
+    bound: dependencyId === 'tool.ffmpeg',
+    detail: path ? `${displayName} is available.` : `${displayName} was not found.`,
+    detailZh: path ? `已检测到 ${displayNameZh}。` : `未检测到 ${displayNameZh}。`,
+    suggestion: path ? undefined : 'Install it or choose a compatible path.',
+    suggestionZh: path ? undefined : '请安装该依赖，或手动选择兼容路径。',
+    candidates: [],
+    checkedAtUtc,
+  }))
+  return {
+    tools,
+    bindings: {
+      'tool.ffmpeg': {
+        dependencyId: 'tool.ffmpeg',
+        path: 'C:\\Tools\\ffmpeg\\bin\\ffmpeg.exe',
+        kind: 'executable',
+        boundAtUtc: checkedAtUtc,
+        lastVersion: '7.1.1',
+      },
+    },
+    scannedAtUtc: checkedAtUtc,
+    platform: 'Windows',
+    architecture: 'AMD64',
+  }
+}
+
 const demoRuntimePackages = (): RuntimePackageInventoryDefinition => ({
   managedRoot: 'D:\\Video2Notes\\runtime-packages\\managed',
   instances: [
@@ -821,6 +891,7 @@ const demoRuntimePackages = (): RuntimePackageInventoryDefinition => ({
       detail: '演示记录：组件已安装并通过 worker 探测。',
     },
   ],
+  localTools: demoLocalTools(),
   availableReleases: [
     {
       packageId: 'local-inference-cpu-win-x64',
@@ -2057,6 +2128,57 @@ const mapRuntimeOperation = (
   errorCode: value.error_code ?? undefined,
 })
 
+const mapLocalTools = (
+  value: ApiLocalToolInventory | null | undefined,
+): LocalToolInventoryDefinition | undefined => {
+  if (!value) return undefined
+  return {
+    tools: value.tools.map(tool => ({
+      dependencyId: tool.dependency_id,
+      displayName: tool.display_name,
+      displayNameZh: tool.display_name_zh,
+      kind: tool.kind,
+      status: tool.status,
+      compatible: tool.compatible,
+      path: tool.path ?? undefined,
+      version: tool.version ?? undefined,
+      source: tool.source,
+      capabilities: [...tool.capabilities],
+      cpuSupported: tool.cpu_supported,
+      cudaSupported: tool.cuda_supported,
+      bound: tool.bound,
+      detail: tool.detail ?? undefined,
+      detailZh: tool.detail_zh ?? undefined,
+      suggestion: tool.suggestion ?? undefined,
+      suggestionZh: tool.suggestion_zh ?? undefined,
+      candidates: tool.candidates.map(candidate => ({
+        path: candidate.path,
+        source: candidate.source,
+        version: candidate.version ?? undefined,
+        compatible: candidate.compatible,
+        detail: candidate.detail ?? undefined,
+        detailZh: candidate.detail_zh ?? undefined,
+      })),
+      checkedAtUtc: tool.checked_at_utc,
+    })),
+    bindings: Object.fromEntries(
+      Object.entries(value.bindings).map(([dependencyId, binding]) => [
+        dependencyId,
+        {
+          dependencyId: binding.dependency_id,
+          path: binding.path,
+          kind: binding.kind,
+          boundAtUtc: binding.bound_at_utc,
+          lastVersion: binding.last_version ?? undefined,
+        },
+      ]),
+    ),
+    scannedAtUtc: value.scanned_at_utc ?? undefined,
+    platform: value.platform,
+    architecture: value.architecture,
+  }
+}
+
 const mapRuntimePackages = (
   value: ApiRuntimePackageReport,
 ): RuntimePackageInventoryDefinition => ({
@@ -2097,6 +2219,7 @@ const mapRuntimePackages = (
     ]),
   ),
   operations: value.inventory.operations.map(mapRuntimeOperation),
+  localTools: mapLocalTools(value.inventory.local_tools),
   availableReleases: value.releases.map(release => ({
     packageId: release.package_id,
     version: release.version,
@@ -2217,7 +2340,7 @@ const registryPresentation = (
     authScheme:
       provider.auth_scheme ??
       (provider.kind === 'local' || provider.kind === 'ollama' ? 'none' : 'bearer'),
-    endpoint: provider.base_url || '本机 worker',
+    endpoint: provider.base_url || 'local://worker',
     locality: provider.locality,
     enabled: provider.enabled,
     timeoutSeconds: provider.request_timeout_seconds,
@@ -4769,6 +4892,68 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
           runtimePackageError: message,
           notice: message,
         })
+      })
+  },
+  bindLocalToolPath: (dependencyId, selection, knownPath) => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '连接真实本机后端后才能绑定本机依赖路径。' })
+      return
+    }
+    const pick = knownPath
+      ? Promise.resolve(knownPath)
+      : selection === 'file'
+        ? pickLocalToolFileWithNativeDialog()
+        : pickLocalToolDirectoryWithNativeDialog()
+    void pick
+      .then(path => {
+        if (!path) return
+        const alreadyBound = Boolean(
+          get().runtimePackages?.localTools?.bindings[dependencyId],
+        )
+        set({
+          runtimePackagesStatus: 'loading',
+          runtimePackageError: undefined,
+          notice: '正在验证所选路径、版本与兼容性。',
+        })
+        return (alreadyBound
+          ? api!.updateLocalToolBinding(dependencyId, path)
+          : api!.bindLocalTool(dependencyId, path)
+        ).then(result => {
+          set({
+            runtimePackagesStatus: 'ready',
+            runtimePackageError: undefined,
+            notice: `${result.display_name_zh} 已绑定到指定路径。`,
+          })
+          get().refreshRuntimePackages()
+        })
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({
+          runtimePackagesStatus: 'error',
+          runtimePackageError: message,
+          notice: `本机依赖路径未能绑定：${message}`,
+        })
+      })
+  },
+  unbindLocalToolPath: dependencyId => {
+    if (!api || get().backend.mode !== 'real') {
+      set({ notice: '连接真实本机后端后才能解除本机依赖绑定。' })
+      return
+    }
+    void api
+      .unbindLocalTool(dependencyId)
+      .then(() => {
+        set({
+          runtimePackagesStatus: 'ready',
+          runtimePackageError: undefined,
+          notice: '已解除路径绑定；原程序和目录没有被删除。',
+        })
+        get().refreshRuntimePackages()
+      })
+      .catch(error => {
+        const message = errorMessage(error)
+        set({ runtimePackageError: message, notice: message })
       })
   },
   installRuntimePackage: (packageId, version, bindRequirements = []) => {

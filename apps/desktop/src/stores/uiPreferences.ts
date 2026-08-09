@@ -3,17 +3,20 @@ import { create } from 'zustand'
 export type WorkspaceMode = 'guided' | 'professional'
 export type ThemePreset = 'precision-light' | 'paper-light' | 'studio-graphite'
 export type FontSizePreset = 'compact' | 'comfortable' | 'large'
+export type Locale = 'zh-CN' | 'en-US'
 
 export interface UiPreferences {
   workspaceMode: WorkspaceMode
   themePreset: ThemePreset
   fontSizePreset: FontSizePreset
+  locale: Locale
 }
 
 interface UiPreferencesState extends UiPreferences {
   setWorkspaceMode: (workspaceMode: WorkspaceMode) => void
   setThemePreset: (themePreset: ThemePreset) => void
   setFontSizePreset: (fontSizePreset: FontSizePreset) => void
+  setLocale: (locale: Locale) => void
   hydratePreferences: () => void
   resetPreferences: () => void
 }
@@ -26,6 +29,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   workspaceMode: 'guided',
   themePreset: 'precision-light',
   fontSizePreset: 'comfortable',
+  locale: 'zh-CN',
 }
 
 const workspaceModes = new Set<WorkspaceMode>(['guided', 'professional'])
@@ -35,6 +39,7 @@ const themePresets = new Set<ThemePreset>([
   'studio-graphite',
 ])
 const fontSizePresets = new Set<FontSizePreset>(['compact', 'comfortable', 'large'])
+const locales = new Set<Locale>(['zh-CN', 'en-US'])
 
 const migrateWorkspaceMode = (value: unknown): WorkspaceMode => {
   if (workspaceModes.has(value as WorkspaceMode)) return value as WorkspaceMode
@@ -50,6 +55,9 @@ const normalizePreferences = (value: Partial<Record<keyof UiPreferences, unknown
   fontSizePreset: fontSizePresets.has(value.fontSizePreset as FontSizePreset)
     ? (value.fontSizePreset as FontSizePreset)
     : DEFAULT_UI_PREFERENCES.fontSizePreset,
+  locale: locales.has(value.locale as Locale)
+    ? (value.locale as Locale)
+    : DEFAULT_UI_PREFERENCES.locale,
 })
 
 const readStoredPreferences = (
@@ -71,7 +79,16 @@ function writePreferences(preferences: UiPreferences) {
   if (typeof window === 'undefined') return
 
   try {
-    window.localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences))
+    // Keep the legacy JSON shape stable for the default locale; older builds can
+    // still read the other UI preferences while newer builds persist English.
+    const payload = preferences.locale === 'zh-CN'
+      ? {
+          workspaceMode: preferences.workspaceMode,
+          themePreset: preferences.themePreset,
+          fontSizePreset: preferences.fontSizePreset,
+        }
+      : preferences
+    window.localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify(payload))
   } catch {
     // A blocked or full localStorage must never prevent the local app from rendering.
   }
@@ -100,6 +117,7 @@ export const useUiPreferences = create<UiPreferencesState>((set, get) => ({
       workspaceMode,
       themePreset: get().themePreset,
       fontSizePreset: get().fontSizePreset,
+      locale: get().locale,
     }
     writePreferences(preferences)
     set({ workspaceMode })
@@ -109,6 +127,7 @@ export const useUiPreferences = create<UiPreferencesState>((set, get) => ({
       workspaceMode: get().workspaceMode,
       themePreset,
       fontSizePreset: get().fontSizePreset,
+      locale: get().locale,
     }
     writePreferences(preferences)
     set({ themePreset })
@@ -118,9 +137,20 @@ export const useUiPreferences = create<UiPreferencesState>((set, get) => ({
       workspaceMode: get().workspaceMode,
       themePreset: get().themePreset,
       fontSizePreset,
+      locale: get().locale,
     }
     writePreferences(preferences)
     set({ fontSizePreset })
+  },
+  setLocale: locale => {
+    const preferences = {
+      workspaceMode: get().workspaceMode,
+      themePreset: get().themePreset,
+      fontSizePreset: get().fontSizePreset,
+      locale,
+    }
+    writePreferences(preferences)
+    set({ locale })
   },
   hydratePreferences: () => {
     set(readPreferences())

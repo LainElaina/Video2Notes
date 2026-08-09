@@ -16,21 +16,23 @@ import {
   X,
 } from 'lucide-react'
 import type { ViewId } from '../domain'
-import { formatTime, platformLabel, statusLabel } from '../domain'
+import { formatTime, platformLabel } from '../domain'
 import { preferredScrollBehavior } from '../motion'
 import { useStudioStore } from '../store'
-import { useUiPreferences, type ThemePreset } from '../stores/uiPreferences'
+import { useUiPreferences, type ThemePreset, type Locale } from '../stores/uiPreferences'
+import { useI18n } from '../i18n'
+import { localizeUserMessage } from '../userMessages'
 import { MotionPresence } from './MotionPresence'
 
 const navItems: Array<{
   view: ViewId
-  label: string
+  labelKey: string
   icon: typeof Plus
 }> = [
-  { view: 'create', label: '新建任务', icon: Plus },
-  { view: 'tasks', label: '任务运行', icon: Activity },
-  { view: 'reader', label: '笔记阅读', icon: BookOpenText },
-  { view: 'models', label: '设置', icon: Settings2 },
+  { view: 'create', labelKey: 'nav.create', icon: Plus },
+  { view: 'tasks', labelKey: 'nav.tasks', icon: Activity },
+  { view: 'reader', labelKey: 'nav.reader', icon: BookOpenText },
+  { view: 'models', labelKey: 'nav.settings', icon: Settings2 },
 ]
 
 function BrandMark() {
@@ -43,10 +45,10 @@ function BrandMark() {
   )
 }
 
-const themeOptions: Array<{ value: ThemePreset; label: string }> = [
-  { value: 'precision-light', label: '矿物玻璃' },
-  { value: 'paper-light', label: '纸张亮色' },
-  { value: 'studio-graphite', label: '工作室石墨' },
+const themeOptions: Array<{ value: ThemePreset; zh: string; en: string }> = [
+  { value: 'precision-light', zh: '矿物玻璃', en: 'Mineral glass' },
+  { value: 'paper-light', zh: '纸张亮色', en: 'Paper light' },
+  { value: 'studio-graphite', zh: '工作室石墨', en: 'Studio graphite' },
 ]
 
 function TopNavigation() {
@@ -57,15 +59,18 @@ function TopNavigation() {
   const setWorkspaceMode = useUiPreferences(state => state.setWorkspaceMode)
   const themePreset = useUiPreferences(state => state.themePreset)
   const setThemePreset = useUiPreferences(state => state.setThemePreset)
+  const locale = useUiPreferences(state => state.locale)
+  const setLocale = useUiPreferences(state => state.setLocale)
+  const { t, text } = useI18n()
 
   const backendLabel =
     backend.mode === 'real'
-      ? `后端 ${backend.version ?? '正常'}`
+      ? t('nav.backend.real', { version: backend.version ?? '' })
       : backend.mode === 'demo'
-        ? '演示模式'
+        ? t('nav.backend.demo')
         : backend.mode === 'connecting'
-          ? '正在连接'
-          : '后端离线'
+          ? t('nav.backend.connecting')
+          : t('nav.backend.offline')
 
   return (
     <header className="top-navigation">
@@ -73,15 +78,15 @@ function TopNavigation() {
         className="topbar-brand"
         type="button"
         onClick={() => navigate('create')}
-        aria-label="返回新建任务"
+        aria-label={t('nav.brand.back')}
       >
         <BrandMark />
         <span className="brand-copy" aria-hidden="true">
           <strong>Video2Notes</strong>
-          <small>LOCAL ANALYSIS</small>
+          <small>{text('本地分析', 'LOCAL ANALYSIS')}</small>
         </span>
       </button>
-      <nav className="top-navigation-items" aria-label="主导航">
+      <nav className="top-navigation-items" aria-label={t('nav.main')}>
         {navItems.map(item => {
           const Icon = item.icon
           const selected = view === item.view
@@ -91,54 +96,65 @@ function TopNavigation() {
               type="button"
               key={item.view}
               aria-current={selected ? 'page' : undefined}
-              aria-label={item.label}
-              title={item.label}
+              aria-label={t(item.labelKey)}
+              title={t(item.labelKey)}
               onClick={() => navigate(item.view)}
             >
               <Icon aria-hidden="true" size={19} />
-              <span>{item.label}</span>
+              <span>{t(item.labelKey)}</span>
             </button>
           )
         })}
       </nav>
       <div className="top-navigation-controls">
-        <div className="workspace-mode-switch" role="group" aria-label="界面工作模式">
+        <div className="workspace-mode-switch" role="group" aria-label={t('nav.workspaceMode')}>
           <button
             type="button"
-            aria-label="简约视图"
+            aria-label={t('nav.guided')}
             aria-pressed={workspaceMode === 'guided'}
             onClick={() => setWorkspaceMode('guided')}
           >
-            简约视图
+            {t('nav.guided')}
           </button>
           <button
             type="button"
-            aria-label="数据工作室"
+            aria-label={t('nav.professional')}
             aria-pressed={workspaceMode === 'professional'}
             onClick={() => setWorkspaceMode('professional')}
           >
-            数据工作室
+            {t('nav.professional')}
           </button>
         </div>
         <label className="theme-preset-control">
           <Palette size={14} aria-hidden="true" />
-          <span className="sr-only">主题预置</span>
+          <span className="sr-only">{t('nav.theme')}</span>
           <select
             value={themePreset}
-            aria-label="主题预置"
+            aria-label={t('nav.theme')}
             onChange={event => setThemePreset(event.currentTarget.value as ThemePreset)}
           >
             {themeOptions.map(option => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {text(option.zh, option.en)}
               </option>
             ))}
+          </select>
+        </label>
+        <label className="locale-control">
+          <span className="sr-only">{t('nav.language')}</span>
+          <select
+            value={locale}
+            aria-label={t('nav.language')}
+            onChange={event => setLocale(event.currentTarget.value as Locale)}
+          >
+            <option value="zh-CN">{t('nav.language.zh')}</option>
+            <option value="en-US">{t('nav.language.en')}</option>
           </select>
         </label>
         <div
           className={`topbar-backend backend-${backend.mode}`}
           role="group"
-          aria-label={`后端状态：${backendLabel}`}
+          aria-label={`${t('nav.backend.status')}: ${backendLabel}`}
           title={backend.detail}
         >
           <CircleDot size={13} aria-hidden="true" />
@@ -155,6 +171,14 @@ function TaskList() {
   const taskSearch = useStudioStore(state => state.taskSearch)
   const setTaskSearch = useStudioStore(state => state.setTaskSearch)
   const selectTask = useStudioStore(state => state.selectTask)
+  const { text } = useI18n()
+  const localizedStatus = {
+    running: text('处理中', 'Processing'),
+    paused: text('已暂停', 'Paused'),
+    cancelled: text('已取消', 'Cancelled'),
+    completed: text('已完成', 'Completed'),
+    failed: text('失败', 'Failed'),
+  } as const
 
   const visibleTasks = tasks.filter(task =>
     `${task.source.title} ${task.source.author}`.toLowerCase().includes(taskSearch.toLowerCase()),
@@ -164,14 +188,14 @@ function TaskList() {
     <>
       <label className="context-search">
         <Search size={15} aria-hidden="true" />
-        <span className="sr-only">搜索任务</span>
+        <span className="sr-only">{text('搜索任务', 'Search tasks')}</span>
         <input
           value={taskSearch}
           onChange={event => setTaskSearch(event.target.value)}
-          placeholder="搜索标题或作者"
+          placeholder={text('搜索标题或作者', 'Search title or author')}
         />
       </label>
-      <div className="context-task-list" aria-label="任务列表">
+      <div className="context-task-list" aria-label={text('任务列表', 'Task list')}>
         {visibleTasks.map(task => (
           <article
             className={`context-task ${task.id === activeTaskId ? 'is-active' : ''}`}
@@ -183,12 +207,14 @@ function TaskList() {
               onClick={() => selectTask(task.id, task.status === 'completed' ? 'reader' : 'tasks')}
             >
               <span className={`source-monogram source-${task.source.platform}`}>
-                {platformLabel[task.source.platform].slice(0, 1)}
+                {task.source.platform === 'local'
+                  ? text('本', 'L')
+                  : platformLabel[task.source.platform].slice(0, 1)}
               </span>
               <span className="context-task-copy">
                 <strong>{task.source.title}</strong>
                 <span>
-                  {statusLabel[task.status]} ·{' '}
+                  {localizedStatus[task.status]} ·{' '}
                   {task.mode === 'fast'
                     ? 'Fast'
                     : task.mode === 'balanced'
@@ -207,7 +233,7 @@ function TaskList() {
         {visibleTasks.length === 0 && (
           <div className="context-empty">
             <Search size={18} aria-hidden="true" />
-            <p>没有匹配的任务</p>
+            <p>{text('没有匹配的任务', 'No matching tasks')}</p>
           </div>
         )}
       </div>
@@ -222,8 +248,9 @@ function ReaderContents() {
     return task?.note ? task : state.tasks.find(item => item.note)
   })
   const note = completedTask?.note
+  const { text } = useI18n()
 
-  if (!note) return <p className="context-helper">完成一个任务后，这里会显示笔记目录。</p>
+  if (!note) return <p className="context-helper">{text('完成一个任务后，这里会显示笔记目录。', 'The note outline appears after a task completes.')}</p>
 
   return (
     <div className="contents-list">
@@ -235,7 +262,7 @@ function ReaderContents() {
             ?.scrollIntoView({ behavior: preferredScrollBehavior() })
         }
       >
-        <span>摘要</span>
+        <span>{text('摘要', 'Summary')}</span>
         <span>00:00</span>
       </button>
       {note.sections.map((section, index) => {
@@ -295,27 +322,28 @@ function ContextPanel() {
     state => state.tasks.filter(task => task.status === 'running').length,
   )
   const toggleContext = useStudioStore(state => state.toggleContext)
+  const { t, text } = useI18n()
 
   const metadata: Record<ViewId, { eyebrow: string; title: string; description: string }> = {
     create: {
-      eyebrow: 'WORKBENCH',
-      title: '最近任务',
-      description: '来源、模式与上次运行结果',
+      eyebrow: text('工作台', 'WORKBENCH'),
+      title: text('最近任务', 'Recent tasks'),
+      description: text('来源、模式与上次运行结果', 'Sources, modes, and latest results'),
     },
     tasks: {
-      eyebrow: 'RUN QUEUE',
-      title: '任务队列',
-      description: `${runningTaskCount} 个任务正在运行`,
+      eyebrow: text('运行队列', 'RUN QUEUE'),
+      title: text('任务队列', 'Run queue'),
+      description: text(`${runningTaskCount} 个任务正在运行`, `${runningTaskCount} tasks running`),
     },
     reader: {
-      eyebrow: 'CONTENTS',
-      title: '笔记目录',
-      description: '点击章节同步证据时间',
+      eyebrow: text('目录', 'CONTENTS'),
+      title: text('笔记目录', 'Note outline'),
+      description: text('点击章节同步证据时间', 'Select a chapter to sync evidence time'),
     },
     models: {
-      eyebrow: 'PROVIDERS',
-      title: '模型供应商',
-      description: '密钥不会出现在此界面',
+      eyebrow: text('供应商', 'PROVIDERS'),
+      title: text('模型供应商', 'Model providers'),
+      description: text('密钥不会出现在此界面', 'Secrets never appear in this view'),
     },
   }
 
@@ -331,8 +359,8 @@ function ContextPanel() {
           type="button"
           className="icon-button"
           onClick={toggleContext}
-          aria-label="收起上下文栏"
-          title="收起上下文栏"
+          aria-label={t('nav.context.collapse')}
+          title={t('nav.context.collapse')}
         >
           <PanelLeftClose size={18} aria-hidden="true" />
         </button>
@@ -345,7 +373,7 @@ function ContextPanel() {
       {view !== 'models' && (
         <footer className="context-footer">
           <Clock3 size={14} aria-hidden="true" />
-          <span>所有 artifact 仅保存在本机</span>
+          <span>{text('所有 artifact 仅保存在本机', 'All artifacts stay on this computer')}</span>
         </footer>
       )}
     </aside>
@@ -361,23 +389,30 @@ function WorkspaceHeader() {
   const fallbackNoteTitle = useStudioStore(
     state => state.tasks.find(task => task.note)?.note?.title,
   )
+  const { text } = useI18n()
 
   const viewTitle: Record<ViewId, string> = {
-    create: '新建任务',
-    tasks: activeTask?.source.title ?? '任务运行',
-    reader: activeTask?.note?.title ?? fallbackNoteTitle ?? '笔记阅读',
-    models: '模型与角色路由',
+    create: text('新建任务', 'New task'),
+    tasks: activeTask?.source.title ?? text('任务运行', 'Runs'),
+    reader: activeTask?.note?.title ?? fallbackNoteTitle ?? text('笔记阅读', 'Reader'),
+    models: text('模型与角色路由', 'Models and role routing'),
+  }
+  const viewEyebrow: Record<ViewId, string> = {
+    create: text('新建任务', 'CREATE'),
+    tasks: text('任务运行', 'RUNS'),
+    reader: text('笔记阅读', 'READER'),
+    models: text('设置', 'SETTINGS'),
   }
 
   return (
     <header className="workspace-header">
       <div className="workspace-title">
-        <span className="eyebrow">VIDEO2NOTES / {view.toUpperCase()}</span>
+        <span className="eyebrow">VIDEO2NOTES / {viewEyebrow[view]}</span>
         <h1>{viewTitle[view]}</h1>
       </div>
       <div
         className="machine-status"
-        aria-label={`本机运行状态：${machine.gpu}，${machine.cpu}`}
+        aria-label={`${text('本机运行状态', 'Local runtime status')}: ${machine.gpu}, ${machine.cpu}`}
         title={`${machine.gpu} · ${machine.cpu} · ${machine.memory}`}
       >
         <Cpu size={16} aria-hidden="true" />
@@ -401,6 +436,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const workspaceMode = useUiPreferences(state => state.workspaceMode)
   const themePreset = useUiPreferences(state => state.themePreset)
   const fontSizePreset = useUiPreferences(state => state.fontSizePreset)
+  const { locale, t } = useI18n()
+  const localizedNotice = notice ? localizeUserMessage(notice, locale) : undefined
   const professionalReader = view === 'reader' && workspaceMode === 'professional'
   const contextShouldShow = !contextCollapsed && !professionalReader
   const [contextSlotOpen, setContextSlotOpen] = useState(contextShouldShow)
@@ -441,21 +478,21 @@ export function AppShell({ children }: { children: ReactNode }) {
             type="button"
             className="context-expand"
             onClick={toggleContext}
-            aria-label="展开上下文栏"
+            aria-label={t('nav.context.expand')}
           >
             <PanelLeftOpen size={17} aria-hidden="true" />
-            展开侧栏
+            {t('nav.context.expand')}
           </button>
         )}
         <MotionPresence
-          show={Boolean(notice)}
+          show={Boolean(localizedNotice)}
           className="motion-presence-notice"
           exitMs={120}
         >
           <div className="notice-bar" role="status">
             <CircleDot size={14} aria-hidden="true" />
-            <span>{notice}</span>
-            <button type="button" onClick={clearNotice} aria-label="关闭提示">
+            <span>{localizedNotice}</span>
+            <button type="button" onClick={clearNotice} aria-label={t('nav.notice.close')}>
               <X size={15} aria-hidden="true" />
             </button>
           </div>

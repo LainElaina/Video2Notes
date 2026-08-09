@@ -657,11 +657,70 @@ export interface ApiRuntimePackageOperation {
   error_code?: string | null
 }
 
+export type ApiLocalToolStatus = 'ready' | 'missing' | 'incompatible' | 'error'
+export type ApiLocalToolSource =
+  | 'binding'
+  | 'path'
+  | 'common'
+  | 'python'
+  | 'system'
+  | 'none'
+export type ApiLocalToolKind = 'executable' | 'python_module' | 'cuda_runtime'
+
+export interface ApiLocalToolCandidate {
+  path: string
+  source: ApiLocalToolSource
+  version?: string | null
+  compatible: boolean
+  detail?: string | null
+  detail_zh?: string | null
+}
+
+export interface ApiLocalToolBinding {
+  dependency_id: string
+  path: string
+  kind: ApiLocalToolKind
+  bound_at_utc: string
+  last_version?: string | null
+}
+
+export interface ApiLocalToolResult {
+  dependency_id: string
+  display_name: string
+  display_name_zh: string
+  kind: ApiLocalToolKind
+  status: ApiLocalToolStatus
+  compatible: boolean
+  path?: string | null
+  version?: string | null
+  source: ApiLocalToolSource
+  capabilities: string[]
+  cpu_supported: boolean
+  cuda_supported: boolean
+  bound: boolean
+  detail?: string | null
+  detail_zh?: string | null
+  suggestion?: string | null
+  suggestion_zh?: string | null
+  candidates: ApiLocalToolCandidate[]
+  checked_at_utc: string
+}
+
+export interface ApiLocalToolInventory {
+  schema_version: number
+  tools: ApiLocalToolResult[]
+  bindings: Record<string, ApiLocalToolBinding>
+  scanned_at_utc?: string | null
+  platform: string
+  architecture: string
+}
+
 export interface ApiRuntimePackageInventory {
   instances: ApiRuntimePackageInstance[]
   bindings: Record<string, ApiRuntimeBinding>
   operations: ApiRuntimePackageOperation[]
   available_releases: ApiRuntimePackageRelease[]
+  local_tools?: ApiLocalToolInventory | null
 }
 
 export interface ApiRuntimeReleaseView {
@@ -1117,14 +1176,29 @@ export const resolveBackendConnection = async (): Promise<
   )
 }
 
+const nativeDialogLocale = (): 'zh-CN' | 'en-US' =>
+  typeof document !== 'undefined' && document.documentElement.lang === 'en-US'
+    ? 'en-US'
+    : 'zh-CN'
+
 export const pickVideoWithNativeDialog = async (): Promise<string | null> => {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
-  return invoke<string | null>('pick_video')
+  return invoke<string | null>('pick_video', { locale: nativeDialogLocale() })
 }
 
 export const pickRuntimeDirectoryWithNativeDialog = async (): Promise<string | null> => {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
-  return invoke<string | null>('pick_runtime_directory')
+  return invoke<string | null>('pick_runtime_directory', { locale: nativeDialogLocale() })
+}
+
+export const pickLocalToolFileWithNativeDialog = async (): Promise<string | null> => {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
+  return invoke<string | null>('pick_local_tool_file', { locale: nativeDialogLocale() })
+}
+
+export const pickLocalToolDirectoryWithNativeDialog = async (): Promise<string | null> => {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
+  return invoke<string | null>('pick_local_tool_directory', { locale: nativeDialogLocale() })
 }
 
 export const bundledDemoVideoPath = async (): Promise<string | null> => {
@@ -1243,6 +1317,40 @@ export class Video2NotesApi {
 
   discoverRuntimePackages(): Promise<ApiRuntimePackageReport> {
     return this.request('/api/runtime-packages/discover', { method: 'POST' })
+  }
+
+  localTools(): Promise<ApiLocalToolInventory> {
+    return this.request('/api/runtime-packages/local-tools')
+  }
+
+  discoverLocalTools(): Promise<ApiLocalToolInventory> {
+    return this.request('/api/runtime-packages/local-tools/discover', {
+      method: 'POST',
+    })
+  }
+
+  bindLocalTool(dependencyId: string, path: string): Promise<ApiLocalToolResult> {
+    return this.request('/api/runtime-packages/local-tools/bindings', {
+      method: 'POST',
+      body: JSON.stringify({ dependency_id: dependencyId, path }),
+    })
+  }
+
+  updateLocalToolBinding(
+    dependencyId: string,
+    path: string,
+  ): Promise<ApiLocalToolResult> {
+    return this.request(
+      `/api/runtime-packages/local-tools/bindings/${encodeURIComponent(dependencyId)}`,
+      { method: 'PUT', body: JSON.stringify({ path }) },
+    )
+  }
+
+  unbindLocalTool(dependencyId: string): Promise<{ removed: boolean }> {
+    return this.request(
+      `/api/runtime-packages/local-tools/bindings/${encodeURIComponent(dependencyId)}`,
+      { method: 'DELETE' },
+    )
   }
 
   installRuntimePackage(

@@ -714,7 +714,7 @@ export const providerFixtures: ProviderDefinition[] = [
     kind: 'local',
     protocol: 'local',
     authScheme: 'none',
-    endpoint: '本机 worker',
+    endpoint: 'local://worker',
     locality: 'local',
     enabled: true,
     timeoutSeconds: 180,

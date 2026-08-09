@@ -677,12 +677,70 @@ export interface RuntimePackageOperationDefinition {
   errorCode?: string
 }
 
+export type LocalToolStatus = 'ready' | 'missing' | 'incompatible' | 'error'
+export type LocalToolSource =
+  | 'binding'
+  | 'path'
+  | 'common'
+  | 'python'
+  | 'system'
+  | 'none'
+export type LocalToolKind = 'executable' | 'python_module' | 'cuda_runtime'
+
+export interface LocalToolCandidateDefinition {
+  path: string
+  source: LocalToolSource
+  version?: string
+  compatible: boolean
+  detail?: string
+  detailZh?: string
+}
+
+export interface LocalToolBindingDefinition {
+  dependencyId: string
+  path: string
+  kind: LocalToolKind
+  boundAtUtc: string
+  lastVersion?: string
+}
+
+export interface LocalToolDefinition {
+  dependencyId: string
+  displayName: string
+  displayNameZh: string
+  kind: LocalToolKind
+  status: LocalToolStatus
+  compatible: boolean
+  path?: string
+  version?: string
+  source: LocalToolSource
+  capabilities: string[]
+  cpuSupported: boolean
+  cudaSupported: boolean
+  bound: boolean
+  detail?: string
+  detailZh?: string
+  suggestion?: string
+  suggestionZh?: string
+  candidates: LocalToolCandidateDefinition[]
+  checkedAtUtc: string
+}
+
+export interface LocalToolInventoryDefinition {
+  tools: LocalToolDefinition[]
+  bindings: Record<string, LocalToolBindingDefinition>
+  scannedAtUtc?: string
+  platform: string
+  architecture: string
+}
+
 export interface RuntimePackageInventoryDefinition {
   managedRoot?: string
   instances: RuntimePackageInstanceDefinition[]
   bindings: Record<string, RuntimeBindingDefinition>
   operations: RuntimePackageOperationDefinition[]
   availableReleases: RuntimePackageReleaseDefinition[]
+  localTools?: LocalToolInventoryDefinition
 }
 
 export type JobPreflightState = 'ready' | 'degraded' | 'blocked'

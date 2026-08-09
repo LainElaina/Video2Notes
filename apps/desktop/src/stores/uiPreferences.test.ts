@@ -38,6 +38,22 @@ describe('UI preferences', () => {
     })
   })
 
+  it('persists and restores the English locale', () => {
+    useUiPreferences.getState().setLocale('en-US')
+
+    expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
+      workspaceMode: 'guided',
+      themePreset: 'precision-light',
+      fontSizePreset: 'comfortable',
+      locale: 'en-US',
+    })
+
+    useUiPreferences.setState(DEFAULT_UI_PREFERENCES)
+    useUiPreferences.getState().hydratePreferences()
+
+    expect(useUiPreferences.getState().locale).toBe('en-US')
+  })
+
   it('falls back field by field when persisted values are invalid', () => {
     window.localStorage.setItem(
       UI_PREFERENCES_STORAGE_KEY,
@@ -65,6 +81,51 @@ describe('UI preferences', () => {
       workspaceMode: 'professional',
       themePreset: 'paper-light',
       fontSizePreset: 'comfortable',
+    })
+  })
+
+  it('defaults old preferences without a locale to Chinese during migration', () => {
+    window.localStorage.setItem(
+      PREVIOUS_UI_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        workspaceMode: 'professional',
+        themePreset: 'paper-light',
+        fontSizePreset: 'large',
+      }),
+    )
+
+    useUiPreferences.getState().hydratePreferences()
+
+    expect(useUiPreferences.getState()).toMatchObject({
+      workspaceMode: 'professional',
+      themePreset: 'paper-light',
+      fontSizePreset: 'large',
+      locale: 'zh-CN',
+    })
+    expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
+      workspaceMode: 'professional',
+      themePreset: 'paper-light',
+      fontSizePreset: 'large',
+    })
+  })
+
+  it('defaults a current-key preference written by an older build to Chinese', () => {
+    window.localStorage.setItem(
+      UI_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        workspaceMode: 'professional',
+        themePreset: 'studio-graphite',
+        fontSizePreset: 'compact',
+      }),
+    )
+
+    useUiPreferences.getState().hydratePreferences()
+
+    expect(useUiPreferences.getState()).toMatchObject({
+      workspaceMode: 'professional',
+      themePreset: 'studio-graphite',
+      fontSizePreset: 'compact',
+      locale: 'zh-CN',
     })
   })
 
