@@ -662,9 +662,12 @@ try {
         -ExpectedSourceFingerprint $ExpectedSidecarSourceFingerprint
     & (Join-Path $PSScriptRoot "test_sidecar.ps1") `
         -Executable (Join-Path $safeStaging "backend\video2notes.exe") `
-        -CoreOnly:$UseCoreSidecar `
-        -SkipHealthSmoke
-    Assert-LastExitCode "Validating the portable backend runtime imports and bundled tools"
+        -CoreOnly:$UseCoreSidecar
+    Assert-LastExitCode "Validating the staged portable backend health and bundled tools"
+    & (Join-Path $PSScriptRoot "test_portable_desktop.ps1") `
+        -PortableRoot $safeStaging `
+        -ScreenshotPath (Join-Path $RepoRoot "artifacts\qa\portable-desktop-connected.png")
+    Assert-LastExitCode "Validating the real portable desktop backend connection"
     Assert-NoPrivatePayload $safeStaging
 
     $tauriConfiguration = Get-Content -LiteralPath (Join-Path $TauriRoot "tauri.conf.json") -Raw | ConvertFrom-Json

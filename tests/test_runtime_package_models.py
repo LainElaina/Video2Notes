@@ -13,6 +13,7 @@ from video2notes.components.runtime_catalog import (
     RuntimePackageCatalog,
     runtime_catalog_from_environment,
 )
+from video2notes.components.runtime_discovery import load_packaged_runtime_catalog
 from video2notes.components.runtime_models import (
     RUNTIME_PACKAGE_MANIFEST,
     RuntimeArchivePartSpec,
@@ -155,6 +156,85 @@ class RuntimePackageModelTests(unittest.TestCase):
         )
 
         self.assertTrue(archive.source_url and archive.source_url.startswith("file://"))
+
+    def test_packaged_catalog_ignores_identical_parent_copy(self) -> None:
+        manifest = RuntimePackageManifest.model_validate(manifest_payload())
+        release = RuntimePackageRelease.model_validate(release_payload(manifest))
+        catalog = RuntimePackageCatalog(releases=(release,))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            portable_root = Path(temporary)
+            backend_root = portable_root / "backend"
+            backend_catalog_root = backend_root / "runtime-packs"
+            portable_catalog_root = portable_root / "runtime-packs"
+            backend_catalog_root.mkdir(parents=True)
+            portable_catalog_root.mkdir(parents=True)
+            catalog_payload = catalog.model_dump_json(indent=2)
+            (backend_catalog_root / "catalog.json").write_text(
+                catalog_payload,
+                encoding="utf-8",
+            )
+            (portable_catalog_root / "catalog.json").write_text(
+                catalog_payload,
+                encoding="utf-8",
+            )
+            (portable_catalog_root / "offline-catalog.json").write_text(
+                RuntimePackageCatalog(release_profile="core").model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+
+            loaded = load_packaged_runtime_catalog(backend_root)
+
+        self.assertEqual(len(loaded.releases), 1)
+        self.assertEqual(loaded.releases[0].package_id, manifest.package_id)
+        self.assertEqual(loaded.release_profile, "core")
+
+    def test_packaged_offline_catalog_overlays_matching_download(self) -> None:
+        manifest = RuntimePackageManifest.model_validate(manifest_payload())
+        offline_release = RuntimePackageRelease.model_validate(release_payload(manifest))
+        online_release = offline_release.model_copy(
+            update={
+                "archive": offline_release.archive.model_copy(
+                    update={
+                        "source_url": "https://example.invalid/local-inference.zip",
+                        "offline_only": False,
+                    }
+                )
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            portable_root = Path(temporary)
+            backend_root = portable_root / "backend"
+            backend_catalog_root = backend_root / "runtime-packs"
+            portable_catalog_root = portable_root / "runtime-packs"
+            offline_root = portable_catalog_root / "offline"
+            backend_catalog_root.mkdir(parents=True)
+            offline_root.mkdir(parents=True)
+            trusted = RuntimePackageCatalog(releases=(online_release,))
+            (backend_catalog_root / "catalog.json").write_text(
+                trusted.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            (portable_catalog_root / "catalog.json").write_text(
+                trusted.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            (portable_catalog_root / "offline-catalog.json").write_text(
+                RuntimePackageCatalog(
+                    release_profile="cpu",
+                    releases=(offline_release,),
+                ).model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            (offline_root / offline_release.archive.file_name).write_bytes(b"archive")
+
+            loaded = load_packaged_runtime_catalog(backend_root)
+
+        self.assertEqual(len(loaded.releases), 1)
+        self.assertEqual(loaded.release_profile, "cpu")
+        self.assertTrue(loaded.releases[0].archive.offline_only)
+        self.assertTrue(loaded.releases[0].archive_url.startswith("file://"))
 
     def test_catalog_accepts_pinned_multipart_archives(self) -> None:
         manifest = RuntimePackageManifest.model_validate(manifest_payload())

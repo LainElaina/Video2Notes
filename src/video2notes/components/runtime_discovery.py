@@ -41,6 +41,7 @@ def load_packaged_runtime_catalog(runtime_root: str | Path) -> RuntimePackageCat
     )
     catalog = DEFAULT_RUNTIME_PACKAGE_CATALOG
     seen: set[Path] = set()
+    trusted_payloads: set[str] = set()
     for directory in candidates:
         resolved = directory.resolve()
         if resolved in seen or not resolved.is_dir():
@@ -48,11 +49,17 @@ def load_packaged_runtime_catalog(runtime_root: str | Path) -> RuntimePackageCat
         seen.add(resolved)
         trusted = resolved / "catalog.json"
         if trusted.is_file():
-            catalog = catalog.merge(load_runtime_package_catalog(trusted))
+            payload_sha256 = hashlib.sha256(trusted.read_bytes()).hexdigest()
+            if payload_sha256 not in trusted_payloads:
+                catalog = catalog.merge(load_runtime_package_catalog(trusted))
+                trusted_payloads.add(payload_sha256)
         offline = resolved / "offline-catalog.json"
         if offline.is_file():
             loaded = load_runtime_package_catalog(offline)
-            catalog = catalog.merge(_attach_offline_archives(loaded, resolved / "offline"))
+            catalog = _overlay_offline_catalog(
+                catalog,
+                _attach_offline_archives(loaded, resolved / "offline"),
+            )
     return catalog
 
 
@@ -171,6 +178,60 @@ def _attach_offline_archives(
         release_profile=catalog.release_profile,
         packages=tuple(releases),
     )
+
+
+def _overlay_offline_catalog(
+    catalog: RuntimePackageCatalog,
+    offline: RuntimePackageCatalog,
+) -> RuntimePackageCatalog:
+    """Prefer verified local archives without duplicating release identities."""
+
+    releases = list(catalog.releases)
+    release_indexes = {
+        (release.package_id, release.version): index
+        for index, release in enumerate(releases)
+    }
+    for release in offline.releases:
+        identity = (release.package_id, release.version)
+        existing_index = release_indexes.get(identity)
+        if existing_index is None:
+            release_indexes[identity] = len(releases)
+            releases.append(release)
+            continue
+        existing = releases[existing_index]
+        if _release_payload_identity(existing) != _release_payload_identity(release):
+            raise ValueError(
+                "offline runtime release conflicts with trusted catalog entry: "
+                f"{release.package_id}@{release.version}"
+            )
+        releases[existing_index] = release
+
+    return RuntimePackageCatalog(
+        catalog_id=catalog.catalog_id or offline.catalog_id,
+        target_triple=catalog.target_triple or offline.target_triple,
+        runtime_protocol_version=(
+            catalog.runtime_protocol_version or offline.runtime_protocol_version
+        ),
+        release_profile=offline.release_profile or catalog.release_profile,
+        packages=tuple(releases),
+    )
+
+
+def _release_payload_identity(release: RuntimePackageRelease) -> dict[str, object]:
+    """Compare immutable package metadata while ignoring where an archive is hosted."""
+
+    payload = release.model_dump(mode="json")
+    archive = dict(payload["archive"])
+    archive.pop("source_url", None)
+    archive.pop("offline_only", None)
+    parts = []
+    for part_payload in archive.get("parts", ()):
+        part = dict(part_payload)
+        part.pop("source_url", None)
+        parts.append(part)
+    archive["parts"] = parts
+    payload["archive"] = archive
+    return payload
 
 
 def _runtime_marker(root: Path) -> Path | None:

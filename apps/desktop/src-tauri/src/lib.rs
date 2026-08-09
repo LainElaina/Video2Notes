@@ -5,7 +5,8 @@
 //! through argv), and exposes it only to this app's webview via a Tauri command.
 
 use std::{
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -15,6 +16,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, Manager, RunEvent};
 
 const DEFAULT_PORT: u16 = 43119;
@@ -30,6 +32,8 @@ struct BackendConnection {
     token: String,
     backend_status: &'static str,
     data_root: String,
+    backend_error: Option<String>,
+    diagnostic_log: Option<String>,
 }
 
 #[derive(Debug)]
@@ -39,6 +43,8 @@ struct BackendState {
     data_root: PathBuf,
     child: Option<Child>,
     status: BackendLifecycle,
+    last_error: Option<String>,
+    diagnostic_log: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,9 +78,12 @@ impl BackendManager {
             data_root,
             child: None,
             status: BackendLifecycle::Offline,
+            last_error: None,
+            diagnostic_log: None,
         };
 
         let Ok(token) = generate_session_token() else {
+            state.last_error = Some("Could not create a secure local API session.".to_string());
             return Self(Mutex::new(state));
         };
         state.token = token;
@@ -88,16 +97,23 @@ impl BackendManager {
                 .arg("--data-root")
                 .arg(&state.data_root)
                 .env(TOKEN_ENVIRONMENT_VARIABLE, &state.token)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
+                .stdin(Stdio::null());
             if let Some(directory) = working_directory {
                 command.current_dir(directory);
             }
+            state.diagnostic_log = attach_backend_log(&mut command, &state.data_root);
+            if state.diagnostic_log.is_none() {
+                command.stdout(Stdio::null()).stderr(Stdio::null());
+            }
             configure_hidden_windows_process(&mut command);
-            if let Ok(child) = command.spawn() {
-                state.child = Some(child);
-                state.status = BackendLifecycle::Starting;
+            match command.spawn() {
+                Ok(child) => {
+                    state.child = Some(child);
+                    state.status = BackendLifecycle::Starting;
+                }
+                Err(error) => {
+                    state.last_error = Some(format!("Could not start the local backend: {error}"));
+                }
             }
         }
 
@@ -118,6 +134,11 @@ impl BackendManager {
             token: state.token.clone(),
             backend_status: state.status.as_str(),
             data_root: state.data_root.to_string_lossy().into_owned(),
+            backend_error: state.last_error.clone(),
+            diagnostic_log: state
+                .diagnostic_log
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
         })
     }
 
@@ -237,9 +258,29 @@ fn resolve_data_root(app: &AppHandle) -> PathBuf {
             }
         }
     }
-    app.path()
+    let data_root = app
+        .path()
         .app_data_dir()
-        .unwrap_or_else(|_| env::temp_dir().join("Video2Notes"))
+        .unwrap_or_else(|_| env::temp_dir().join("Video2Notes"));
+    let _ = fs::create_dir_all(&data_root);
+    data_root
+}
+
+fn attach_backend_log(command: &mut Command, data_root: &Path) -> Option<PathBuf> {
+    let log_directory = data_root.join("logs");
+    fs::create_dir_all(&log_directory).ok()?;
+    let log_path = log_directory.join("backend-session.log");
+    let output = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&log_path)
+        .ok()?;
+    let error_output = output.try_clone().ok()?;
+    command
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(error_output));
+    Some(log_path)
 }
 
 fn generate_session_token() -> Result<String, String> {
@@ -327,7 +368,22 @@ fn refresh_backend_status(state: &mut BackendState) {
         return;
     };
     match child.try_wait() {
-        Ok(Some(_)) | Err(_) => {
+        Ok(Some(exit_status)) => {
+            state.last_error = state
+                .diagnostic_log
+                .as_deref()
+                .and_then(latest_backend_error)
+                .or_else(|| {
+                    Some(match exit_status.code() {
+                        Some(code) => format!("Local backend exited with code {code}."),
+                        None => "Local backend exited before becoming ready.".to_string(),
+                    })
+                });
+            state.child = None;
+            state.status = BackendLifecycle::Offline;
+        }
+        Err(error) => {
+            state.last_error = Some(format!("Could not inspect the local backend: {error}"));
             state.child = None;
             state.status = BackendLifecycle::Offline;
         }
@@ -340,6 +396,44 @@ fn refresh_backend_status(state: &mut BackendState) {
                     BackendLifecycle::Starting
                 };
         }
+    }
+}
+
+fn latest_backend_error(log_path: &Path) -> Option<String> {
+    fs::read_to_string(log_path)
+        .ok()
+        .and_then(|content| parse_backend_error(&content))
+}
+
+fn parse_backend_error(content: &str) -> Option<String> {
+    content.lines().rev().find_map(|line| {
+        let payload = serde_json::from_str::<Value>(line).ok()?;
+        if payload.get("event")?.as_str()? != "error" {
+            return None;
+        }
+        let message = payload.get("message")?.as_str()?.trim();
+        if message.is_empty() {
+            return None;
+        }
+        let error_type = payload
+            .get("error_type")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+        let detail = match error_type {
+            Some(error_type) => format!("{error_type}: {message}"),
+            None => message.to_string(),
+        };
+        Some(truncate_diagnostic(&detail, 800))
+    })
+}
+
+fn truncate_diagnostic(value: &str, max_characters: usize) -> String {
+    let mut characters = value.chars();
+    let truncated: String = characters.by_ref().take(max_characters).collect();
+    if characters.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
     }
 }
 
@@ -403,4 +497,24 @@ pub fn run() {
             app_handle.state::<BackendManager>().shutdown();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_backend_error;
+
+    #[test]
+    fn extracts_latest_structured_backend_error_without_other_log_lines() {
+        let content = concat!(
+            "{\"event\":\"server_starting\",\"token_source\":\"environment\"}\n",
+            "not json\n",
+            "{\"event\":\"error\",\"error_type\":\"ValidationError\",",
+            "\"message\":\"runtime catalog contains duplicate releases\"}\n",
+        );
+
+        assert_eq!(
+            parse_backend_error(content).as_deref(),
+            Some("ValidationError: runtime catalog contains duplicate releases")
+        );
+    }
 }

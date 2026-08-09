@@ -7,6 +7,8 @@ export interface BackendConnection {
   token: string
   backendStatus?: string
   dataRoot?: string
+  backendError?: string
+  diagnosticLog?: string
 }
 
 export interface ApiSourceInput {
@@ -1027,6 +1029,43 @@ export class Video2NotesApiError extends Error {
 
 const normalizeBaseUrl = (value: string): string => value.trim().replace(/\/+$/, '')
 
+const isTauriDesktop = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+const desktopBackendConnection = async (): Promise<BackendConnection> => {
+  const response = await invoke<{
+    base_url?: string
+    baseUrl?: string
+    token: string
+    backend_status?: string
+    backendStatus?: string
+    data_root?: string
+    dataRoot?: string
+    backend_error?: string
+    backendError?: string
+    diagnostic_log?: string
+    diagnosticLog?: string
+  }>('backend_connection')
+  const baseUrl = response.baseUrl ?? response.base_url
+  if (!baseUrl || !response.token) {
+    throw new Error('Tauri 后端没有返回可用的本地 API 会话。')
+  }
+  return {
+    baseUrl: normalizeBaseUrl(baseUrl),
+    token: response.token,
+    backendStatus: response.backendStatus ?? response.backend_status,
+    dataRoot: response.dataRoot ?? response.data_root,
+    backendError: response.backendError ?? response.backend_error,
+    diagnosticLog: response.diagnosticLog ?? response.diagnostic_log,
+  }
+}
+
+const backendOfflineMessage = (connection: BackendConnection): string => {
+  const detail = connection.backendError?.trim() || '本机后端进程在启动期间退出。'
+  const log = connection.diagnosticLog?.trim()
+  return `本机 Video2Notes 后端启动失败：${detail}${log ? ` 诊断日志：${log}` : ''}`
+}
+
 const queryRequestsDemo = (): boolean => {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('demo') === '1'
@@ -1052,28 +1091,14 @@ export const resolveBackendConnection = async (): Promise<
     }
   }
 
-  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-    const response = await invoke<{
-      base_url?: string
-      baseUrl?: string
-      token: string
-      backend_status?: string
-      backendStatus?: string
-      data_root?: string
-      dataRoot?: string
-    }>('backend_connection')
-    const baseUrl = response.baseUrl ?? response.base_url
-    if (!baseUrl || !response.token) {
-      throw new Error('Tauri 后端没有返回可用的本地 API 会话。')
+  if (isTauriDesktop()) {
+    const connection = await desktopBackendConnection()
+    if (connection.backendStatus === 'offline') {
+      throw new Video2NotesApiError(0, backendOfflineMessage(connection))
     }
     return {
       mode: 'real',
-      connection: {
-        baseUrl: normalizeBaseUrl(baseUrl),
-        token: response.token,
-        backendStatus: response.backendStatus ?? response.backend_status,
-        dataRoot: response.dataRoot ?? response.data_root,
-      },
+      connection,
     }
   }
 
@@ -1163,6 +1188,16 @@ export class Video2NotesApi {
         return await this.health()
       } catch (error) {
         lastError = error
+        if (isTauriDesktop()) {
+          try {
+            const connection = await desktopBackendConnection()
+            if (connection.backendStatus === 'offline') {
+              throw new Video2NotesApiError(0, backendOfflineMessage(connection))
+            }
+          } catch (diagnosticError) {
+            if (diagnosticError instanceof Video2NotesApiError) throw diagnosticError
+          }
+        }
         await new Promise(resolve => window.setTimeout(resolve, 200))
       }
     }

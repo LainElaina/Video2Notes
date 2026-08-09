@@ -103,6 +103,24 @@ describe('real local API client', () => {
     })
   })
 
+  it('surfaces a packaged backend startup diagnostic instead of a generic connection error', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    })
+    invokeMock.mockResolvedValueOnce({
+      base_url: 'http://127.0.0.1:43119',
+      token: 'tauri-session-token',
+      backend_status: 'offline',
+      backend_error: 'ValidationError: runtime catalog contains duplicate releases',
+      diagnostic_log: 'C:/Video2Notes/logs/backend-session.log',
+    })
+
+    await expect(resolveBackendConnection()).rejects.toThrow(
+      /runtime catalog contains duplicate releases.*backend-session\.log/,
+    )
+  })
+
   it('maps authenticated processing, provider v2, discovery, catalog, and performance requests', async () => {
     fetchMock.mockImplementation(() => Promise.resolve(json({ ok: true })))
     const client = new Video2NotesApi({
