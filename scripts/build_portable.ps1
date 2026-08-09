@@ -664,10 +664,6 @@ try {
         -Executable (Join-Path $safeStaging "backend\video2notes.exe") `
         -CoreOnly:$UseCoreSidecar
     Assert-LastExitCode "Validating the staged portable backend health and bundled tools"
-    & (Join-Path $PSScriptRoot "test_portable_desktop.ps1") `
-        -PortableRoot $safeStaging `
-        -ScreenshotPath (Join-Path $RepoRoot "artifacts\qa\portable-desktop-connected.png")
-    Assert-LastExitCode "Validating the real portable desktop backend connection"
     Assert-NoPrivatePayload $safeStaging
 
     $tauriConfiguration = Get-Content -LiteralPath (Join-Path $TauriRoot "tauri.conf.json") -Raw | ConvertFrom-Json
@@ -752,6 +748,10 @@ $PortableRuntimeNote
 快速复用后端：.\scripts\build_portable.ps1 -ReuseSidecar（仅当前 Python/打包源码指纹一致时允许）
 旧命令别名：.\scripts\build_portable.ps1 -CoreOnly
 "@ | Set-Content -LiteralPath (Join-Path $safeStaging "PORTABLE_README.txt") -Encoding utf8
+    & (Join-Path $PSScriptRoot "test_portable_desktop.ps1") `
+        -PortableRoot $safeStaging `
+        -ScreenshotPath (Join-Path $RepoRoot "artifacts\qa\portable-desktop-connected.png")
+    Assert-LastExitCode "Validating the real portable desktop backend connection"
     Write-Sha256Sums $safeStaging
     Assert-PortableLayout $safeStaging $RuntimeFlavor $EffectiveReleaseProfile
     Assert-PortableChecksums $safeStaging

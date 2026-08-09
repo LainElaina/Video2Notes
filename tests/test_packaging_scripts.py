@@ -239,6 +239,19 @@ class PackagingScriptContractTests(unittest.TestCase):
         self.assertIn('-CoreOnly:$UseCoreSidecar', script)
         self.assertIn('test_portable_desktop.ps1', script)
         self.assertIn('Validating the real portable desktop backend connection', script)
+        marker_index = script.index(
+            'Join-Path $safeStaging $PortableMarkerName'
+        )
+        readme_index = script.index(
+            'Join-Path $safeStaging "PORTABLE_README.txt"'
+        )
+        desktop_smoke_index = script.index(
+            '& (Join-Path $PSScriptRoot "test_portable_desktop.ps1")'
+        )
+        checksum_index = script.index('    Write-Sha256Sums $safeStaging')
+        self.assertLess(marker_index, desktop_smoke_index)
+        self.assertLess(readme_index, desktop_smoke_index)
+        self.assertLess(desktop_smoke_index, checksum_index)
         self.assertIn('runtime_components = $StagedBackendManifest.components', script)
         self.assertIn('runtime_flavor = $RuntimeFlavor', script)
         self.assertIn('release_profile = $EffectiveReleaseProfile', script)
