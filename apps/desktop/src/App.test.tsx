@@ -27,6 +27,7 @@ describe('desktop workflow', () => {
     const shell = screen.getByRole('main').closest('.app-shell')
     expect(shell).toHaveAttribute('data-theme', 'precision-light')
     expect(shell).toHaveAttribute('data-workspace-mode', 'guided')
+    expect(shell).toHaveAttribute('data-font-size', 'comfortable')
     expect(screen.getByRole('button', { name: '简约视图' })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -36,12 +37,16 @@ describe('desktop workflow', () => {
     fireEvent.change(screen.getByLabelText('主题预置'), {
       target: { value: 'studio-graphite' },
     })
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    fireEvent.click(screen.getByRole('radio', { name: /大字/ }))
 
     expect(shell).toHaveAttribute('data-theme', 'studio-graphite')
     expect(shell).toHaveAttribute('data-workspace-mode', 'professional')
+    expect(shell).toHaveAttribute('data-font-size', 'large')
     expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
       workspaceMode: 'professional',
       themePreset: 'studio-graphite',
+      fontSizePreset: 'large',
     })
   })
 
@@ -218,7 +223,7 @@ describe('desktop workflow', () => {
     expect(within(dialog).getAllByText('1.00 GB').length).toBeGreaterThan(0)
 
     fireEvent.click(within(dialog).getByRole('button', { name: '打开依赖管理' }))
-    expect(screen.getByRole('heading', { name: '模型与性能' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '设置中心' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: '开始前还需要本地组件' })).not.toBeInTheDocument()
   })
 

@@ -581,7 +581,7 @@ export function CreatePage() {
       >
         {jobPreflightStatus === 'error' && (
           <div className="inline-error create-preflight-error" role="alert">
-            依赖检查失败，任务没有提交。请确认本机后端可用后重试，或打开“模型与性能”检查运行时。
+            依赖检查失败，任务没有提交。请确认本机后端可用后重试，或打开“设置”检查运行时。
           </div>
         )}
       </MotionPresence>

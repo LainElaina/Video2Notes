@@ -17,17 +17,20 @@ export default function App() {
   )
   const themePreset = useUiPreferences(state => state.themePreset)
   const workspaceMode = useUiPreferences(state => state.workspaceMode)
+  const fontSizePreset = useUiPreferences(state => state.fontSizePreset)
 
   useEffect(() => {
     const root = document.documentElement
     root.dataset.theme = themePreset
     root.dataset.workspaceMode = workspaceMode
+    root.dataset.fontSize = fontSizePreset
 
     return () => {
       if (root.dataset.theme === themePreset) delete root.dataset.theme
       if (root.dataset.workspaceMode === workspaceMode) delete root.dataset.workspaceMode
+      if (root.dataset.fontSize === fontSizePreset) delete root.dataset.fontSize
     }
-  }, [themePreset, workspaceMode])
+  }, [fontSizePreset, themePreset, workspaceMode])
 
   useEffect(() => {
     initializeBackend()

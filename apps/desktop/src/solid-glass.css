@@ -418,7 +418,7 @@ textarea {
 
 .create-intro h2 {
   max-width: 680px;
-  font-size: 38px;
+  font-size: calc(38px + var(--font-size-adjust));
   letter-spacing: 0;
 }
 
@@ -445,7 +445,7 @@ textarea {
 
 .note-title-block h1 {
   max-width: 18ch;
-  font-size: 36px;
+  font-size: calc(36px + var(--font-size-adjust));
   letter-spacing: 0;
   line-height: 1.2;
 }
@@ -555,7 +555,7 @@ textarea {
   }
 
   .create-intro h2 {
-    font-size: 32px;
+    font-size: calc(32px + var(--font-size-adjust));
   }
 }
 
@@ -597,7 +597,7 @@ textarea {
   }
 
   .create-intro h2 {
-    font-size: 30px;
+    font-size: calc(30px + var(--font-size-adjust));
   }
 }
 

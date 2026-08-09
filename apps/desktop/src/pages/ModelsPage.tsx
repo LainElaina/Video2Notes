@@ -43,6 +43,10 @@ import type {
 import { MotionPresence } from '../components/MotionPresence'
 import { RuntimePackagesPanel } from '../components/RuntimePackagesPanel'
 import { useStudioStore } from '../store'
+import {
+  useUiPreferences,
+  type FontSizePreset,
+} from '../stores/uiPreferences'
 
 const capabilityLabels: Record<ModelCapability, string> = {
   text: '文本理解',
@@ -96,6 +100,16 @@ const preferenceCopy = {
     icon: Radar,
   },
 } as const
+
+const fontSizeOptions: Array<{
+  value: FontSizePreset
+  label: string
+  detail: string
+}> = [
+  { value: 'compact', label: '紧凑', detail: '保留更多同屏信息，正文仍保持可读下限。' },
+  { value: 'comfortable', label: '舒适', detail: '默认档位，适合长时间阅读和日常操作。' },
+  { value: 'large', label: '大字', detail: '放大正文、标签与控件文字，适合高分屏。' },
+]
 
 const defaultReserve: ResourceReserve = {
   cpuReserveRatio: 0.25,
@@ -256,6 +270,8 @@ const normalizeUnavailableCudaOverrides = (
 }
 
 export function ModelsPage() {
+  const fontSizePreset = useUiPreferences(state => state.fontSizePreset)
+  const setFontSizePreset = useUiPreferences(state => state.setFontSizePreset)
   const providers = useStudioStore(state => state.providers)
   const models = useStudioStore(state => state.models)
   const roles = useStudioStore(state => state.roles)
@@ -581,9 +597,9 @@ export function ModelsPage() {
     <div className="models-page models-workspace">
       <header className="models-hero">
         <div>
-          <span className="section-kicker">本机处理控制台</span>
-          <h1>模型与性能</h1>
-          <p>先决定电脑要投入多少资源，再为每个处理角色绑定真正具备所需能力的模型。</p>
+          <span className="section-kicker">Video2Notes 偏好设置</span>
+          <h1>设置中心</h1>
+          <p>统一管理界面可读性、电脑性能余量、本地依赖和各处理角色的模型路由。</p>
         </div>
         <div className="experience-switch" aria-label="性能配置模式">
           <button
@@ -615,6 +631,44 @@ export function ModelsPage() {
           </button>
         </div>
       </header>
+
+      <section className="appearance-settings-panel models-surface" aria-labelledby="appearance-settings-title">
+        <div className="models-section-heading">
+          <div className="section-heading-icon">
+            <ScanText size={19} aria-hidden="true" />
+          </div>
+          <div>
+            <span className="section-kicker">显示与可读性</span>
+            <h2 id="appearance-settings-title">全局字体大小</h2>
+            <p>字号档位会统一作用于所有页面，同时保留标题、正文、说明和数据标签的层级。</p>
+          </div>
+        </div>
+        <div className="font-size-settings-layout">
+          <div className="font-size-options" role="radiogroup" aria-label="全局字体大小">
+            {fontSizeOptions.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={fontSizePreset === option.value}
+                onClick={() => setFontSizePreset(option.value)}
+              >
+                <span className="font-size-option-mark" aria-hidden="true">Aa</span>
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{option.detail}</small>
+                </span>
+                {fontSizePreset === option.value && <Check size={16} aria-hidden="true" />}
+              </button>
+            ))}
+          </div>
+          <div className="typography-preview" aria-live="polite">
+            <span>当前预览 · {fontSizeOptions.find(option => option.value === fontSizePreset)?.label}</span>
+            <strong>画面证据与语音时间线已经对齐</strong>
+            <p>正文用于阅读笔记内容，辅助文字补充置信度、时间码和模型来源，不再使用难以辨认的微小字号。</p>
+          </div>
+        </div>
+      </section>
 
       <RuntimePackagesPanel experienceMode={performanceDraft.experienceMode} />
 

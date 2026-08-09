@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from 'react'
 import {
   Activity,
   BookOpenText,
-  Bot,
   Check,
   ChevronRight,
   CircleDot,
@@ -13,6 +12,7 @@ import {
   PanelLeftOpen,
   Plus,
   Search,
+  Settings2,
   X,
 } from 'lucide-react'
 import type { ViewId } from '../domain'
@@ -30,7 +30,7 @@ const navItems: Array<{
   { view: 'create', label: '新建任务', icon: Plus },
   { view: 'tasks', label: '任务运行', icon: Activity },
   { view: 'reader', label: '笔记阅读', icon: BookOpenText },
-  { view: 'models', label: '模型设置', icon: Bot },
+  { view: 'models', label: '设置', icon: Settings2 },
 ]
 
 function BrandMark() {
@@ -400,6 +400,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const clearNotice = useStudioStore(state => state.clearNotice)
   const workspaceMode = useUiPreferences(state => state.workspaceMode)
   const themePreset = useUiPreferences(state => state.themePreset)
+  const fontSizePreset = useUiPreferences(state => state.fontSizePreset)
   const professionalReader = view === 'reader' && workspaceMode === 'professional'
   const contextShouldShow = !contextCollapsed && !professionalReader
   const [contextSlotOpen, setContextSlotOpen] = useState(contextShouldShow)
@@ -423,6 +424,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       }`}
       data-theme={themePreset}
       data-workspace-mode={workspaceMode}
+      data-font-size={fontSizePreset}
     >
       <TopNavigation />
       <MotionPresence

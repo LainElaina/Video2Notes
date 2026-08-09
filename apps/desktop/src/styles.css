@@ -50,6 +50,8 @@
   --font-display:
     "Segoe UI Variable Display", "Noto Sans SC Variable", "Microsoft YaHei UI", sans-serif;
   --font-data: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --font-minimum: 12px;
+  --font-size-adjust: 4px;
   --radius-shell: 22px;
   --radius-panel: 17px;
   --radius-control: 12px;
@@ -65,6 +67,24 @@
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-standard: ease;
   --ease-emphasized: var(--ease-out);
+}
+
+:root[data-font-size="compact"],
+.app-shell[data-font-size="compact"] {
+  --font-minimum: 11px;
+  --font-size-adjust: 2px;
+}
+
+:root[data-font-size="comfortable"],
+.app-shell[data-font-size="comfortable"] {
+  --font-minimum: 12px;
+  --font-size-adjust: 4px;
+}
+
+:root[data-font-size="large"],
+.app-shell[data-font-size="large"] {
+  --font-minimum: 14px;
+  --font-size-adjust: 6px;
 }
 
 :root[data-theme="paper-light"],
@@ -165,6 +185,7 @@ body {
   overflow: hidden;
   background: var(--desk);
   color: var(--ink);
+  font-size: calc(12px + var(--font-size-adjust));
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
 }
@@ -299,7 +320,7 @@ button:disabled {
 .brand-copy strong {
   overflow: hidden;
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
   font-weight: 720;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -309,7 +330,7 @@ button:disabled {
 .brand-copy small {
   color: var(--chrome-muted);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   letter-spacing: 0;
 }
 
@@ -379,7 +400,7 @@ button:disabled {
 }
 
 .top-navigation-button span {
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   font-weight: 620;
   white-space: nowrap;
 }
@@ -441,7 +462,7 @@ button:disabled {
   border-radius: 9px;
   background: transparent;
   color: var(--chrome-muted);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   transition:
     background-color var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard),
@@ -496,7 +517,7 @@ button:disabled {
   background: rgb(255 255 255 / 44%);
   box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: inherit;
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .theme-preset-control option {
@@ -518,7 +539,7 @@ button:disabled {
   background: rgb(255 255 255 / 44%);
   box-shadow: inset 0 1px 0 var(--glass-highlight);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   white-space: nowrap;
 }
 
@@ -561,14 +582,14 @@ button:disabled {
   display: block;
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 650;
   letter-spacing: 0.12em;
 }
 
 .context-header h2 {
   margin: 8px 0 3px;
-  font-size: 22px;
+  font-size: max(var(--font-minimum), calc(22px + var(--font-size-adjust)));
   line-height: 1.25;
 }
 
@@ -576,7 +597,7 @@ button:disabled {
 .context-helper {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -697,7 +718,7 @@ button:disabled {
   background: var(--inverse-bg);
   color: var(--inverse-ink);
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
   font-weight: 700;
   place-items: center;
 }
@@ -723,7 +744,7 @@ button:disabled {
 
 .context-task-copy strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -733,7 +754,7 @@ button:disabled {
 .context-task-meta {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .context-task-meta {
@@ -746,7 +767,7 @@ button:disabled {
   display: grid;
   min-height: 140px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   place-content: center;
   place-items: center;
 }
@@ -759,7 +780,7 @@ button:disabled {
   padding: 0 17px;
   border-top: 1px solid var(--rule);
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .contents-list,
@@ -796,7 +817,7 @@ button:disabled {
   align-items: center;
   gap: 8px;
   overflow: hidden;
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -805,7 +826,7 @@ button:disabled {
 .contents-list button > span:last-child {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .provider-context-list button {
@@ -828,13 +849,13 @@ button:disabled {
 }
 
 .provider-context-list strong {
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
 }
 
 .provider-context-list small {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .provider-dot {
@@ -890,7 +911,7 @@ button:disabled {
   max-width: min(680px, 54vw);
   margin: 2px 0 0;
   overflow: hidden;
-  font-size: 18px;
+  font-size: max(var(--font-minimum), calc(18px + var(--font-size-adjust)));
   font-weight: 680;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -914,13 +935,13 @@ button:disabled {
 .machine-status strong {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 600;
 }
 
 .machine-status small {
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .app-shell[data-workspace-mode="guided"] .context-header {
@@ -962,7 +983,7 @@ button:disabled {
   background: var(--glass-solid);
   box-shadow: var(--shadow-control);
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .notice-bar {
@@ -975,7 +996,7 @@ button:disabled {
   border-bottom: 1px solid var(--lens);
   background: var(--lens-soft);
   color: var(--lens);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
 }
 
 .notice-bar span {
@@ -1014,7 +1035,7 @@ button:disabled {
   padding: 0 13px;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   font-weight: 650;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
@@ -1065,7 +1086,7 @@ button:disabled {
 .button-large {
   min-height: 42px;
   padding: 0 18px;
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
 }
 
 .panel-heading,
@@ -1079,13 +1100,13 @@ button:disabled {
 .panel-heading h3,
 .section-heading h3 {
   margin: 5px 0 0;
-  font-size: 18px;
+  font-size: max(var(--font-minimum), calc(18px + var(--font-size-adjust)));
 }
 
 .panel-heading p {
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
 }
 
 /* New task */
@@ -1103,7 +1124,11 @@ button:disabled {
 .create-intro h2 {
   margin: 8px 0 10px;
   font-family: var(--font-display);
-  font-size: clamp(31px, 4vw, 48px);
+  font-size: clamp(
+    calc(31px + var(--font-size-adjust)),
+    4vw,
+    calc(48px + var(--font-size-adjust))
+  );
   font-weight: 690;
   letter-spacing: -0.025em;
   line-height: 1.08;
@@ -1113,7 +1138,7 @@ button:disabled {
   max-width: 650px;
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
   line-height: 1.75;
 }
 
@@ -1157,7 +1182,7 @@ button:disabled {
 
 .source-input-wrap label {
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .source-input-wrap input {
@@ -1167,19 +1192,19 @@ button:disabled {
   outline: 0;
   background: transparent;
   color: var(--ink);
-  font-size: 14px;
+  font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
 }
 
 .source-input-wrap span {
   color: rgb(99 113 111 / 72%);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .source-divider {
   display: grid;
   height: 32px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   place-items: center;
 }
 
@@ -1204,7 +1229,7 @@ button:disabled {
   background: transparent;
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   letter-spacing: 0.06em;
   white-space: nowrap;
 }
@@ -1219,7 +1244,7 @@ button:disabled {
   border-left: 3px solid var(--danger);
   background: rgb(183 68 49 / 8%);
   color: var(--danger);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .source-manifest {
@@ -1248,7 +1273,7 @@ button:disabled {
   background: var(--inverse-bg);
   color: var(--inverse-ink);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .manifest-main {
@@ -1257,14 +1282,14 @@ button:disabled {
 
 .manifest-main h3 {
   margin: 5px 0 6px;
-  font-size: 16px;
+  font-size: max(var(--font-minimum), calc(16px + var(--font-size-adjust)));
   line-height: 1.4;
 }
 
 .manifest-main p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .manifest-specs,
@@ -1287,7 +1312,7 @@ button:disabled {
 .selected-evidence dt {
   margin-bottom: 2px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .manifest-specs dd,
@@ -1296,7 +1321,7 @@ button:disabled {
   margin: 0;
   overflow: hidden;
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1310,7 +1335,7 @@ button:disabled {
   padding-top: 10px;
   border-top: 1px solid var(--rule);
   color: var(--success);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .quality-promise > span {
@@ -1329,7 +1354,7 @@ button:disabled {
   border-radius: var(--radius-compact);
   background: transparent;
   color: inherit;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 650;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
@@ -1357,7 +1382,7 @@ button:disabled {
   border-radius: 999px;
   background: rgb(40 115 90 / 10%);
   color: var(--success);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   font-weight: 620;
 }
 
@@ -1371,7 +1396,7 @@ button:disabled {
 .mode-estimate-note {
   margin: 10px 0 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .mode-estimate-note.estimate-partial,
@@ -1434,7 +1459,7 @@ button:disabled {
 
 .mode-title-line strong {
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: max(var(--font-minimum), calc(18px + var(--font-size-adjust)));
 }
 
 .mode-title-line > span {
@@ -1443,13 +1468,13 @@ button:disabled {
   gap: 4px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .mode-description {
   margin-top: 5px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -1460,7 +1485,7 @@ button:disabled {
   margin-top: auto;
   padding-top: 14px;
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .mode-bullets > span {
@@ -1497,13 +1522,13 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
 .advanced-options-trigger small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 400;
 }
 
@@ -1531,7 +1556,7 @@ button:disabled {
   flex-direction: column;
   gap: 5px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .advanced-grid select,
@@ -1543,7 +1568,7 @@ button:disabled {
   border-radius: 5px;
   background: var(--paper);
   color: var(--ink);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .create-actions {
@@ -1559,7 +1584,7 @@ button:disabled {
   gap: 18px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 /* Run */
@@ -1599,7 +1624,7 @@ button:disabled {
   border: 1px solid var(--rule);
   border-radius: var(--radius-compact);
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   font-weight: 650;
   letter-spacing: 0.04em;
 }
@@ -1634,7 +1659,7 @@ button:disabled {
 .run-summary-title h2 {
   margin: 3px 0;
   overflow: hidden;
-  font-size: 15px;
+  font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1642,7 +1667,7 @@ button:disabled {
 .run-summary-title p {
   margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .run-summary-progress > span {
@@ -1650,12 +1675,12 @@ button:disabled {
   margin-bottom: 6px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .run-summary-progress strong {
   color: var(--ink);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .progress-track {
@@ -1718,7 +1743,7 @@ button:disabled {
 
 .diagnostics-heading h3 {
   margin: 3px 0 4px;
-  font-size: 14px;
+  font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
   letter-spacing: -0.01em;
 }
 
@@ -1727,7 +1752,7 @@ button:disabled {
   max-width: 70ch;
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -1738,7 +1763,7 @@ button:disabled {
   background: rgb(166 66 57 / 7%);
   color: var(--danger);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -1768,13 +1793,13 @@ button:disabled {
 
 .diagnostics-facts span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .diagnostics-facts strong {
   margin: 4px 0 2px;
   font-family: var(--font-data);
-  font-size: 15px;
+  font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
   font-variant-numeric: tabular-nums;
 }
 
@@ -1783,7 +1808,7 @@ button:disabled {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.45;
   text-overflow: ellipsis;
 }
@@ -1801,7 +1826,7 @@ button:disabled {
   gap: 7px;
   margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.45;
 }
 
@@ -1813,7 +1838,7 @@ button:disabled {
 
 .diagnostics-warnings small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .diagnostics-artifacts {
@@ -1872,12 +1897,12 @@ button:disabled {
 
 .diagnostics-artifacts strong {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .diagnostics-artifacts small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .diagnostics-recovery {
@@ -1901,7 +1926,7 @@ button:disabled {
 .diagnostics-recovery strong {
   display: block;
   margin-bottom: 2px;
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .diagnostics-recovery small {
@@ -1909,7 +1934,7 @@ button:disabled {
   margin-top: 4px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .run-diagnostics.is-compact .diagnostics-facts,
@@ -1974,7 +1999,7 @@ button:disabled {
   border-radius: 50%;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   place-items: center;
 }
 
@@ -2005,13 +2030,13 @@ button:disabled {
 }
 
 .stage-node strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .stage-node small {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .run-grid {
@@ -2042,7 +2067,7 @@ button:disabled {
   background: var(--desk);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-transform: uppercase;
 }
 
@@ -2060,7 +2085,7 @@ button:disabled {
 .stage-description {
   margin: 12px 0 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   line-height: 1.6;
 }
 
@@ -2081,7 +2106,7 @@ button:disabled {
   border: 0;
   background: transparent;
   color: var(--lens);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -2125,12 +2150,12 @@ button:disabled {
 
 .artifact-list strong {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .artifact-list small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .artifact-list > button > svg:last-child {
@@ -2141,7 +2166,7 @@ button:disabled {
   margin: 0;
   padding: 11px 12px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.45;
 }
 
@@ -2152,7 +2177,7 @@ button:disabled {
   gap: 7px;
   margin-top: 14px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -2162,7 +2187,7 @@ button:disabled {
   gap: 5px;
   color: var(--playhead);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -2193,13 +2218,13 @@ button:disabled {
 .sample-facts span {
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .sample-facts p {
   margin: 0;
   overflow: hidden;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2207,7 +2232,7 @@ button:disabled {
 .sample-facts strong {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .run-evidence {
@@ -2226,7 +2251,7 @@ button:disabled {
   gap: 12px;
   color: rgb(252 253 251 / 54%);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 /* Evidence rail */
@@ -2245,7 +2270,7 @@ button:disabled {
   height: 18px;
   color: rgb(252 253 251 / 38%);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .rail-ticks span {
@@ -2276,7 +2301,7 @@ button:disabled {
 .rail-track-label {
   color: rgb(252 253 251 / 58%);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-align: center;
 }
 
@@ -2368,7 +2393,7 @@ button:disabled {
   background: var(--playhead);
   color: #fff;
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   white-space: nowrap;
 }
 
@@ -2415,7 +2440,7 @@ button:disabled {
   background: rgb(23 33 37 / 68%);
   color: rgb(252 253 251 / 60%);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   letter-spacing: 0.08em;
 }
 
@@ -2435,14 +2460,18 @@ button:disabled {
 .fixture-slide small {
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   letter-spacing: 0.12em;
 }
 
 .fixture-slide h3 {
   margin: 7px 0 10px;
   font-family: var(--font-display);
-  font-size: clamp(16px, 2.2vw, 30px);
+  font-size: clamp(
+    calc(16px + var(--font-size-adjust)),
+    2.2vw,
+    calc(30px + var(--font-size-adjust))
+  );
   letter-spacing: -0.02em;
 }
 
@@ -2450,7 +2479,14 @@ button:disabled {
   margin: 10px 0 0;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: clamp(6px, 0.8vw, 9px);
+  font-size: max(
+    var(--font-minimum),
+    clamp(
+      calc(6px + var(--font-size-adjust)),
+      0.8vw,
+      calc(9px + var(--font-size-adjust))
+    )
+  );
 }
 
 .fixture-diagram {
@@ -2494,7 +2530,7 @@ button:disabled {
   background: rgb(23 33 37 / 76%);
   color: rgb(252 253 251 / 68%);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .video-controls {
@@ -2528,12 +2564,12 @@ button:disabled {
 
 .video-utility {
   color: rgb(252 253 251 / 58%);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .timecode {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .timecode.is-muted {
@@ -2555,7 +2591,7 @@ button:disabled {
   margin: 5px 0 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2605,7 +2641,7 @@ button:disabled {
   background: var(--lens-soft);
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   place-items: center;
 }
 
@@ -2636,7 +2672,7 @@ button:disabled {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   text-align: left;
 }
 
@@ -2670,7 +2706,11 @@ button:disabled {
 .note-title-block h2 {
   margin: 10px 0 8px;
   font-family: var(--font-display);
-  font-size: clamp(32px, 4vw, 46px);
+  font-size: clamp(
+    calc(32px + var(--font-size-adjust)),
+    4vw,
+    calc(46px + var(--font-size-adjust))
+  );
   font-weight: 690;
   text-wrap: balance;
   letter-spacing: -0.028em;
@@ -2680,7 +2720,7 @@ button:disabled {
 .note-source {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .note-overview {
@@ -2688,7 +2728,7 @@ button:disabled {
   padding: 0 0 0 17px;
   border-left: 3px solid var(--lens);
   color: var(--ink);
-  font-size: 17px;
+  font-size: max(var(--font-minimum), calc(17px + var(--font-size-adjust)));
   line-height: 1.9;
 }
 
@@ -2707,11 +2747,11 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .note-verification strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .note-section {
@@ -2726,19 +2766,19 @@ button:disabled {
   left: -36px;
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .note-section h3 {
   margin: 0 0 15px;
-  font-size: 24px;
+  font-size: max(var(--font-minimum), calc(24px + var(--font-size-adjust)));
   letter-spacing: -0.015em;
 }
 
 .note-section > p {
   margin: 0;
   color: var(--ink);
-  font-size: 15px;
+  font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
   line-height: 1.9;
 }
 
@@ -2769,7 +2809,7 @@ button:disabled {
   padding: 0 10px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .frame-toolbar > span {
@@ -2794,13 +2834,17 @@ button:disabled {
 .frame-content > small {
   color: #65b8b8;
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   letter-spacing: 0.14em;
 }
 
 .frame-content > strong {
   font-family: var(--font-display);
-  font-size: clamp(20px, 3vw, 32px);
+  font-size: clamp(
+    calc(20px + var(--font-size-adjust)),
+    3vw,
+    calc(32px + var(--font-size-adjust))
+  );
 }
 
 .frame-image {
@@ -2826,7 +2870,7 @@ button:disabled {
   border-radius: 3px;
   color: rgb(252 253 251 / 74%);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-style: normal;
 }
 
@@ -2868,11 +2912,11 @@ button:disabled {
 .claim-row time {
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .claim-row > span:nth-child(2) {
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   line-height: 1.75;
 }
 
@@ -2888,7 +2932,7 @@ button:disabled {
   justify-content: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .evidence-dock {
@@ -2925,7 +2969,7 @@ button:disabled {
   border-radius: 4px;
   background: transparent;
   color: rgb(252 253 251 / 48%);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .evidence-tabs button:hover,
@@ -2953,17 +2997,17 @@ button:disabled {
 .selected-evidence > div:first-child span {
   color: var(--playhead);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .selected-evidence > div:first-child strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .selected-evidence > p {
   margin: 9px 0 11px;
   color: rgb(252 253 251 / 78%);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   line-height: 1.6;
 }
 
@@ -3015,7 +3059,7 @@ button:disabled {
   border-radius: 3px;
   color: #65b8b8;
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-transform: uppercase;
   place-items: center;
 }
@@ -3029,13 +3073,13 @@ button:disabled {
 
 .evidence-list strong {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .evidence-list small {
   overflow: hidden;
   color: rgb(252 253 251 / 48%);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3043,7 +3087,7 @@ button:disabled {
 .evidence-list time {
   color: rgb(252 253 251 / 44%);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-align: right;
 }
 
@@ -3062,7 +3106,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .dock-footnote strong {
@@ -3101,14 +3145,14 @@ button:disabled {
 
 .provider-card-main h2 {
   margin: 3px 0 2px;
-  font-size: 17px;
+  font-size: max(var(--font-minimum), calc(17px + var(--font-size-adjust)));
 }
 
 .provider-card-main p {
   margin: 0;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .provider-connection {
@@ -3119,7 +3163,7 @@ button:disabled {
   border-radius: 999px;
   background: rgb(99 113 111 / 10%);
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -3184,7 +3228,7 @@ button:disabled {
   display: grid;
   gap: 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -3228,12 +3272,12 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .provider-security strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .model-catalog,
@@ -3267,14 +3311,14 @@ button:disabled {
   border-bottom: 1px solid var(--rule);
   background: var(--desk);
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 550;
 }
 
 .model-table td {
   padding: 10px;
   border-bottom: 1px solid var(--rule);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .model-table tr:last-child td {
@@ -3288,13 +3332,13 @@ button:disabled {
 }
 
 .model-table td:first-child strong {
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .model-table td:first-child small {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .model-table td:nth-child(2) > span,
@@ -3303,7 +3347,7 @@ button:disabled {
   align-items: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .model-table .locality-local,
@@ -3323,13 +3367,13 @@ button:disabled {
   border-radius: 3px;
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .model-empty {
   padding: 30px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   text-align: center;
 }
 
@@ -3357,14 +3401,14 @@ button:disabled {
 }
 
 .role-group > header span {
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   font-weight: 680;
 }
 
 .role-group > header small {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .role-row {
@@ -3398,20 +3442,20 @@ button:disabled {
 }
 
 .role-copy strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .role-copy small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .role-select select {
   min-height: 30px;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .role-locality {
@@ -3441,13 +3485,13 @@ button:disabled {
 .empty-workspace h2 {
   margin: 12px 0 4px;
   color: var(--ink);
-  font-size: 18px;
+  font-size: max(var(--font-minimum), calc(18px + var(--font-size-adjust)));
 }
 
 .empty-workspace p {
   max-width: 420px;
   margin: 0;
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   line-height: 1.6;
 }
 
@@ -3505,7 +3549,7 @@ button:disabled {
     display: inline;
     color: var(--muted);
     font-family: var(--font-data);
-    font-size: 7px;
+    font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
     text-align: right;
   }
 
@@ -3613,7 +3657,7 @@ button:disabled {
   .workspace-mode-switch button {
     min-width: 66px;
     padding: 0 8px;
-    font-size: 11px;
+    font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   }
 
   .theme-preset-control select {
@@ -3727,7 +3771,7 @@ button:disabled {
     min-width: 0;
     padding-right: 6px;
     padding-left: 6px;
-    font-size: 9px;
+    font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
     white-space: nowrap;
   }
 }
@@ -3835,7 +3879,7 @@ button:disabled {
   border-bottom: 1px solid var(--rule);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   letter-spacing: 0.075em;
 }
 
@@ -3843,7 +3887,7 @@ button:disabled {
   overflow: hidden;
   color: var(--ink);
   font-family: inherit;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -3860,7 +3904,7 @@ button:disabled {
 
 .studio-note-list > .studio-panel-title strong {
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   letter-spacing: -0.01em;
   white-space: normal;
 }
@@ -3881,7 +3925,7 @@ button:disabled {
   border-left: 2px solid transparent;
   background: transparent;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   text-align: left;
 }
 
@@ -3910,14 +3954,14 @@ button:disabled {
   border: 1px solid var(--rule);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   place-items: center;
 }
 
 .studio-toc time {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .studio-metadata dl {
@@ -3935,7 +3979,7 @@ button:disabled {
 
 .studio-metadata dt {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .studio-metadata dd {
@@ -3943,7 +3987,7 @@ button:disabled {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3958,7 +4002,7 @@ button:disabled {
   gap: 6px;
   margin: 8px 10px 0;
   color: var(--warning);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -4031,7 +4075,7 @@ button:disabled {
 .evidence-density-panel small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4039,14 +4083,14 @@ button:disabled {
 .evidence-density-panel header > strong {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 500;
 }
 
 .studio-label {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 650;
   letter-spacing: 0.08em;
 }
@@ -4140,7 +4184,7 @@ button:disabled {
 
 .timeline-toolbar > div:first-child strong {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 500;
 }
 
@@ -4155,7 +4199,7 @@ button:disabled {
   align-items: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   white-space: nowrap;
 }
 
@@ -4173,7 +4217,7 @@ button:disabled {
   border-bottom: 1px solid var(--rule);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .timeline-scale span {
@@ -4214,12 +4258,12 @@ button:disabled {
 
 .timeline-track-label strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .timeline-track-label small {
   font-family: var(--font-data);
-  font-size: 6px;
+  font-size: max(var(--font-minimum), calc(6px + var(--font-size-adjust)));
   letter-spacing: 0.05em;
 }
 
@@ -4241,7 +4285,7 @@ button:disabled {
   border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
   background: color-mix(in srgb, var(--ink) 7%, var(--paper));
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-align: left;
   white-space: nowrap;
 }
@@ -4300,12 +4344,12 @@ button:disabled {
 
 .range-copy strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .range-copy small {
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .dual-range {
@@ -4368,7 +4412,7 @@ button:disabled {
   border-radius: 3px;
   background: var(--paper);
   color: var(--ink);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -4384,7 +4428,7 @@ button:disabled {
 .studio-markdown article > h2 {
   margin: 0 0 12px;
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: max(var(--font-minimum), calc(20px + var(--font-size-adjust)));
   letter-spacing: -0.02em;
   line-height: 1.18;
 }
@@ -4394,7 +4438,7 @@ button:disabled {
   padding-bottom: 18px;
   border-bottom: 1px solid var(--rule);
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   line-height: 1.7;
 }
 
@@ -4404,13 +4448,13 @@ button:disabled {
 
 .studio-markdown article h3 {
   margin: 0 0 7px;
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .studio-markdown article section > p {
   margin: 0 0 9px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.65;
 }
 
@@ -4424,7 +4468,7 @@ button:disabled {
   border-top: 1px solid var(--rule);
   background: transparent;
   color: var(--ink);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
   text-align: left;
 }
@@ -4436,7 +4480,7 @@ button:disabled {
 .studio-markdown time {
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .studio-evidence-filter {
@@ -4453,7 +4497,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .studio-evidence-filter > label strong {
@@ -4478,13 +4522,13 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .filter-counts strong {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .studio-telemetry {
@@ -4516,13 +4560,13 @@ button:disabled {
 .telemetry-title strong {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   letter-spacing: 0.07em;
 }
 
 .telemetry-title small {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .telemetry-events,
@@ -4571,7 +4615,7 @@ button:disabled {
 .telemetry-events strong {
   overflow: hidden;
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4579,7 +4623,7 @@ button:disabled {
 .telemetry-events small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4599,7 +4643,7 @@ button:disabled {
 .telemetry-metrics small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4607,7 +4651,7 @@ button:disabled {
 .telemetry-metrics strong {
   color: var(--success);
   font-family: var(--font-data);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   font-weight: 620;
 }
 
@@ -4618,7 +4662,7 @@ button:disabled {
   justify-content: center !important;
   gap: 6px !important;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 @media (max-width: 1320px) {
@@ -4788,14 +4832,14 @@ button:disabled {
 .workbench-drawer-header h2 {
   margin: 6px 0 4px;
   font-family: var(--font-display);
-  font-size: 25px;
+  font-size: max(var(--font-minimum), calc(25px + var(--font-size-adjust)));
   letter-spacing: -0.025em;
 }
 
 .workbench-drawer-header p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -4848,14 +4892,14 @@ button:disabled {
 .drawer-section-heading span {
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   letter-spacing: 0.08em;
 }
 
 .drawer-section-heading h3 {
   margin: 0;
   color: var(--ink);
-  font-size: 14px;
+  font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
 }
 
 .material-composer > label:not(.material-range-toggle),
@@ -4865,7 +4909,7 @@ button:disabled {
   gap: 6px;
   margin-bottom: 12px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 600;
 }
 
@@ -4878,7 +4922,7 @@ button:disabled {
   border-radius: 4px;
   background: var(--paper);
   color: var(--ink);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
   font-weight: 450;
 }
 
@@ -4909,7 +4953,7 @@ button:disabled {
   gap: 7px;
   margin: 2px 0 14px;
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .material-range-toggle input {
@@ -4933,7 +4977,7 @@ button:disabled {
   grid-column: 1 / -1;
   color: var(--success);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .material-range-fields > span.is-invalid {
@@ -4969,12 +5013,12 @@ button:disabled {
 }
 
 .material-drop-button strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .material-drop-button small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .material-list {
@@ -5022,19 +5066,19 @@ button:disabled {
 }
 
 .material-list article strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .material-list article p {
   margin: 3px 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .material-list article div > span {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .material-list article > button {
@@ -5066,7 +5110,7 @@ button:disabled {
 .material-empty p {
   max-width: 280px;
   margin: 0;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -5088,7 +5132,7 @@ button:disabled {
   flex-direction: column;
   gap: 6px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 600;
 }
 
@@ -5106,7 +5150,7 @@ button:disabled {
   border-radius: 4px;
   background: var(--paper);
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .rework-range-fields input,
@@ -5145,7 +5189,7 @@ button:disabled {
   margin: 10px 0 0;
   color: var(--success);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .rework-range-status.is-invalid {
@@ -5170,7 +5214,7 @@ button:disabled {
   border-right: 1px solid var(--rule);
   background: transparent;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -5212,11 +5256,11 @@ button:disabled {
 
 .rework-choice-grid > button strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .rework-choice-grid > button span {
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -5234,7 +5278,7 @@ button:disabled {
   border: 1px solid var(--rule);
   background: var(--surface-tint);
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .rework-interval button {
@@ -5244,7 +5288,7 @@ button:disabled {
   background: var(--paper);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .rework-interval button.is-selected {
@@ -5261,7 +5305,7 @@ button:disabled {
   grid-column: 2 / -1;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .rework-explainer {
@@ -5270,7 +5314,7 @@ button:disabled {
   border-left: 2px solid var(--lens);
   background: var(--lens-soft);
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.6;
 }
 
@@ -5312,21 +5356,21 @@ button:disabled {
 
 .rework-operation-list strong {
   display: block;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .rework-operation-list p {
   margin: 3px 0;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .rework-operation-list div > span {
   display: block;
   overflow: hidden;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.45;
   text-overflow: ellipsis;
 }
@@ -5334,7 +5378,7 @@ button:disabled {
 .rework-operation-list time {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .workbench-drawer-footer {
@@ -5351,7 +5395,7 @@ button:disabled {
 .workbench-drawer-footer > span {
   max-width: 340px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -5415,7 +5459,7 @@ button:disabled {
 
 .create-advanced-panel-heading h4 {
   margin: 5px 0 0;
-  font-size: 16px;
+  font-size: max(var(--font-minimum), calc(16px + var(--font-size-adjust)));
   letter-spacing: -0.01em;
 }
 
@@ -5423,7 +5467,7 @@ button:disabled {
   max-width: 620px;
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -5434,7 +5478,7 @@ button:disabled {
   align-items: flex-end;
   gap: 3px;
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .create-sampling-budget span {
@@ -5467,7 +5511,7 @@ button:disabled {
   flex-direction: column;
   gap: 5px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .create-sampling-default select,
@@ -5483,7 +5527,7 @@ button:disabled {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .create-sampling-default select {
@@ -5494,7 +5538,7 @@ button:disabled {
   grid-column: 1 / -1;
   margin: -3px 0 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .create-interval-editor {
@@ -5525,7 +5569,7 @@ button:disabled {
   background: var(--paper);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .create-interval-presets button:last-child {
@@ -5558,18 +5602,18 @@ button:disabled {
 }
 
 .create-sampling-overrides-heading strong {
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .create-sampling-overrides-heading span,
 .create-sampling-empty {
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .create-add-segment {
   min-height: 32px;
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .create-sampling-empty {
@@ -5599,7 +5643,7 @@ button:disabled {
   align-self: center;
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .create-sampling-segment-mode {
@@ -5612,12 +5656,12 @@ button:disabled {
   border: 1px solid var(--rule);
   border-radius: 4px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .create-sampling-segment-mode strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .create-remove-segment {
@@ -5641,14 +5685,14 @@ button:disabled {
 }
 
 .create-sampling-errors strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .create-sampling-errors ul {
   margin: 4px 0 0;
   padding-left: 17px;
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.6;
 }
 
@@ -5658,7 +5702,7 @@ button:disabled {
   border: 1px solid var(--rule);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .create-report-presets {
@@ -5705,12 +5749,12 @@ button:disabled {
 }
 
 .create-report-preset strong {
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .create-report-preset small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -5761,14 +5805,14 @@ button:disabled {
 .create-output-locked strong,
 .create-output-toggle strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .create-output-locked small,
 .create-output-toggle small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5835,14 +5879,14 @@ button:disabled {
 }
 
 .benchmark-guide-copy strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
 .benchmark-guide-copy small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5859,7 +5903,7 @@ button:disabled {
   background: var(--desk);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .benchmark-guide-chevron {
@@ -5901,7 +5945,7 @@ button:disabled {
 .benchmark-guide-intro h4,
 .processing-scope-heading h4 {
   margin: 4px 0 0;
-  font-size: 15px;
+  font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
   letter-spacing: -0.012em;
 }
 
@@ -5909,7 +5953,7 @@ button:disabled {
   max-width: 720px;
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.65;
   text-wrap: pretty;
 }
@@ -5922,7 +5966,7 @@ button:disabled {
   border-radius: var(--radius-compact);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .benchmark-table-scroll {
@@ -5959,7 +6003,7 @@ button:disabled {
 .benchmark-table thead th {
   background: var(--desk);
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -5970,14 +6014,14 @@ button:disabled {
 
 .benchmark-table tbody th {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 520;
 }
 
 .benchmark-table tbody td {
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .benchmark-table tbody tr:hover {
@@ -6001,20 +6045,20 @@ button:disabled {
 .benchmark-subheading h5,
 .benchmark-budget-heading h5 {
   margin: 0;
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .benchmark-subheading span {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .benchmark-explanation-grid > section > p,
 .benchmark-reserve-note {
   margin: 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.65;
 }
 
@@ -6060,7 +6104,7 @@ button:disabled {
 
 .benchmark-budget-grid span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .benchmark-budget-grid strong,
@@ -6073,13 +6117,13 @@ button:disabled {
 
 .benchmark-budget-grid strong {
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 620;
 }
 
 .benchmark-budget-grid small {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .benchmark-budget-empty {
@@ -6099,11 +6143,11 @@ button:disabled {
 
 .benchmark-budget-empty strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .benchmark-budget-empty small {
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .benchmark-truth-note {
@@ -6119,7 +6163,7 @@ button:disabled {
 .benchmark-truth-note p {
   margin: 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.7;
 }
 
@@ -6142,7 +6186,7 @@ button:disabled {
 .processing-scope-heading > span {
   max-width: 360px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
   text-align: right;
 }
@@ -6221,12 +6265,12 @@ button:disabled {
 }
 
 .processing-scope-options strong {
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .processing-scope-options small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
   text-wrap: pretty;
 }
@@ -6236,7 +6280,7 @@ button:disabled {
   padding-left: 10px;
   border-left: 2px solid var(--rule-strong);
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.65;
   text-wrap: pretty;
 }
@@ -6264,13 +6308,13 @@ button:disabled {
 
 .create-audio-only-contract strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .create-audio-only-contract p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.65;
 }
 
@@ -6449,7 +6493,7 @@ button:disabled {
   margin-top: 12px;
   overflow: hidden;
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6484,7 +6528,7 @@ button:disabled {
 .report-revision-route span,
 .report-revision-route small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .report-revision-route span {
@@ -6496,7 +6540,7 @@ button:disabled {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6512,7 +6556,7 @@ button:disabled {
   gap: 7px;
   margin: 10px 0 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -6546,13 +6590,13 @@ button:disabled {
 
 .report-revision-error strong {
   color: var(--danger);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .report-revision-error p {
   margin: 4px 0 0;
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -6615,7 +6659,7 @@ button:disabled {
 .report-revision-preset-index {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   letter-spacing: 0.08em;
 }
 
@@ -6628,12 +6672,12 @@ button:disabled {
 
 .report-revision-preset strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .report-revision-preset small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.45;
   text-wrap: pretty;
 }
@@ -6711,13 +6755,13 @@ button:disabled {
 
 .report-revision-output strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .report-revision-output small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6726,7 +6770,7 @@ button:disabled {
   margin: 10px 0 0;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -6754,7 +6798,7 @@ button:disabled {
   border: 1px solid var(--rule-strong);
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   place-items: center;
 }
 
@@ -6767,13 +6811,13 @@ button:disabled {
 
 .report-revision-record > header strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .report-revision-record > header span {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .report-revision-record > header code {
@@ -6781,7 +6825,7 @@ button:disabled {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6798,7 +6842,7 @@ button:disabled {
   border: 1px solid var(--rule);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .report-revision-record-meta .is-current-evidence {
@@ -6833,7 +6877,7 @@ button:disabled {
   margin: 0;
   padding-left: 14px;
   color: var(--ink);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -6885,14 +6929,14 @@ button:disabled {
 
 .report-revision-downloads strong {
   color: var(--ink);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .report-revision-downloads small {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6915,13 +6959,13 @@ button:disabled {
 
 .report-revision-empty strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .report-revision-empty p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
   text-wrap: pretty;
 }
@@ -7048,7 +7092,11 @@ button:disabled {
 .models-hero h1 {
   margin: 5px 0 7px;
   font-family: var(--font-display);
-  font-size: clamp(25px, 2.4vw, 36px);
+  font-size: clamp(
+    calc(25px + var(--font-size-adjust)),
+    2.4vw,
+    calc(36px + var(--font-size-adjust))
+  );
   font-weight: 690;
   letter-spacing: -0.035em;
 }
@@ -7057,7 +7105,7 @@ button:disabled {
   max-width: 720px;
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
 }
 
 .experience-switch {
@@ -7081,7 +7129,7 @@ button:disabled {
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 650;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
@@ -7106,6 +7154,143 @@ button:disabled {
   border-radius: 18px;
   background: var(--paper);
   box-shadow: 0 12px 36px rgb(36 57 47 / 5%);
+}
+
+.appearance-settings-panel {
+  display: grid;
+  gap: 20px;
+}
+
+.font-size-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
+  gap: 20px;
+  align-items: stretch;
+}
+
+.font-size-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.font-size-options button {
+  display: grid;
+  min-width: 0;
+  min-height: 104px;
+  grid-template-columns: auto minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--paper) 82%, var(--desk));
+  color: var(--ink);
+  text-align: left;
+  transition:
+    transform var(--motion-fast) var(--ease-emphasized),
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.font-size-options button:hover {
+  border-color: color-mix(in srgb, var(--lens) 34%, var(--rule));
+  background: var(--paper);
+  transform: translateY(-1px);
+}
+
+.font-size-options button:active {
+  transform: scale(0.985);
+}
+
+.font-size-options button[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--lens) 58%, var(--rule));
+  background: color-mix(in srgb, var(--lens-soft) 56%, var(--paper));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lens) 12%, transparent);
+}
+
+.font-size-options button > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.font-size-options strong {
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
+  font-weight: 680;
+}
+
+.font-size-options small {
+  color: var(--muted);
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
+  line-height: 1.55;
+}
+
+.font-size-options button > svg {
+  color: var(--lens);
+}
+
+.font-size-option-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: var(--inverse-bg);
+  color: var(--inverse-ink);
+  font-family: var(--font-display);
+  font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
+  font-weight: 720;
+  place-items: center;
+}
+
+.typography-preview {
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 4px 8px 20px;
+  border-left: 3px solid var(--lens);
+}
+
+.typography-preview > span {
+  color: var(--lens);
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
+  font-weight: 680;
+}
+
+.typography-preview strong {
+  font-family: var(--font-display);
+  font-size: max(var(--font-minimum), calc(16px + var(--font-size-adjust)));
+  font-weight: 700;
+}
+
+.typography-preview p {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
+  line-height: 1.7;
+}
+
+@media (max-width: 980px) {
+  .font-size-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .typography-preview {
+    padding-block: 12px;
+  }
+}
+
+@media (max-width: 720px) {
+  .font-size-options {
+    grid-template-columns: 1fr;
+  }
+
+  .font-size-options button {
+    min-height: 84px;
+  }
 }
 
 .models-section-heading {
@@ -7140,7 +7325,7 @@ button:disabled {
 .models-section-heading h2 {
   margin: 3px 0 2px;
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: max(var(--font-minimum), calc(17px + var(--font-size-adjust)));
   font-weight: 680;
   letter-spacing: -0.018em;
 }
@@ -7148,7 +7333,7 @@ button:disabled {
 .models-section-heading p {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
 .component-heading-actions {
@@ -7169,7 +7354,7 @@ button:disabled {
   border-radius: 999px;
   background: var(--desk);
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -7247,17 +7432,17 @@ button:disabled {
 .component-tier-card > div > span,
 .component-tier-card dt {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .component-tier-card strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .component-tier-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -7276,7 +7461,7 @@ button:disabled {
   margin: 0;
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -7307,7 +7492,7 @@ button:disabled {
 .managed-models > header h3 {
   margin: 2px 0 0;
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   font-weight: 680;
   letter-spacing: -0.012em;
 }
@@ -7320,14 +7505,14 @@ button:disabled {
   background: var(--paper);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   white-space: nowrap;
 }
 
 .component-subcopy {
   margin: 10px 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -7380,13 +7565,13 @@ button:disabled {
 }
 
 .runtime-component-grid strong {
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .runtime-component-grid small {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .component-download-note {
@@ -7409,7 +7594,7 @@ button:disabled {
 .component-download-note p {
   margin: 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -7481,12 +7666,12 @@ button:disabled {
 .managed-model-copy > span,
 .managed-model-copy small {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .managed-model-copy strong {
   overflow: hidden;
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -7505,7 +7690,7 @@ button:disabled {
   border-radius: 7px;
   background: rgb(189 123 35 / 7%);
   color: var(--warning);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   font-weight: 750;
   white-space: nowrap;
 }
@@ -7533,7 +7718,7 @@ button:disabled {
 .component-action-copy {
   min-width: 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -7582,12 +7767,12 @@ button:disabled {
 
 .component-feedback strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .component-feedback span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -7612,11 +7797,11 @@ button:disabled {
 
 .component-empty-state strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .component-empty-state span {
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .hardware-summary {
@@ -7637,7 +7822,7 @@ button:disabled {
   background: var(--desk);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .guided-performance,
@@ -7701,13 +7886,13 @@ button:disabled {
 
 .preference-grid strong {
   align-self: end;
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
 }
 
 .preference-grid small {
   max-width: 280px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -7750,12 +7935,12 @@ button:disabled {
 }
 
 .headroom-card strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .headroom-card span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .headroom-card input {
@@ -7766,7 +7951,7 @@ button:disabled {
 .headroom-card output {
   color: var(--lens);
   font-family: var(--font-data);
-  font-size: 14px;
+  font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
   font-weight: 750;
   text-align: right;
 }
@@ -7798,14 +7983,14 @@ button:disabled {
 }
 
 .recommendation-card strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .recommendation-card p {
   max-width: 680px;
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .recommendation-card dl {
@@ -7822,13 +8007,13 @@ button:disabled {
 
 .recommendation-card dt {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .recommendation-card dd {
   margin: 0;
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -7849,12 +8034,12 @@ button:disabled {
 }
 
 .professional-toolbar strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .professional-toolbar span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .professional-selects {
@@ -7870,7 +8055,7 @@ button:disabled {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 650;
 }
 
@@ -7896,7 +8081,7 @@ button:disabled {
   padding-top: 9px;
   resize: vertical;
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -7924,13 +8109,13 @@ button:disabled {
 }
 
 .parameter-groups > section > header strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .parameter-groups > section > header span {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .parameter-groups > section > div {
@@ -7960,12 +8145,12 @@ button:disabled {
 }
 
 .parameter-groups label strong {
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .parameter-groups label small {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .parameter-groups input[type="number"] {
@@ -7977,7 +8162,7 @@ button:disabled {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   text-align: right;
 }
 
@@ -8002,7 +8187,7 @@ button:disabled {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .provider-overview {
@@ -8044,14 +8229,14 @@ button:disabled {
 }
 
 .provider-identity strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .provider-identity small {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -8062,7 +8247,7 @@ button:disabled {
   border-radius: 7px;
   background: var(--lens-soft);
   color: var(--lens);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -8085,11 +8270,11 @@ button:disabled {
 
 .credential-strip strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .credential-strip small {
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .credential-strip label {
@@ -8105,7 +8290,7 @@ button:disabled {
   border-radius: 9px;
   background: var(--paper);
   color: var(--ink);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .provider-empty {
@@ -8157,13 +8342,13 @@ button:disabled {
 }
 
 .provider-editor > header strong {
-  font-size: 12px;
+  font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
 }
 
 .provider-editor > header span,
 .provider-editor > footer span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .provider-editor > header > button {
@@ -8212,7 +8397,7 @@ button:disabled {
   gap: 7px;
   margin: 0 16px 14px;
   color: var(--danger);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .model-registry-layout {
@@ -8264,14 +8449,14 @@ button:disabled {
 }
 
 .discovery-results strong {
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .discovery-results small,
 .discovery-results button > span:nth-child(2) {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .model-create-form {
@@ -8296,7 +8481,7 @@ button:disabled {
 
 .model-create-form legend {
   padding: 0 5px;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -8321,7 +8506,7 @@ button:disabled {
   border-radius: 8px;
   background: var(--desk);
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   transition:
     border-color var(--motion-fast) var(--ease-standard),
     background-color var(--motion-fast) var(--ease-standard),
@@ -8349,7 +8534,7 @@ button:disabled {
   border-radius: 9px;
   background: rgb(154 103 29 / 8%);
   color: var(--warning);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .model-list {
@@ -8386,14 +8571,14 @@ button:disabled {
 }
 
 .model-list article strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .model-list article small {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -8406,7 +8591,7 @@ button:disabled {
   border-radius: 6px;
   background: var(--desk);
   font-family: var(--font-body);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .model-disabled {
@@ -8414,7 +8599,7 @@ button:disabled {
   align-items: center;
   gap: 4px;
   color: var(--danger);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .models-workspace .role-routing {
@@ -8430,7 +8615,7 @@ button:disabled {
   border-radius: 9px;
   background: var(--lens-soft);
   color: var(--success);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
@@ -8464,25 +8649,25 @@ button:disabled {
 }
 
 .models-workspace .role-copy strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .models-workspace .role-copy small {
   grid-column: 1 / -1;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .models-workspace .role-copy > span {
   grid-column: 1 / -1;
   color: var(--lens);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .models-workspace .role-select select {
   width: 100%;
   min-height: 34px;
   border-radius: 9px;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .role-state {
@@ -8490,7 +8675,7 @@ button:disabled {
   align-items: center;
   gap: 5px;
   color: var(--warning);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .role-state.is-ready {
@@ -8507,7 +8692,7 @@ button:disabled {
   border-radius: 10px;
   background: var(--desk);
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .component-model-only {
@@ -8537,7 +8722,7 @@ button:disabled {
 .runtime-heading-actions .button {
   min-height: 34px;
   padding-inline: 11px;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .runtime-package-summary {
@@ -8583,14 +8768,14 @@ button:disabled {
 .runtime-package-summary strong {
   overflow: hidden;
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .runtime-package-summary small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .runtime-guidance {
@@ -8631,12 +8816,12 @@ button:disabled {
 }
 
 .runtime-guidance strong {
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
 }
 
 .runtime-guidance span:not(.runtime-guidance-mark) {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -8680,7 +8865,7 @@ button:disabled {
 .runtime-empty-state strong,
 .runtime-catalog-empty strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .runtime-package-error span,
@@ -8688,7 +8873,7 @@ button:disabled {
 .runtime-empty-state span,
 .runtime-catalog-empty span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -8719,7 +8904,7 @@ button:disabled {
 .runtime-subsection-heading h3 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 13px;
+  font-size: max(var(--font-minimum), calc(13px + var(--font-size-adjust)));
   font-weight: 690;
   letter-spacing: 0;
 }
@@ -8727,7 +8912,7 @@ button:disabled {
 .runtime-subsection-heading p {
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .runtime-subsection-heading > span {
@@ -8738,7 +8923,7 @@ button:disabled {
   background: var(--paper);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .runtime-instance-list,
@@ -8801,7 +8986,7 @@ button:disabled {
 .runtime-instance h4 {
   overflow: hidden;
   margin: 1px 0 0;
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(10px + var(--font-size-adjust)));
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8812,7 +8997,7 @@ button:disabled {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -8829,7 +9014,7 @@ button:disabled {
   border-radius: 6px;
   background: var(--desk);
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   font-weight: 720;
 }
 
@@ -8874,7 +9059,7 @@ button:disabled {
 .runtime-ownership-note {
   margin: 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -8899,7 +9084,7 @@ button:disabled {
   background: var(--desk);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-capabilities > span.device-cuda {
@@ -8929,7 +9114,7 @@ button:disabled {
 .runtime-instance-meta dt,
 .runtime-release-grid dt {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-instance-meta dd,
@@ -8937,7 +9122,7 @@ button:disabled {
   overflow: hidden;
   margin: 0;
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8952,7 +9137,7 @@ button:disabled {
 .runtime-path-block > span,
 .runtime-release-destination > span {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-path-block code,
@@ -8964,7 +9149,7 @@ button:disabled {
   background: var(--desk);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -8977,7 +9162,7 @@ button:disabled {
   justify-content: space-between;
   gap: 10px;
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-instance-links a,
@@ -9015,7 +9200,7 @@ button:disabled {
 .runtime-release-grid > article > .button {
   min-height: 31px;
   padding-inline: 10px;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .runtime-danger-action:not(:disabled) {
@@ -9063,19 +9248,19 @@ button:disabled {
 }
 
 .runtime-binding-row strong {
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .runtime-binding-row small {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-binding-row select {
   width: 100%;
   min-height: 34px;
   border-radius: 9px;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .runtime-binding-state {
@@ -9083,7 +9268,7 @@ button:disabled {
   align-items: center;
   gap: 4px;
   color: var(--warning);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   white-space: nowrap;
 }
 
@@ -9098,7 +9283,7 @@ button:disabled {
 
 .runtime-release-grid > article > header strong {
   overflow: hidden;
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9167,7 +9352,7 @@ button:disabled {
 
 .runtime-operation-main > header strong {
   overflow: hidden;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9176,7 +9361,7 @@ button:disabled {
 .runtime-operation-main > div span {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-operation-main progress {
@@ -9201,13 +9386,13 @@ button:disabled {
 .runtime-operation-main p {
   margin: 0;
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .runtime-operation > .button {
   min-height: 30px;
   padding-inline: 9px;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
 }
 
 .dependency-dialog-backdrop {
@@ -9263,7 +9448,7 @@ button:disabled {
 .dependency-dialog > header h2 {
   margin: 3px 0 4px;
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: max(var(--font-minimum), calc(18px + var(--font-size-adjust)));
   font-weight: 720;
 }
 
@@ -9271,7 +9456,7 @@ button:disabled {
   max-width: 66ch;
   margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   line-height: 1.6;
 }
 
@@ -9325,14 +9510,14 @@ button:disabled {
 
 .dependency-size-summary small {
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .dependency-size-summary strong {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9389,20 +9574,20 @@ button:disabled {
 }
 
 .dependency-missing-list article header strong {
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .dependency-missing-list article header span {
   flex: 0 0 auto;
   color: var(--warning);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   font-weight: 700;
 }
 
 .dependency-missing-list article p {
   margin: 0;
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.55;
 }
 
@@ -9424,7 +9609,7 @@ button:disabled {
   border-radius: 7px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
 }
 
 .dependency-missing-list dt {
@@ -9443,7 +9628,7 @@ button:disabled {
   align-items: center;
   gap: 4px;
   color: var(--lens);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   text-decoration: none;
 }
 
@@ -9482,12 +9667,12 @@ button:disabled {
 
 .dependency-install-progress strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: max(var(--font-minimum), calc(9px + var(--font-size-adjust)));
 }
 
 .dependency-install-progress span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -9509,7 +9694,7 @@ button:disabled {
   align-items: flex-start;
   gap: 6px;
   color: var(--muted);
-  font-size: 7px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   line-height: 1.5;
 }
 
@@ -9527,7 +9712,7 @@ button:disabled {
 .dependency-dialog > footer .button {
   min-height: 34px;
   padding-inline: 11px;
-  font-size: 8px;
+  font-size: max(var(--font-minimum), calc(8px + var(--font-size-adjust)));
   white-space: nowrap;
 }
 
@@ -9567,7 +9752,7 @@ button:disabled {
   }
 
   .dependency-dialog > header h2 {
-    font-size: 15px;
+    font-size: max(var(--font-minimum), calc(15px + var(--font-size-adjust)));
   }
 
   .dependency-size-summary {

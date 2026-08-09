@@ -6,6 +6,42 @@ import argparse
 from pathlib import Path
 
 
+def assert_readable_text(page, minimum_px: float) -> None:
+    violations = page.locator("body *").evaluate_all(
+        """(elements, minimum) => elements.flatMap((element) => {
+            const directText = Array.from(element.childNodes)
+              .filter((node) => node.nodeType === Node.TEXT_NODE)
+              .map((node) => node.textContent?.trim() ?? '')
+              .join(' ')
+              .trim();
+            if (!directText) return [];
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            if (
+              rect.width <= 0 || rect.height <= 0 ||
+              style.display === 'none' || style.visibility === 'hidden' ||
+              Number(style.opacity) === 0
+            ) return [];
+            const size = Number.parseFloat(style.fontSize);
+            return size + 0.01 < minimum
+              ? [{
+                  tag: element.tagName,
+                  className: element.className,
+                  size,
+                  text: directText.slice(0, 80),
+                }]
+              : [];
+          })""",
+        minimum_px,
+    )
+    if violations:
+        sample = "; ".join(
+            f"{item['tag']}.{item['className']}={item['size']}px {item['text']!r}"
+            for item in violations[:8]
+        )
+        raise RuntimeError(f"Visible text fell below {minimum_px}px: {sample}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:1420")
@@ -37,6 +73,7 @@ def main() -> int:
             page.get_by_role("button", name="笔记阅读").click()
             page.get_by_role("button", name="数据工作室").click()
             page.get_by_text("EVIDENCE TIMELINE", exact=True).wait_for()
+            assert_readable_text(page, 12)
             page.screenshot(
                 path=str(screenshot_root / "06-reader-detailed-1440x900.png"),
                 full_page=False,
@@ -92,20 +129,39 @@ def main() -> int:
                 full_page=False,
             )
 
+            page.get_by_role("button", name="设置", exact=True).click()
+            page.get_by_role("heading", name="设置中心", exact=True).wait_for()
+            assert_readable_text(page, 12)
+            page.screenshot(
+                path=str(screenshot_root / "10b-settings-comfortable-1440x900.png"),
+                full_page=False,
+            )
+            page.get_by_role("radio", name="大字", exact=False).click()
+            page.locator('.app-shell[data-font-size="large"]').wait_for()
+            page.wait_for_timeout(250)
+            assert_readable_text(page, 14)
+            page.screenshot(
+                path=str(screenshot_root / "10c-settings-large-1440x900.png"),
+                full_page=False,
+            )
+            page.get_by_role("radio", name="舒适", exact=False).click()
+
             page.get_by_role("button", name="笔记阅读").click()
             page.set_viewport_size({"width": 1180, "height": 760})
+            page.wait_for_timeout(250)
             page.screenshot(
                 path=str(screenshot_root / "11-reader-detailed-1180x760.png"),
                 full_page=False,
             )
 
             page.set_viewport_size({"width": 720, "height": 860})
+            page.wait_for_timeout(250)
             page.screenshot(
                 path=str(screenshot_root / "12-reader-detailed-720x860.png"),
                 full_page=False,
             )
             browser.close()
-    except Error as error:
+    except (Error, RuntimeError) as error:
         print(f"Playwright detailed-workspace QA failed: {error}")
         return 1
 

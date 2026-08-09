@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_UI_PREFERENCES,
   LEGACY_UI_PREFERENCES_STORAGE_KEY,
+  PREVIOUS_UI_PREFERENCES_STORAGE_KEY,
   UI_PREFERENCES_STORAGE_KEY,
   useUiPreferences,
 } from './uiPreferences'
@@ -19,10 +20,12 @@ describe('UI preferences', () => {
   it('persists and restores the selected theme and workspace mode', () => {
     useUiPreferences.getState().setWorkspaceMode('professional')
     useUiPreferences.getState().setThemePreset('studio-graphite')
+    useUiPreferences.getState().setFontSizePreset('large')
 
     expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
       workspaceMode: 'professional',
       themePreset: 'studio-graphite',
+      fontSizePreset: 'large',
     })
 
     useUiPreferences.setState(DEFAULT_UI_PREFERENCES)
@@ -31,6 +34,7 @@ describe('UI preferences', () => {
     expect(useUiPreferences.getState()).toMatchObject({
       workspaceMode: 'professional',
       themePreset: 'studio-graphite',
+      fontSizePreset: 'large',
     })
   })
 
@@ -45,6 +49,22 @@ describe('UI preferences', () => {
     expect(useUiPreferences.getState()).toMatchObject({
       workspaceMode: 'guided',
       themePreset: 'paper-light',
+      fontSizePreset: 'comfortable',
+    })
+  })
+
+  it('migrates v2 preferences and adds the comfortable font default', () => {
+    window.localStorage.setItem(
+      PREVIOUS_UI_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({ workspaceMode: 'professional', themePreset: 'paper-light' }),
+    )
+
+    useUiPreferences.getState().hydratePreferences()
+
+    expect(useUiPreferences.getState()).toMatchObject({
+      workspaceMode: 'professional',
+      themePreset: 'paper-light',
+      fontSizePreset: 'comfortable',
     })
   })
 
@@ -59,10 +79,12 @@ describe('UI preferences', () => {
     expect(useUiPreferences.getState()).toMatchObject({
       workspaceMode: 'professional',
       themePreset: 'studio-graphite',
+      fontSizePreset: 'comfortable',
     })
     expect(JSON.parse(window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) ?? '{}')).toEqual({
       workspaceMode: 'professional',
       themePreset: 'studio-graphite',
+      fontSizePreset: 'comfortable',
     })
 
     window.localStorage.clear()
@@ -75,6 +97,7 @@ describe('UI preferences', () => {
     expect(useUiPreferences.getState()).toMatchObject({
       workspaceMode: 'guided',
       themePreset: 'paper-light',
+      fontSizePreset: 'comfortable',
     })
   })
 })
