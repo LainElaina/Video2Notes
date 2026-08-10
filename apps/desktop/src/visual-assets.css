@@ -190,7 +190,7 @@
 
 .fixture-slide-overlay small {
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: max(var(--font-minimum), calc(7px + var(--font-size-adjust)));
   letter-spacing: 0.08em;
   opacity: 0.76;
 }
@@ -321,7 +321,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .source-platform-visual img { transition: opacity 120ms ease; }
+  .source-platform-visual img { transition: opacity var(--motion-press) ease; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
