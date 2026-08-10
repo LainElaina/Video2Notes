@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Activity,
   BookOpenText,
@@ -212,7 +212,7 @@ function TaskList() {
                   : platformLabel[task.source.platform].slice(0, 1)}
               </span>
               <span className="context-task-copy">
-                <strong>{task.source.title}</strong>
+                <strong title={task.source.title}>{task.source.title}</strong>
                 <span>
                   {localizedStatus[task.status]} ·{' '}
                   {task.mode === 'fast'
@@ -278,7 +278,7 @@ function ReaderContents() {
                 ?.scrollIntoView({ behavior: preferredScrollBehavior() })
             }}
           >
-            <span>
+            <span title={section.title}>
               <small>{(index + 1).toString().padStart(2, '0')}</small>
               {section.title}
             </span>
@@ -306,8 +306,8 @@ function ProviderList() {
         >
           <span className={`provider-dot status-${provider.status}`} aria-hidden="true" />
           <span>
-            <strong>{provider.name}</strong>
-            <small>{provider.endpoint}</small>
+            <strong title={provider.name}>{provider.name}</strong>
+            <small title={provider.endpoint}>{provider.endpoint}</small>
           </span>
           {provider.id === selectedProviderId && <Check size={14} aria-hidden="true" />}
         </button>
@@ -408,7 +408,7 @@ function WorkspaceHeader() {
     <header className="workspace-header">
       <div className="workspace-title">
         <span className="eyebrow">VIDEO2NOTES / {viewEyebrow[view]}</span>
-        <h1>{viewTitle[view]}</h1>
+        <h1 title={viewTitle[view]}>{viewTitle[view]}</h1>
       </div>
       <div
         className="machine-status"
@@ -440,23 +440,93 @@ export function AppShell({ children }: { children: ReactNode }) {
   const localizedNotice = notice ? localizeUserMessage(notice, locale) : undefined
   const professionalReader = view === 'reader' && workspaceMode === 'professional'
   const contextShouldShow = !contextCollapsed && !professionalReader
-  const [contextSlotOpen, setContextSlotOpen] = useState(contextShouldShow)
+  const [narrowLayout, setNarrowLayout] = useState(false)
+  const pageSurfaceRef = useRef<HTMLDivElement>(null)
+  const contextExpandRef = useRef<HTMLButtonElement>(null)
+  const contextOverlayOpen = narrowLayout && contextShouldShow
+
+  // Below 1120px the context panel leaves the grid and becomes a slide-over.
+  // The slide-over starts dismissed so it never blocks the workspace on load;
+  // the wide-layout collapsed preference is restored when leaving narrow mode.
+  const autoCollapsedContextRef = useRef(false)
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(max-width: 1120px)')
+    const updateLayout = () => {
+      const narrow = query.matches
+      setNarrowLayout(narrow)
+      const { contextCollapsed: collapsed, toggleContext: toggle } = useStudioStore.getState()
+      if (narrow && !collapsed) {
+        autoCollapsedContextRef.current = true
+        toggle()
+      } else if (!narrow && autoCollapsedContextRef.current) {
+        autoCollapsedContextRef.current = false
+        if (collapsed) toggle()
+      }
+    }
+    updateLayout()
+    query.addEventListener('change', updateLayout)
+    return () => query.removeEventListener('change', updateLayout)
+  }, [])
+
+  // Navigating with the slide-over open dismisses it so the destination page
+  // is never left hidden behind the scrim.
+  const previousViewRef = useRef(view)
+  useEffect(() => {
+    if (previousViewRef.current === view) return
+    previousViewRef.current = view
+    if (!narrowLayout) return
+    const { contextCollapsed: collapsed, toggleContext: toggle } = useStudioStore.getState()
+    if (!collapsed) {
+      autoCollapsedContextRef.current = true
+      toggle()
+    }
+  }, [view, narrowLayout])
+
+  // Backend (re)initialization resets contextCollapsed through initialData;
+  // re-apply the narrow-layout auto collapse whenever the backend mode flips.
+  const backendMode = useStudioStore(state => state.backend.mode)
+  useEffect(() => {
+    if (!narrowLayout) return
+    const { contextCollapsed: collapsed, toggleContext: toggle } = useStudioStore.getState()
+    if (!collapsed) {
+      autoCollapsedContextRef.current = true
+      toggle()
+    }
+  }, [backendMode, narrowLayout])
+
+  // Retrigger the page-surface enter transition on navigation without
+  // remounting the page; the attribute only drives opacity and transform.
+  useEffect(() => {
+    const surface = pageSurfaceRef.current
+    if (!surface) return
+    surface.setAttribute('data-entering', '')
+    let clearFrame: number | undefined
+    const nextFrame = window.requestAnimationFrame(() => {
+      clearFrame = window.requestAnimationFrame(() => {
+        surface.removeAttribute('data-entering')
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(nextFrame)
+      if (clearFrame !== undefined) window.cancelAnimationFrame(clearFrame)
+    }
+  }, [view])
 
   useEffect(() => {
-    if (contextShouldShow) {
-      setContextSlotOpen(true)
-      return
+    if (!contextOverlayOpen) return
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      toggleContext()
     }
-
-    const closeTimer = window.setTimeout(() => setContextSlotOpen(false), 140)
-    return () => window.clearTimeout(closeTimer)
-  }, [contextShouldShow])
-
-  const layoutContextCollapsed = contextCollapsed && !contextSlotOpen
+    document.addEventListener('keydown', dismissOnEscape)
+    return () => document.removeEventListener('keydown', dismissOnEscape)
+  }, [contextOverlayOpen, toggleContext])
 
   return (
     <div
-      className={`app-shell ${layoutContextCollapsed ? 'context-is-collapsed' : ''} ${
+      className={`app-shell ${contextCollapsed ? 'context-is-collapsed' : ''} ${
         professionalReader ? 'detail-workspace' : ''
       }`}
       data-theme={themePreset}
@@ -468,8 +538,23 @@ export function AppShell({ children }: { children: ReactNode }) {
         show={contextShouldShow}
         className="motion-presence-context-panel"
         exitMs={140}
+        focusMode={contextOverlayOpen ? 'modal' : undefined}
+        restoreFocusRef={contextExpandRef}
       >
-        {contextShouldShow && <ContextPanel />}
+        {contextShouldShow && (
+          <>
+            {narrowLayout && (
+              <button
+                type="button"
+                className="context-scrim"
+                aria-label={t('nav.context.collapse')}
+                tabIndex={-1}
+                onClick={toggleContext}
+              />
+            )}
+            <ContextPanel />
+          </>
+        )}
       </MotionPresence>
       <section className="workspace">
         <WorkspaceHeader />
@@ -477,6 +562,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button
             type="button"
             className="context-expand"
+            ref={contextExpandRef}
             onClick={toggleContext}
             aria-label={t('nav.context.expand')}
           >
@@ -498,7 +584,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </MotionPresence>
         <main className="workspace-main">
-          <div className="workspace-page-surface" key={view}>
+          <div className="workspace-page-surface" ref={pageSurfaceRef}>
             {children}
           </div>
         </main>

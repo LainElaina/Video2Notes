@@ -9,7 +9,6 @@ import {
   Pause,
   Play,
   RefreshCcw,
-  TriangleAlert,
 } from 'lucide-react'
 import { EvidenceRail } from '../components/EvidenceRail'
 import { MotionPresence } from '../components/MotionPresence'
@@ -140,7 +139,6 @@ export function RunPage() {
           width={640}
           height={640}
         />
-        <TriangleAlert size={24} aria-hidden="true" />
         <h2>{text('还没有任务', 'No tasks yet')}</h2>
         <p>{text('从新建任务页导入一个视频后，处理进度会显示在这里。', 'Import a video from New task and its processing progress will appear here.')}</p>
       </div>

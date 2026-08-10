@@ -301,8 +301,10 @@ export function CreatePage() {
                   : 'SOURCE NEEDS REFRESH'
                 : 'SOURCE VERIFIED'}
             </span>
-            <h3>{draft.manifest.title}</h3>
-            <p>
+            <h3 title={draft.manifest.title}>{draft.manifest.title}</h3>
+            <p
+              title={`${draft.manifest.author} · ${formatTime(draft.manifest.durationSeconds)} · ${draft.manifest.sourceLabel}`}
+            >
               {draft.manifest.author} · {formatTime(draft.manifest.durationSeconds)} ·{' '}
               {draft.manifest.sourceLabel}
             </p>

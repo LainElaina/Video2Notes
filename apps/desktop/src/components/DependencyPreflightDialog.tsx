@@ -123,14 +123,24 @@ export function DependencyPreflightDialog({
   const openManager = () => {
     dismiss()
     navigate('models')
-    window.setTimeout(() => {
+    // The settings page renders asynchronously after navigation; poll frames
+    // (bounded) until the runtime section exists instead of a fixed timeout.
+    const startedAt = performance.now()
+    const scrollToRuntimePackages = () => {
       const runtimePackages = document.getElementById('runtime-packages')
-      runtimePackages?.scrollIntoView({
-        behavior: preferredScrollBehavior(),
-        block: 'start',
-      })
-      runtimePackages?.focus({ preventScroll: true })
-    }, 80)
+      if (runtimePackages) {
+        runtimePackages.scrollIntoView?.({
+          behavior: preferredScrollBehavior(),
+          block: 'start',
+        })
+        runtimePackages.focus({ preventScroll: true })
+        return
+      }
+      if (performance.now() - startedAt < 500) {
+        window.requestAnimationFrame(scrollToRuntimePackages)
+      }
+    }
+    window.requestAnimationFrame(scrollToRuntimePackages)
   }
 
   return (

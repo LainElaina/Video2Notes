@@ -553,7 +553,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
 
                     <div className="runtime-path-block">
                       <span>{text('安装或绑定目录', 'Install or bound folder')}</span>
-                      <code title={instance.root}>{instance.root}</code>
+                      <code className="truncate-start" title={instance.root}>{instance.root}</code>
                       <CopyPathButton path={instance.root} />
                     </div>
 
@@ -752,7 +752,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
                         <div><dt>{text('安装后', 'Installed')}</dt><dd>{formatBytes(release.installedSizeBytes, t('common.unknown'))}</dd></div>
                         <div><dt>{text('目标', 'Target')}</dt><dd>{release.targetTriple ?? 'Windows x64'}</dd></div>
                       </dl>
-                      <div className="runtime-release-destination"><span>{text('最终目录', 'Destination')}</span><code title={managedDestination(release)}>{managedDestination(release)}</code><CopyPathButton path={managedDestination(release)} /></div>
+                      <div className="runtime-release-destination"><span>{text('最终目录', 'Destination')}</span><code className="truncate-start" title={managedDestination(release)}>{managedDestination(release)}</code><CopyPathButton path={managedDestination(release)} /></div>
                       <div className="runtime-release-source">
                         {officialSource ? <a href={officialSource} target="_blank" rel="noreferrer"><ExternalLink size={11} aria-hidden="true" />{release.officialUrl ? text('官方归档地址', 'Official archive URL') : text('上游项目来源', 'Upstream project')}</a> : <span>{text('仅可从随包离线目录安装', 'Installable only from the bundled offline catalog')}</span>}
                         <span>{release.downloadPartCount > 1 ? text(`分 ${release.downloadPartCount} 个固定哈希文件下载`, `${release.downloadPartCount} fixed-hash download parts`) : release.offlineOnly ? text('离线归档', 'Offline archive') : 'HTTPS + SHA-256'}</span>

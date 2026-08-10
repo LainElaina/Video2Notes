@@ -99,7 +99,7 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
       {tool.path ? (
         <div className="local-tool-path">
           <span>{t('runtime.path')}</span>
-          <code title={tool.path}>{tool.path}</code>
+          <code className="truncate-start" title={tool.path}>{tool.path}</code>
           <button
             className="icon-button"
             type="button"
@@ -135,7 +135,7 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
                 onClick={() => bindPath(tool.dependencyId, choosePrimary, candidate.path)}
                 title={candidate.path}
               >
-                <code>{candidate.path}</code>
+                <code className="truncate-start">{candidate.path}</code>
                 <span>{candidate.version ?? localized(sourceLabels[candidate.source])}</span>
               </button>
             ))}

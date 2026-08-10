@@ -641,6 +641,49 @@ textarea {
   transition-duration: var(--motion-exit);
 }
 
+/* Below 1120px the context panel leaves the shell grid and opens as a fixed
+   slide-over with a dismiss scrim (the shell stays single-column). */
+@media (max-width: 1120px) {
+  .motion-presence-context-panel {
+    position: fixed;
+    z-index: 70;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .context-scrim {
+    position: fixed;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: rgb(16 32 24 / 34%);
+    opacity: 1;
+    pointer-events: auto;
+    transition: opacity var(--motion-fast) var(--ease-out);
+  }
+
+  .motion-presence-context-panel .context-panel {
+    position: fixed;
+    top: 72px;
+    bottom: 10px;
+    left: 10px;
+    width: min(320px, calc(100vw - 20px));
+    height: auto;
+    box-shadow: var(--shadow-pop);
+    pointer-events: auto;
+  }
+
+  .motion-presence-context-panel[data-motion-state="entering"] .context-scrim,
+  .motion-presence-context-panel[data-motion-state="exiting"] .context-scrim {
+    opacity: 0;
+  }
+}
+
+/* The slide-over wrapper takes initial focus in modal mode only. */
+.motion-presence-context-panel:focus {
+  outline: none;
+}
+
 .workspace-page-surface {
   width: 100%;
   height: 100%;
@@ -649,8 +692,15 @@ textarea {
   opacity: 1;
   transform: translateY(0);
   transition:
-    opacity var(--motion-fast) var(--ease-out),
-    transform var(--motion-fast) var(--ease-out);
+    opacity var(--motion-surface) var(--ease-out),
+    transform var(--motion-surface) var(--ease-out);
+}
+
+/* Navigation sets data-entering for two frames instead of remounting the
+   page, so page-local state survives view switches. */
+.workspace-page-surface[data-entering] {
+  opacity: 0;
+  transform: translateY(4px);
 }
 
 .motion-surface-enter,
@@ -682,11 +732,6 @@ textarea {
 }
 
 @starting-style {
-  .workspace-page-surface {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
   .motion-surface-enter,
   .motion-swap-surface,
   .motion-field-enter,
@@ -1116,6 +1161,7 @@ textarea {
   .motion-presence-overlay .workbench-drawer,
   .motion-presence-modal .dependency-dialog-backdrop,
   .motion-presence-modal .dependency-dialog,
+  .motion-presence-context-panel .context-scrim,
   .motion-presence-popover .export-menu,
   .motion-presence-notice .notice-bar,
   .motion-presence-collapse .artifact-list {

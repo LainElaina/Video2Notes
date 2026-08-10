@@ -179,7 +179,6 @@ export function ReaderPage() {
           width={640}
           height={640}
         />
-        <FileText size={26} aria-hidden="true" />
         <h2>{text('还没有可阅读的笔记', 'No readable notes yet')}</h2>
         <p>{text('任务完成并通过验证后，Markdown 和证据会出现在这里。', 'Markdown and supporting evidence appear here after a task completes and passes verification.')}</p>
       </div>

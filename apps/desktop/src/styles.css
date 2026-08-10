@@ -75,26 +75,22 @@
   --ease-standard: ease;
 }
 
-:root[data-font-size="compact"],
-.app-shell[data-font-size="compact"] {
+:root[data-font-size="compact"] {
   --font-minimum: 11px;
   --font-size-adjust: 2px;
 }
 
-:root[data-font-size="comfortable"],
-.app-shell[data-font-size="comfortable"] {
+:root[data-font-size="comfortable"] {
   --font-minimum: 12px;
   --font-size-adjust: 4px;
 }
 
-:root[data-font-size="large"],
-.app-shell[data-font-size="large"] {
+:root[data-font-size="large"] {
   --font-minimum: 14px;
   --font-size-adjust: 6px;
 }
 
-:root[data-theme="paper-light"],
-.app-shell[data-theme="paper-light"] {
+:root[data-theme="paper-light"] {
   color-scheme: light;
   --desk: #f2efe8;
   --paper: #fffdf8;
@@ -137,8 +133,7 @@
   --inverse-ink: #fffdf8;
 }
 
-:root[data-theme="studio-graphite"],
-.app-shell[data-theme="studio-graphite"] {
+:root[data-theme="studio-graphite"] {
   color-scheme: dark;
   --desk: #171a18;
   --paper: #1e2220;
@@ -237,6 +232,15 @@ button:disabled {
   border: 0;
 }
 
+/* Filesystem paths keep their tail (the filename) when truncated. The rtl
+   trick moves the ellipsis to the start; mixed CJK/latin segments stay in
+   logical order because both are strong LTR runs. */
+.truncate-start {
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: embed;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 282px minmax(0, 1fr);
@@ -248,10 +252,16 @@ button:disabled {
   padding: 10px;
   background: var(--desk);
   isolation: isolate;
+  transition:
+    grid-template-columns var(--motion-surface) var(--ease-out),
+    column-gap var(--motion-surface) var(--ease-out);
 }
 
+/* Collapsing keeps the zero-width first track so the grid animation stays
+   smooth; the panel itself fades out on opacity/transform. */
 .app-shell.context-is-collapsed {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 0 minmax(0, 1fr);
+  column-gap: 0;
 }
 
 .app-shell.detail-workspace {
@@ -505,7 +515,7 @@ button:disabled {
   min-width: 0;
   border: 0;
   outline: 0;
-  background: rgb(255 255 255 / 44%);
+  background: color-mix(in srgb, var(--glass-solid) 64%, transparent);
   box-shadow: inset 0 1px 0 var(--glass-highlight);
   color: inherit;
   font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
@@ -885,7 +895,9 @@ button:disabled {
 }
 
 .app-shell.context-is-collapsed .workspace {
-  grid-column: 1;
+  /* The collapsed first track is zero-width; the workspace stays in the
+     second track so the column animation never reflows it. */
+  grid-column: 2;
 }
 
 .workspace-header {
@@ -940,28 +952,28 @@ button:disabled {
   font-size: max(var(--font-minimum), calc(11px + var(--font-size-adjust)));
 }
 
-.app-shell[data-workspace-mode="guided"] .context-header {
+:root[data-workspace-mode="guided"] .context-header {
   min-height: 104px;
   padding-top: 19px;
   padding-bottom: 14px;
 }
 
-.app-shell[data-workspace-mode="guided"] .context-header h2 {
+:root[data-workspace-mode="guided"] .context-header h2 {
   margin-top: 6px;
 }
 
-.app-shell[data-workspace-mode="guided"] .context-header p,
-.app-shell[data-workspace-mode="guided"] .context-task-meta,
-.app-shell[data-workspace-mode="guided"] .workspace-title .eyebrow,
-.app-shell[data-workspace-mode="guided"] .machine-status small {
+:root[data-workspace-mode="guided"] .context-header p,
+:root[data-workspace-mode="guided"] .context-task-meta,
+:root[data-workspace-mode="guided"] .workspace-title .eyebrow,
+:root[data-workspace-mode="guided"] .machine-status small {
   display: none;
 }
 
-.app-shell[data-workspace-mode="guided"] .workspace-header {
+:root[data-workspace-mode="guided"] .workspace-header {
   min-height: 56px;
 }
 
-.app-shell[data-workspace-mode="guided"] .context-expand {
+:root[data-workspace-mode="guided"] .context-expand {
   top: 66px;
 }
 
@@ -1136,6 +1148,31 @@ button:disabled {
   color: var(--muted);
   font-size: max(var(--font-minimum), calc(14px + var(--font-size-adjust)));
   line-height: 1.75;
+}
+
+/* Guided mode keeps the create hero compact so the mode and scope sections
+   stay above the fold at 1440×900. Structure and imagery are unchanged. */
+:root[data-workspace-mode="guided"] .create-page {
+  padding-top: 22px;
+}
+
+:root[data-workspace-mode="guided"] .create-intro h2 {
+  margin: 6px 0 8px;
+  font-size: calc(30px + var(--font-size-adjust));
+  line-height: 1.14;
+}
+
+:root[data-workspace-mode="guided"] .create-intro p {
+  line-height: 1.6;
+}
+
+:root[data-workspace-mode="guided"] .create-intro-visual {
+  top: -56px;
+  height: 300px;
+}
+
+:root[data-workspace-mode="guided"] .source-composer {
+  margin-top: 20px;
 }
 
 .source-composer {
@@ -3556,13 +3593,25 @@ button:disabled {
 
 @media (max-width: 1120px) {
   .app-shell,
+  .app-shell.context-is-collapsed,
   .app-shell:not(.context-is-collapsed),
   .app-shell:not(.context-is-collapsed):not(.detail-workspace) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .app-shell:not(.context-is-collapsed) .motion-presence-context-panel {
-    display: none;
+  /* The wide-layout collapse keeps the workspace pinned to the second track;
+     below 1120px the shell is single-column (slide-over panel), so the pin
+     must be released or it creates an implicit track that crushes the nav. */
+  .app-shell.context-is-collapsed .workspace {
+    grid-column: 1;
+  }
+
+  /* The floating expand button lands on top of the workspace header at
+     narrow widths; put it back in flow. */
+  .context-expand {
+    position: static;
+    align-self: flex-start;
+    margin: 10px 0 0 10px;
   }
 
   .workspace {
@@ -3666,10 +3715,6 @@ button:disabled {
   }
 
   .topbar-backend span {
-    display: none;
-  }
-
-  .context-panel {
     display: none;
   }
 
@@ -3787,6 +3832,10 @@ button:disabled {
   *::before,
   *::after {
     scroll-behavior: auto !important;
+  }
+
+  .app-shell {
+    transition: none;
   }
 
   .spin,
@@ -7166,10 +7215,12 @@ button:disabled {
 }
 
 .models-settings-nav a.is-active {
-  border-color: color-mix(in srgb, var(--lens) 32%, var(--rule));
-  background: color-mix(in srgb, var(--lens-soft) 72%, var(--paper));
+  border-color: color-mix(in srgb, var(--lens) 46%, var(--rule-strong));
+  background: color-mix(in srgb, var(--lens-soft) 84%, var(--paper));
   color: var(--ink);
-  box-shadow: inset 3px 0 0 var(--lens);
+  box-shadow:
+    inset 3px 0 0 var(--lens),
+    var(--shadow-control);
 }
 
 .models-settings-nav-icon {
@@ -7207,6 +7258,10 @@ button:disabled {
   color: inherit;
   font-size: max(var(--font-minimum), calc(12px + var(--font-size-adjust)));
   font-weight: 680;
+}
+
+.models-settings-nav a.is-active .models-settings-nav-copy strong {
+  font-weight: 720;
 }
 
 .models-settings-nav-copy small {
@@ -8290,7 +8345,7 @@ button:disabled {
 .model-create-form input,
 .model-create-form select {
   width: 100%;
-  min-height: 38px;
+  min-height: var(--control-height);
   padding: 0 10px;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-compact);

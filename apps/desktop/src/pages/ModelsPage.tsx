@@ -1389,7 +1389,7 @@ export function ModelsPage() {
               <span className="provider-logo">
                 {provider.locality === 'local' ? <Database size={21} aria-hidden="true" /> : <Cloud size={21} aria-hidden="true" />}
               </span>
-              <div><strong>{provider.name}</strong><small>{provider.endpoint}</small></div>
+              <div><strong title={provider.name}>{provider.name}</strong><small title={provider.endpoint}>{provider.endpoint}</small></div>
               <span className="protocol-badge">{selectedProtocol ? protocolLabel(selectedProtocol.protocol, selectedProtocol.displayName) : provider.protocol}</span>
             </div>
             <div className="provider-actions">
@@ -1532,7 +1532,7 @@ export function ModelsPage() {
               {providerModels.map(model => (
                 <article key={model.id}>
                   <span className="model-icon">{model.locality === 'local' ? <Database size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}</span>
-                  <div><strong>{model.label}</strong><small>{model.modelId}{model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}</small><span className="capability-list">{model.capabilities.map(capability => <span key={capability}>{capabilityLabel(capability)}</span>)}</span></div>
+                  <div><strong>{model.label}</strong><small title={`${model.modelId}${model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}`}>{model.modelId}{model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}</small><span className="capability-list">{model.capabilities.map(capability => <span key={capability}>{capabilityLabel(capability)}</span>)}</span></div>
                   <span className={model.enabled ? 'model-ready' : 'model-disabled'}>{model.enabled ? <Check size={13} aria-hidden="true" /> : <X size={13} aria-hidden="true" />}{model.enabled ? text('可用', 'Available') : text('已停用', 'Disabled')}</span>
                 </article>
               ))}
