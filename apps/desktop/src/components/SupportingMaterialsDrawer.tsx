@@ -3,6 +3,7 @@ import {
   FileImage,
   FileText,
   Link2,
+  LoaderCircle,
   Plus,
   RefreshCcw,
   Trash2,
@@ -13,6 +14,7 @@ import type { ProcessingTask } from '../domain'
 import { formatTime } from '../domain'
 import { useI18n } from '../i18n'
 import { useStudioStore } from '../store'
+import { usePendingActions } from './usePendingActions'
 import { VisualAsset } from './VisualAsset'
 
 interface SupportingMaterialsDrawerProps {
@@ -40,6 +42,7 @@ export function SupportingMaterialsDrawer({
   const deleteMaterial = useStudioStore(state => state.deleteMaterial)
   const refreshMaterials = useStudioStore(state => state.refreshMaterials)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { isPending, track } = usePendingActions()
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [bindRange, setBindRange] = useState(
@@ -71,22 +74,28 @@ export function SupportingMaterialsDrawer({
 
   const submitText = () => {
     if (!canAddText) return
-    addTextMaterial(task.id, {
-      title: title.trim(),
-      content: content.trim(),
-      ...rangeOptions,
-    })
+    track('materials:add-text', () =>
+      addTextMaterial(task.id, {
+        title: title.trim(),
+        content: content.trim(),
+        ...rangeOptions,
+      }),
+    )
     setTitle('')
     setContent('')
   }
 
   const submitFiles = (files: FileList | null) => {
     if (!files || !validRange) return
-    Array.from(files).forEach(file =>
-      addFileMaterial(task.id, file, {
-        title: file.name,
-        ...rangeOptions,
-      }),
+    track('materials:add-file', () =>
+      Promise.all(
+        Array.from(files).map(file =>
+          addFileMaterial(task.id, file, {
+            title: file.name,
+            ...rangeOptions,
+          }),
+        ),
+      ).then(() => undefined),
     )
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -96,7 +105,6 @@ export function SupportingMaterialsDrawer({
       <button
         type="button"
         className="workbench-scrim"
-        aria-label={text('关闭补充资料面板', 'Close supporting materials panel')}
         aria-hidden="true"
         tabIndex={-1}
         onClick={onClose}
@@ -188,11 +196,18 @@ export function SupportingMaterialsDrawer({
             <button
               type="button"
               className="button button-primary"
-              disabled={!canAddText}
+              disabled={!canAddText || isPending('materials:add-text')}
+              aria-busy={isPending('materials:add-text') || undefined}
               onClick={submitText}
             >
-              <Plus size={15} aria-hidden="true" />
-              {text('加入此任务', 'Add to this task')}
+              {isPending('materials:add-text') ? (
+                <LoaderCircle className="spin" size={15} aria-hidden="true" />
+              ) : (
+                <Plus size={15} aria-hidden="true" />
+              )}
+              {isPending('materials:add-text')
+                ? text('正在加入…', 'Adding…')
+                : text('加入此任务', 'Add to this task')}
             </button>
           </section>
 
@@ -215,7 +230,8 @@ export function SupportingMaterialsDrawer({
             <button
               type="button"
               className="material-drop-button"
-              disabled={!validRange}
+              disabled={!validRange || isPending('materials:add-file')}
+              aria-busy={isPending('materials:add-file') || undefined}
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload size={18} aria-hidden="true" />
@@ -272,10 +288,20 @@ export function SupportingMaterialsDrawer({
                       </div>
                       <button
                         type="button"
-                        onClick={() => deleteMaterial(task.id, material.id)}
+                        onClick={() =>
+                          track(`materials:delete:${material.id}`, () =>
+                            deleteMaterial(task.id, material.id),
+                          )
+                        }
+                        disabled={isPending(`materials:delete:${material.id}`)}
+                        aria-busy={isPending(`materials:delete:${material.id}`) || undefined}
                         aria-label={text(`删除资料：${material.title}`, `Delete material: ${material.title}`)}
                       >
-                        <Trash2 size={14} aria-hidden="true" />
+                        {isPending(`materials:delete:${material.id}`) ? (
+                          <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                        ) : (
+                          <Trash2 size={14} aria-hidden="true" />
+                        )}
                       </button>
                     </article>
                   )

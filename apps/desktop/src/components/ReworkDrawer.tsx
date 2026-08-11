@@ -3,6 +3,7 @@ import {
   AudioLines,
   CheckCircle2,
   Eye,
+  LoaderCircle,
   RefreshCcw,
   ScanText,
   SlidersHorizontal,
@@ -13,6 +14,7 @@ import type { ProcessingTask, ReworkOperationKind } from '../domain'
 import { formatTime } from '../domain'
 import { useI18n } from '../i18n'
 import { useStudioStore } from '../store'
+import { usePendingActions } from './usePendingActions'
 
 interface ReworkDrawerProps {
   task: ProcessingTask
@@ -85,7 +87,11 @@ export function ReworkDrawer({
     task.evidence.find(item => item.id === initialEvidenceId)?.rawText ?? '',
   )
   const [reason, setReason] = useState('')
-  const [pending, setPending] = useState<ReworkTab | null>(null)
+  const { isPending, track } = usePendingActions()
+  const pending =
+    (['vision', 'asr', 'manual'] as const).find(kind =>
+      isPending(`rework:${kind}`),
+    ) ?? null
 
   useEffect(() => {
     setStartSeconds(initialRange.start)
@@ -96,12 +102,6 @@ export function ReworkDrawer({
     const item = task.evidence.find(evidence => evidence.id === evidenceId)
     setManualText(item?.rawText ?? '')
   }, [evidenceId, task.evidence])
-
-  useEffect(() => {
-    if (pending === null) return
-    const timeout = window.setTimeout(() => setPending(null), 1_400)
-    return () => window.clearTimeout(timeout)
-  }, [pending, task.operations.length])
 
   const rangeValid =
     Number.isFinite(startSeconds) &&
@@ -125,38 +125,41 @@ export function ReworkDrawer({
   const manualValid = Boolean(selectedEvidence && manualText.trim())
 
   const submitVision = () => {
-    if (audioOnly || !visionValid) return
-    setPending('vision')
-    runVisionRework(task.id, {
-      startSeconds,
-      endSeconds,
-      mode: visionMode,
-      intervalSeconds:
-        visionMode === 'fixed_interval' ? intervalSeconds : undefined,
-      runOcr,
-    })
+    if (audioOnly || !visionValid || pending !== null) return
+    track('rework:vision', () =>
+      runVisionRework(task.id, {
+        startSeconds,
+        endSeconds,
+        mode: visionMode,
+        intervalSeconds:
+          visionMode === 'fixed_interval' ? intervalSeconds : undefined,
+        runOcr,
+      }),
+    )
   }
 
   const submitAsr = () => {
-    if (!rangeValid) return
-    setPending('asr')
-    runAsrRework(task.id, {
-      range: { startSeconds, endSeconds },
-      languageHints: languageHints
-        .split(/[,，\s]+/)
-        .map(item => item.trim())
-        .filter(Boolean),
-    })
+    if (!rangeValid || pending !== null) return
+    track('rework:asr', () =>
+      runAsrRework(task.id, {
+        range: { startSeconds, endSeconds },
+        languageHints: languageHints
+          .split(/[,，\s]+/)
+          .map(item => item.trim())
+          .filter(Boolean),
+      }),
+    )
   }
 
   const submitCorrection = () => {
-    if (!manualValid || !selectedEvidence) return
-    setPending('manual')
-    correctEvidence(task.id, {
-      evidenceId: selectedEvidence.id,
-      newText: manualText,
-      reason,
-    })
+    if (!manualValid || !selectedEvidence || pending !== null) return
+    track('rework:manual', () =>
+      correctEvidence(task.id, {
+        evidenceId: selectedEvidence.id,
+        newText: manualText,
+        reason,
+      }),
+    )
   }
 
   return (
@@ -164,7 +167,6 @@ export function ReworkDrawer({
       <button
         type="button"
         className="workbench-scrim"
-        aria-label={text('关闭局部返工面板', 'Close range rework panel')}
         aria-hidden="true"
         tabIndex={-1}
         onClick={onClose}
@@ -242,6 +244,8 @@ export function ReworkDrawer({
               <button
                 type="button"
                 role="tab"
+                id="rework-tab-vision"
+                aria-controls="rework-panel-vision"
                 aria-selected={tab === 'vision'}
                 disabled={audioOnly}
                 title={audioOnly ? text('仅音频任务不能执行画面返工', 'Visual rework is unavailable for audio-only tasks') : undefined}
@@ -253,6 +257,8 @@ export function ReworkDrawer({
               <button
                 type="button"
                 role="tab"
+                id="rework-tab-asr"
+                aria-controls="rework-panel-asr"
                 aria-selected={tab === 'asr'}
                 onClick={() => setTab('asr')}
               >
@@ -262,6 +268,8 @@ export function ReworkDrawer({
               <button
                 type="button"
                 role="tab"
+                id="rework-tab-manual"
+                aria-controls="rework-panel-manual"
                 aria-selected={tab === 'manual'}
                 onClick={() => setTab('manual')}
               >
@@ -277,7 +285,7 @@ export function ReworkDrawer({
             )}
 
             {tab === 'vision' && (
-              <div className="rework-tab-panel" role="tabpanel">
+              <div className="rework-tab-panel" role="tabpanel" id="rework-panel-vision" aria-labelledby="rework-tab-vision">
                 <div className="rework-choice-grid">
                   <button
                     type="button"
@@ -338,16 +346,21 @@ export function ReworkDrawer({
                   type="button"
                   className="button button-primary"
                   disabled={audioOnly || !visionValid || pending !== null}
+                  aria-busy={pending === 'vision' || undefined}
                   onClick={submitVision}
                 >
-                  <Eye size={15} aria-hidden="true" />
+                  {pending === 'vision' ? (
+                    <LoaderCircle className="spin" size={15} aria-hidden="true" />
+                  ) : (
+                    <Eye size={15} aria-hidden="true" />
+                  )}
                   {pending === 'vision' ? text('正在提交…', 'Submitting…') : text('执行画面返工', 'Run visual rework')}
                 </button>
               </div>
             )}
 
             {tab === 'asr' && (
-              <div className="rework-tab-panel" role="tabpanel">
+              <div className="rework-tab-panel" role="tabpanel" id="rework-panel-asr" aria-labelledby="rework-tab-asr">
                 <label>
                   {text('语言提示（逗号分隔，最多 8 个）', 'Language hints (comma-separated, up to 8)')}
                   <input
@@ -363,16 +376,21 @@ export function ReworkDrawer({
                   type="button"
                   className="button button-primary"
                   disabled={!rangeValid || pending !== null}
+                  aria-busy={pending === 'asr' || undefined}
                   onClick={submitAsr}
                 >
-                  <AudioLines size={15} aria-hidden="true" />
+                  {pending === 'asr' ? (
+                    <LoaderCircle className="spin" size={15} aria-hidden="true" />
+                  ) : (
+                    <AudioLines size={15} aria-hidden="true" />
+                  )}
                   {pending === 'asr' ? text('正在提交…', 'Submitting…') : text('执行语音返工', 'Run speech rework')}
                 </button>
               </div>
             )}
 
             {tab === 'manual' && (
-              <div className="rework-tab-panel" role="tabpanel">
+              <div className="rework-tab-panel" role="tabpanel" id="rework-panel-manual" aria-labelledby="rework-tab-manual">
                 <label>
                   {text('当前有效证据', 'Current active evidence')}
                   <select
@@ -407,9 +425,14 @@ export function ReworkDrawer({
                   type="button"
                   className="button button-primary"
                   disabled={!manualValid || pending !== null}
+                  aria-busy={pending === 'manual' || undefined}
                   onClick={submitCorrection}
                 >
-                  <ScanText size={15} aria-hidden="true" />
+                  {pending === 'manual' ? (
+                    <LoaderCircle className="spin" size={15} aria-hidden="true" />
+                  ) : (
+                    <ScanText size={15} aria-hidden="true" />
+                  )}
                   {pending === 'manual' ? text('正在提交…', 'Submitting…') : text('保存人工校正 revision', 'Save manual correction revision')}
                 </button>
               </div>

@@ -102,7 +102,7 @@ export function SynchronizedVideo({
         {(!src || ocrConfidence !== undefined) && (
           <div className="ocr-corner" title={text('屏幕文字区域', 'On-screen text region')}>
             <ScanText size={16} aria-hidden="true" />
-            OCR {(ocrConfidence ?? 0.93).toFixed(2)}
+            OCR {ocrConfidence !== undefined ? ocrConfidence.toFixed(2) : '—'}
           </div>
         )}
       </div>
@@ -131,6 +131,7 @@ export function SynchronizedVideo({
         <button
           type="button"
           className="video-utility"
+          aria-label={text('适合窗口', 'Fit window')}
           onClick={() => {
             const video = videoRef.current
             if (video?.requestFullscreen) void video.requestFullscreen()

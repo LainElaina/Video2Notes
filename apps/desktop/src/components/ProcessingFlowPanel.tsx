@@ -632,7 +632,7 @@ export function ProcessingFlowPanel({
             disabled={filteredEvents.length === 0}
             onClick={() => void copyVisibleEvents()}
           >
-            {copyState === 'success' ? <Check size={16} /> : <Copy size={16} />}
+            {copyState === 'success' ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
           </button>
           <button
             className="processing-flow-icon-button"
@@ -642,7 +642,7 @@ export function ProcessingFlowPanel({
             disabled={filteredEvents.length === 0}
             onClick={downloadVisibleEvents}
           >
-            <Download size={16} />
+            <Download size={16} aria-hidden="true" />
           </button>
         </div>
         <span className="processing-flow-copy-status" role="status" aria-live="polite">

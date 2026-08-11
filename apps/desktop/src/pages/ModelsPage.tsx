@@ -44,6 +44,7 @@ import type {
 import { MotionPresence } from '../components/MotionPresence'
 import { RuntimePackagesPanel } from '../components/RuntimePackagesPanel'
 import { VisualAsset } from '../components/VisualAsset'
+import { usePendingActions } from '../components/usePendingActions'
 import { useStudioStore } from '../store'
 import { useI18n } from '../i18n'
 import {
@@ -479,6 +480,10 @@ export function ModelsPage() {
   const saveProviderSecret = useStudioStore(state => state.saveProviderSecret)
   const deleteProviderSecret = useStudioStore(state => state.deleteProviderSecret)
   const bindRole = useStudioStore(state => state.bindRole)
+  const { isPending, track } = usePendingActions()
+  const savingPerformance = isPending('models:save-performance')
+  const savingCredential = isPending('models:save-credential')
+  const savingProvider = isPending('models:save-provider')
   const [performanceDraft, setPerformanceDraft] = useState<PerformanceSettings>(performance)
   const [modelQuery, setModelQuery] = useState('')
   const [secret, setSecret] = useState('')
@@ -768,19 +773,21 @@ export function ModelsPage() {
         throw new Error(text('协议选项必须是 JSON 对象。', 'Protocol options must be a JSON object.'))
       }
       setProviderFormError('')
-      saveProvider({
-        id: providerDraft.id,
-        name: providerDraft.name,
-        kind: providerDraft.kind,
-        protocol: providerDraft.protocol,
-        authScheme: providerDraft.authScheme,
-        baseUrl: providerDraft.baseUrl,
-        locality: providerDraft.locality,
-        enabled: providerDraft.enabled,
-        timeoutSeconds: providerDraft.timeoutSeconds,
-        protocolOptions: protocolOptions as Record<string, unknown>,
-        credential: providerDraft.credential,
-      })
+      track('models:save-provider', () =>
+        saveProvider({
+          id: providerDraft.id,
+          name: providerDraft.name,
+          kind: providerDraft.kind,
+          protocol: providerDraft.protocol,
+          authScheme: providerDraft.authScheme,
+          baseUrl: providerDraft.baseUrl,
+          locality: providerDraft.locality,
+          enabled: providerDraft.enabled,
+          timeoutSeconds: providerDraft.timeoutSeconds,
+          protocolOptions: protocolOptions as Record<string, unknown>,
+          credential: providerDraft.credential,
+        }),
+      )
       closeProviderEditor()
     } catch (error) {
       setProviderFormError(
@@ -1348,18 +1355,26 @@ export function ModelsPage() {
           <button
             className="button button-primary"
             type="button"
+            disabled={savingPerformance}
+            aria-busy={savingPerformance || undefined}
             onClick={() =>
-              savePerformance(
-                normalizeUnavailableCudaOverrides(
-                  performanceDraft,
-                  asrCudaAvailable,
-                  ocrCudaAvailable,
+              track('models:save-performance', () =>
+                savePerformance(
+                  normalizeUnavailableCudaOverrides(
+                    performanceDraft,
+                    asrCudaAvailable,
+                    ocrCudaAvailable,
+                  ),
                 ),
               )
             }
           >
-            <Save size={15} aria-hidden="true" />
-            {text('保存性能设置', 'Save performance settings')}
+            {savingPerformance ? (
+              <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            ) : (
+              <Save size={15} aria-hidden="true" />
+            )}
+            {savingPerformance ? text('正在保存…', 'Saving…') : text('保存性能设置', 'Save performance settings')}
           </button>
         </footer>
       </section>
@@ -1389,7 +1404,7 @@ export function ModelsPage() {
               <span className="provider-logo">
                 {provider.locality === 'local' ? <Database size={21} aria-hidden="true" /> : <Cloud size={21} aria-hidden="true" />}
               </span>
-              <div><strong>{provider.name}</strong><small>{provider.endpoint}</small></div>
+              <div><strong title={provider.name}>{provider.name}</strong><small title={provider.endpoint}>{provider.endpoint}</small></div>
               <span className="protocol-badge">{selectedProtocol ? protocolLabel(selectedProtocol.protocol, selectedProtocol.displayName) : provider.protocol}</span>
             </div>
             <div className="provider-actions">
@@ -1419,7 +1434,23 @@ export function ModelsPage() {
                   <small>{text('应用只保存 credential reference，不读取或回显原值。', 'The app stores only a credential reference and never reads or reveals the original value.')}</small>
                 </div>
                 <label><span className="sr-only">{text('供应商凭据', 'Provider credential')}</span><input type="password" value={secret} onChange={event => setSecret(event.target.value)} placeholder={text('输入新值以保存或替换', 'Enter a new value to save or replace')} autoComplete="new-password" /></label>
-                <button className="button button-primary" type="button" onClick={() => { saveProviderSecret(provider.id, secret); setSecret('') }} disabled={!secret.trim() || backend.mode !== 'real'}><KeyRound size={14} aria-hidden="true" />{text('保存凭据', 'Save credential')}</button>
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => {
+                    track('models:save-credential', () => saveProviderSecret(provider.id, secret))
+                    setSecret('')
+                  }}
+                  disabled={!secret.trim() || backend.mode !== 'real' || savingCredential}
+                  aria-busy={savingCredential || undefined}
+                >
+                  {savingCredential ? (
+                    <LoaderCircle className="spin" size={14} aria-hidden="true" />
+                  ) : (
+                    <KeyRound size={14} aria-hidden="true" />
+                  )}
+                  {savingCredential ? text('正在保存…', 'Saving…') : text('保存凭据', 'Save credential')}
+                </button>
                 {provider.credentialState === 'stored-locally' && <button className="button button-quiet" type="button" onClick={() => deleteProviderSecret(provider.id)}>{text('删除', 'Delete')}</button>}
               </div>
             )}
@@ -1468,7 +1499,7 @@ export function ModelsPage() {
             {providerFormError && <p className="provider-form-error motion-inline-feedback"><TriangleAlert size={14} aria-hidden="true" />{providerFormError}</p>}
             <footer>
               <span>{protocol?.discoveryPath ? text(`支持从 ${protocol.discoveryPath} 发现模型`, `Model discovery is available at ${protocol.discoveryPath}`) : text('此协议没有标准模型发现接口', 'This protocol has no standard model discovery endpoint')}</span>
-              <button className="button button-primary" type="button" onClick={submitProvider} disabled={backend.mode !== 'real'}><Save size={14} aria-hidden="true" />{text('保存供应商', 'Save provider')}</button>
+              <button className="button button-primary" type="button" onClick={submitProvider} disabled={backend.mode !== 'real' || savingProvider} aria-busy={savingProvider || undefined}>{savingProvider ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}{savingProvider ? text('正在保存…', 'Saving…') : text('保存供应商', 'Save provider')}</button>
             </footer>
             </div>
           )}
@@ -1532,7 +1563,7 @@ export function ModelsPage() {
               {providerModels.map(model => (
                 <article key={model.id}>
                   <span className="model-icon">{model.locality === 'local' ? <Database size={16} aria-hidden="true" /> : <Cloud size={16} aria-hidden="true" />}</span>
-                  <div><strong>{model.label}</strong><small>{model.modelId}{model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}</small><span className="capability-list">{model.capabilities.map(capability => <span key={capability}>{capabilityLabel(capability)}</span>)}</span></div>
+                  <div><strong>{model.label}</strong><small title={`${model.modelId}${model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}`}>{model.modelId}{model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : ''}</small><span className="capability-list">{model.capabilities.map(capability => <span key={capability}>{capabilityLabel(capability)}</span>)}</span></div>
                   <span className={model.enabled ? 'model-ready' : 'model-disabled'}>{model.enabled ? <Check size={13} aria-hidden="true" /> : <X size={13} aria-hidden="true" />}{model.enabled ? text('可用', 'Available') : text('已停用', 'Disabled')}</span>
                 </article>
               ))}
@@ -1566,7 +1597,7 @@ export function ModelsPage() {
                 return (
                   <div className="role-row" key={role.id}>
                     <div className="role-copy"><strong>{roleLabel}</strong><small>{roleDescription}</small><span>{role.requiredCapabilities.map(capabilityLabel).join(' · ')}</span></div>
-                    <label className="role-select"><span className="sr-only">{text(`为${roleLabel}选择模型`, `Choose a model for ${roleLabel}`)}</span><select value={currentModel?.id ?? ''} onChange={event => bindRole(role.id, event.target.value)}><option value="">{text('未绑定', 'Unbound')}</option>{compatibleModels.map(model => <option value={model.id} key={model.id}>{model.label} · {model.locality === 'local' ? text('本机', 'Local') : text('云端', 'Cloud')}</option>)}</select></label>
+                    <label className="role-select"><span className="sr-only">{text(`为${roleLabel}选择模型`, `Choose a model for ${roleLabel}`)}</span><select value={currentModel?.id ?? ''} disabled={isPending(`models:bind-role:${role.id}`)} aria-busy={isPending(`models:bind-role:${role.id}`) || undefined} onChange={event => track(`models:bind-role:${role.id}`, () => bindRole(role.id, event.target.value))}><option value="">{text('未绑定', 'Unbound')}</option>{compatibleModels.map(model => <option value={model.id} key={model.id}>{model.label} · {model.locality === 'local' ? text('本机', 'Local') : text('云端', 'Cloud')}</option>)}</select></label>
                     <span className={`role-state ${currentModel ? 'is-ready' : ''}`}>{currentModel ? <Check size={13} aria-hidden="true" /> : <TriangleAlert size={13} aria-hidden="true" />}{currentModel ? text('能力匹配', 'Capabilities match') : text('等待绑定', 'Awaiting binding')}</span>
                   </div>
                 )

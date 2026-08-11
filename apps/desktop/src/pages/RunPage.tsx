@@ -6,10 +6,10 @@ import {
   Clock3,
   Download,
   ExternalLink,
+  LoaderCircle,
   Pause,
   Play,
   RefreshCcw,
-  TriangleAlert,
 } from 'lucide-react'
 import { EvidenceRail } from '../components/EvidenceRail'
 import { MotionPresence } from '../components/MotionPresence'
@@ -17,6 +17,7 @@ import { ProcessingFlowPanel } from '../components/ProcessingFlowPanel'
 import { RunDiagnosticsPanel } from '../components/RunDiagnosticsPanel'
 import { SynchronizedVideo } from '../components/SynchronizedVideo'
 import { VisualAsset } from '../components/VisualAsset'
+import { usePendingActions } from '../components/usePendingActions'
 import type { StageStatus, TaskStatus } from '../domain'
 import { formatTime } from '../domain'
 import { useI18n } from '../i18n'
@@ -97,6 +98,11 @@ export function RunPage() {
   const navigate = useStudioStore(state => state.navigate)
   const [stageSelection, setStageSelection] = useState<RunStageSelection>()
   const [showArtifacts, setShowArtifacts] = useState(false)
+  const { isPending, track } = usePendingActions()
+  const taskActionPending = isPending('run:pause') || isPending('run:resume')
+  const cancelPending = isPending('run:cancel')
+  const restartPending = isPending('run:restart')
+  const runControlBusy = taskActionPending || cancelPending || restartPending
   const stageStatusLabel = (status: StageStatus) => text(...stageStatusCopy[status])
   const taskStatusLabel = (status: TaskStatus) => text(...taskStatusCopy[status])
   const stageLabel = (stage: { id: string; label: string }) => {
@@ -140,7 +146,6 @@ export function RunPage() {
           width={640}
           height={640}
         />
-        <TriangleAlert size={24} aria-hidden="true" />
         <h2>{text('还没有任务', 'No tasks yet')}</h2>
         <p>{text('从新建任务页导入一个视频后，处理进度会显示在这里。', 'Import a video from New task and its processing progress will appear here.')}</p>
       </div>
@@ -148,9 +153,10 @@ export function RunPage() {
   }
 
   const taskAction = () => {
+    if (runControlBusy) return
     if (task.status === 'running' && task.realBackend) refreshTasks()
-    else if (task.status === 'running') pauseTask(task.id)
-    else if (task.status === 'paused') resumeTask(task.id)
+    else if (task.status === 'running') track('run:pause', () => pauseTask(task.id))
+    else if (task.status === 'paused') track('run:resume', () => resumeTask(task.id))
     else if (task.status === 'completed') selectTask(task.id, 'reader')
   }
 
@@ -199,7 +205,7 @@ export function RunPage() {
                 {task.processingScope === 'audio_only' ? text('仅音频', 'Audio only') : text('完整音画', 'Audio + video')}
               </span>
             </div>
-            <h2>{task.source.title}</h2>
+            <h2 title={task.source.title}>{task.source.title}</h2>
             <p>
               {task.source.quality} · {task.source.audio} · {task.source.authLabel}
             </p>
@@ -210,22 +216,43 @@ export function RunPage() {
             <strong>{Math.round(task.progress)}%</strong>
             {task.status === 'running' && <> · {text('预计', 'ETA')} {formatTime(task.etaSeconds)}</>}
           </span>
-          <div className="progress-track" aria-label={text(`总体进度 ${Math.round(task.progress)}%`, `Overall progress ${Math.round(task.progress)}%`)}>
+          <div
+            className="progress-track"
+            role="progressbar"
+            aria-label={text(`总体进度 ${Math.round(task.progress)}%`, `Overall progress ${Math.round(task.progress)}%`)}
+            aria-valuenow={Math.round(task.progress)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
             <span style={{ transform: `scaleX(${Math.min(1, Math.max(0, task.progress / 100))})` }} />
           </div>
         </div>
         <div className="run-actions">
           {!['cancelled', 'failed'].includes(task.status) && (
-            <button className="button button-primary" type="button" onClick={taskAction}>
-              {task.status === 'running' &&
-                (task.realBackend ? (
-                  <RefreshCcw size={16} aria-hidden="true" />
-                ) : (
-                  <Pause size={16} aria-hidden="true" />
-                ))}
-              {task.status === 'paused' && <Play size={16} aria-hidden="true" />}
-              {task.status === 'completed' && <ExternalLink size={16} aria-hidden="true" />}
-              {task.status === 'running'
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={taskAction}
+              disabled={runControlBusy}
+              aria-busy={taskActionPending || undefined}
+            >
+              {taskActionPending ? (
+                <LoaderCircle className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <>
+                  {task.status === 'running' &&
+                    (task.realBackend ? (
+                      <RefreshCcw size={16} aria-hidden="true" />
+                    ) : (
+                      <Pause size={16} aria-hidden="true" />
+                    ))}
+                  {task.status === 'paused' && <Play size={16} aria-hidden="true" />}
+                  {task.status === 'completed' && <ExternalLink size={16} aria-hidden="true" />}
+                </>
+              )}
+              {taskActionPending
+                ? text('正在执行…', 'Working…')
+                : task.status === 'running'
                 ? task.realBackend
                   ? text('刷新状态', 'Refresh status')
                   : text('暂停', 'Pause')
@@ -238,10 +265,16 @@ export function RunPage() {
             <button
               className="button button-quiet"
               type="button"
-              onClick={() => cancelTask(task.id)}
+              onClick={() => track('run:cancel', () => cancelTask(task.id))}
+              disabled={runControlBusy}
+              aria-busy={cancelPending || undefined}
             >
-              <CircleStop size={16} aria-hidden="true" />
-              {text('取消', 'Cancel')}
+              {cancelPending ? (
+                <LoaderCircle className="spin" size={16} aria-hidden="true" />
+              ) : (
+                <CircleStop size={16} aria-hidden="true" />
+              )}
+              {cancelPending ? text('正在取消…', 'Cancelling…') : text('取消', 'Cancel')}
             </button>
           )}
         </div>
@@ -249,9 +282,10 @@ export function RunPage() {
 
       <RunDiagnosticsPanel
         task={task}
-        onRetry={() => restartTask(task.id)}
+        onRetry={() => track('run:restart', () => restartTask(task.id))}
         onCreateNew={() => navigate('create')}
         onDownloadArtifact={artifact => downloadRunArtifact(task.id, artifact)}
+        retryPending={restartPending}
       />
 
       <ProcessingFlowPanel

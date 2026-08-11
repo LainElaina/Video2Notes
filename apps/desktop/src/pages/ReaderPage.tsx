@@ -179,7 +179,6 @@ export function ReaderPage() {
           width={640}
           height={640}
         />
-        <FileText size={26} aria-hidden="true" />
         <h2>{text('还没有可阅读的笔记', 'No readable notes yet')}</h2>
         <p>{text('任务完成并通过验证后，Markdown 和证据会出现在这里。', 'Markdown and supporting evidence appear here after a task completes and passes verification.')}</p>
       </div>
@@ -538,6 +537,8 @@ export function ReaderPage() {
                 <button
                   type="button"
                   role="tab"
+                  id={`evidence-tab-${value}`}
+                  aria-controls="evidence-list-panel"
                   aria-selected={evidenceFilter === value}
                   key={value}
                   onClick={() => setEvidenceFilter(value)}
@@ -569,7 +570,12 @@ export function ReaderPage() {
                 </dl>
               </div>
             )}
-            <div className="evidence-list">
+            <div
+              className="evidence-list"
+              role="tabpanel"
+              id="evidence-list-panel"
+              aria-labelledby={`evidence-tab-${evidenceFilter}`}
+            >
               {evidenceList.slice(0, 8).map(item => (
                 <button
                   type="button"
