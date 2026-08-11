@@ -211,13 +211,19 @@ export function CreatePage() {
             value={draft.input}
             onChange={event => setDraftInput(event.target.value)}
             onKeyDown={event => {
-              if (event.key === 'Enter') probeSource()
+              if (event.key === 'Enter' && draft.status !== 'probing') probeSource()
             }}
             placeholder={text('粘贴 Bilibili、YouTube 或 X 链接', 'Paste a Bilibili, YouTube, or X link')}
           />
           <span>{text('也可以把视频直接拖到此区域', 'You can also drag a video directly into this area')}</span>
         </div>
-        <button className="button button-primary" type="button" onClick={probeSource}>
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={probeSource}
+          disabled={draft.status === 'probing'}
+          aria-busy={draft.status === 'probing' || undefined}
+        >
           {draft.status === 'probing' ? (
             <RefreshCw className="spin" size={16} aria-hidden="true" />
           ) : (

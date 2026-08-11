@@ -99,6 +99,23 @@ const dynamicEnglishMessages: Array<[RegExp, (match: RegExpMatchArray) => string
 const failureWords = /失败|错误|无法|不能|不支持|缺少|未连接|未找到|不存在|不能为空|不兼容|未完成|未提交/u
 const progressWords = /正在|等待|开始|请求|检查|验证|扫描|读取|创建/u
 const successWords = /成功|已完成|已保存|已同步|已连接|已绑定|已取消|已导出|已删除|已登记|已解除|已更新/u
+const englishFailureWords = /failed|error|invalid|unavailable|timeout|not found|could not|cannot|unable|denied/i
+
+export type UserMessageTone = 'error' | 'progress' | 'success' | 'neutral'
+
+/**
+ * Recovers the severity of a store notice from the same word lists that drive
+ * localization fallback. The store keeps notices as plain strings, so this
+ * heuristic is the only severity signal available to the shell (for example
+ * to decide whether a notice may auto-dismiss).
+ */
+export function userMessageTone(message: string): UserMessageTone {
+  if (!message) return 'neutral'
+  if (failureWords.test(message) || englishFailureWords.test(message)) return 'error'
+  if (successWords.test(message)) return 'success'
+  if (progressWords.test(message)) return 'progress'
+  return 'neutral'
+}
 
 export function localizeUserMessage(message: string, locale: Locale): string {
   if (!message) return message

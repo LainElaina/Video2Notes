@@ -184,10 +184,10 @@ interface StudioActions {
   selectLocalFile: (fileName: string, sizeBytes: number) => void
   createTask: () => void
   advanceTasks: () => void
-  pauseTask: (taskId: string) => void
-  resumeTask: (taskId: string) => void
-  cancelTask: (taskId: string) => void
-  restartTask: (taskId: string) => void
+  pauseTask: (taskId: string) => Promise<void>
+  resumeTask: (taskId: string) => Promise<void>
+  cancelTask: (taskId: string) => Promise<void>
+  restartTask: (taskId: string) => Promise<void>
   refreshOperations: (taskId: string) => void
   runVisionRework: (
     taskId: string,
@@ -198,7 +198,7 @@ interface StudioActions {
       intervalSeconds?: number
       runOcr: boolean
     },
-  ) => void
+  ) => Promise<void>
   runAsrRework: (
     taskId: string,
     input: {
@@ -208,7 +208,7 @@ interface StudioActions {
       }
       languageHints: string[]
     },
-  ) => void
+  ) => Promise<void>
   correctEvidence: (
     taskId: string,
     input: {
@@ -216,7 +216,7 @@ interface StudioActions {
       newText: string
       reason?: string
     },
-  ) => void
+  ) => Promise<void>
   refreshReportRevisions: (taskId: string) => Promise<void>
   generateReportRevision: (
     taskId: string,
@@ -240,7 +240,7 @@ interface StudioActions {
       startUs?: number
       endUs?: number
     },
-  ) => void
+  ) => Promise<void>
   addFileMaterial: (
     taskId: string,
     file: File,
@@ -249,8 +249,8 @@ interface StudioActions {
       startUs?: number
       endUs?: number
     },
-  ) => void
-  deleteMaterial: (taskId: string, materialId: string) => void
+  ) => Promise<void>
+  deleteMaterial: (taskId: string, materialId: string) => Promise<void>
   setCurrentTime: (seconds: number) => void
   selectEvidence: (evidenceId: string, timeSeconds?: number) => void
   selectProvider: (providerId: string) => void
@@ -264,8 +264,8 @@ interface StudioActions {
     dependencyId: string,
     selection: 'file' | 'directory',
     knownPath?: string,
-  ) => void
-  unbindLocalToolPath: (dependencyId: string) => void
+  ) => Promise<void>
+  unbindLocalToolPath: (dependencyId: string) => Promise<void>
   installRuntimePackage: (
     packageId: string,
     version?: string,
@@ -277,13 +277,13 @@ interface StudioActions {
     requirementId: string,
     instanceId: string,
     capabilityId?: string,
-  ) => void
-  unbindRuntimeRequirement: (requirementId: string) => void
+  ) => Promise<void>
+  unbindRuntimeRequirement: (requirementId: string) => Promise<void>
   removeRuntimePackage: (instanceId: string) => void
   forgetRuntimePackage: (instanceId: string) => void
   installPreflightRequirements: () => void
   dismissJobPreflight: () => void
-  savePerformance: (settings: PerformanceSettings) => void
+  savePerformance: (settings: PerformanceSettings) => Promise<void>
   saveProvider: (input: {
     id: string
     name: string
@@ -296,7 +296,7 @@ interface StudioActions {
     timeoutSeconds: number
     protocolOptions: Record<string, unknown>
     credential?: string
-  }) => void
+  }) => Promise<void>
   discoverProviderModels: (providerId: string) => void
   createModel: (input: {
     providerId: string
@@ -307,9 +307,9 @@ interface StudioActions {
     locality: 'local' | 'cloud'
   }) => void
   testProvider: (providerId: string) => void
-  saveProviderSecret: (providerId: string, secret: string) => void
+  saveProviderSecret: (providerId: string, secret: string) => Promise<void>
   deleteProviderSecret: (providerId: string) => void
-  bindRole: (roleId: string, modelId: string) => void
+  bindRole: (roleId: string, modelId: string) => Promise<void>
   downloadRunArtifact: (taskId: string, artifact: StageOutputArtifact) => void
   downloadArtifact: (taskId: string, kind: 'markdown' | 'html' | 'pdf') => void
   clearNotice: () => void
@@ -3669,7 +3669,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     }))
   },
 
-  pauseTask: taskId => {
+  pauseTask: async taskId => {
     if (get().backend.mode === 'real') {
       set({ notice: '真实任务当前支持协作取消与阶段恢复，不提供伪暂停。' })
       return
@@ -3681,7 +3681,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       notice: '演示任务已暂停。',
     }))
   },
-  resumeTask: taskId => {
+  resumeTask: async taskId => {
     if (get().backend.mode === 'real') {
       set({ notice: '请从任务 artifact 的最近成功阶段恢复；不会在 UI 中伪造继续状态。' })
       return
@@ -3693,7 +3693,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       notice: '演示任务已继续。',
     }))
   },
-  cancelTask: taskId => {
+  cancelTask: async taskId => {
     if (get().backend.mode !== 'real' || !api) {
       set(state => ({
         tasks: state.tasks.map(task =>
@@ -3715,7 +3715,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       return
     }
     set({ notice: '正在请求协作取消；当前媒体操作安全退出后会确认状态。' })
-    void api
+    await api
       .cancelJob(taskId)
       .then(snapshot =>
         set(state => ({
@@ -3732,7 +3732,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       )
       .catch(error => set({ notice: errorMessage(error) }))
   },
-  restartTask: taskId => {
+  restartTask: async taskId => {
     if (get().backend.mode !== 'real' || !api) {
       set(state => ({
         tasks: state.tasks.map(task =>
@@ -3765,7 +3765,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       notice:
         '正在按原配置创建新的可追溯任务；当前后端不支持在原任务内从失败阶段续跑。',
     })
-    void api
+    await api
       .submitJob(previous)
       .then(response => {
         const source = get().tasks.find(task => task.id === taskId)?.source
@@ -3838,7 +3838,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
     )
   },
 
-  runVisionRework: (taskId, input) => {
+  runVisionRework: async (taskId, input) => {
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要执行视觉返工的任务。' })
@@ -3921,7 +3921,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       sampling,
       run_ocr: input.runOcr,
     }
-    void executeBackendRework(client, taskId, request)
+    await executeBackendRework(client, taskId, request)
       .then(result =>
         set(state => ({
           tasks: state.tasks.map(item =>
@@ -3933,7 +3933,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .catch(error => set({ notice: reworkErrorMessage(error) }))
   },
 
-  runAsrRework: (taskId, input) => {
+  runAsrRework: async (taskId, input) => {
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要执行语音返工的任务。' })
@@ -3992,7 +3992,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       range: { start_us: range.startUs, end_us: range.endUs },
       language_hints: languageHints,
     }
-    void executeBackendRework(client, taskId, request)
+    await executeBackendRework(client, taskId, request)
       .then(result =>
         set(state => ({
           tasks: state.tasks.map(item =>
@@ -4004,7 +4004,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .catch(error => set({ notice: reworkErrorMessage(error) }))
   },
 
-  correctEvidence: (taskId, input) => {
+  correctEvidence: async (taskId, input) => {
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要修正证据的任务。' })
@@ -4103,7 +4103,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       new_text: newText,
       ...(reason ? { reason } : {}),
     }
-    void executeBackendRework(client, taskId, request)
+    await executeBackendRework(client, taskId, request)
       .then(result =>
         set(state => ({
           tasks: state.tasks.map(item =>
@@ -4304,7 +4304,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .catch(error => set({ notice: errorMessage(error) }))
   },
 
-  addTextMaterial: (taskId, input) => {
+  addTextMaterial: async (taskId, input) => {
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要添加材料的任务。' })
@@ -4355,7 +4355,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set({ notice: '本地后端尚未连接，无法保存补充文字。' })
       return
     }
-    void api
+    await api
       .addTextMaterial(taskId, {
         title,
         content,
@@ -4382,7 +4382,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .catch(error => set({ notice: errorMessage(error) }))
   },
 
-  addFileMaterial: (taskId, file, options = {}) => {
+  addFileMaterial: async (taskId, file, options = {}) => {
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要添加材料的任务。' })
@@ -4432,7 +4432,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set({ notice: '本地后端尚未连接，无法上传补充图片。' })
       return
     }
-    void api
+    await api
       .addFileMaterial(taskId, file, {
         ...(options.title !== undefined ? { title: options.title.trim() } : {}),
         ...(options.startUs !== undefined ? { start_us: options.startUs } : {}),
@@ -4458,7 +4458,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       .catch(error => set({ notice: errorMessage(error) }))
   },
 
-  deleteMaterial: (taskId, materialId) => {
+  deleteMaterial: async (taskId, materialId) => {
     const task = get().tasks.find(item => item.id === taskId)
     if (!task) {
       set({ notice: '没有找到要删除材料的任务。' })
@@ -4486,7 +4486,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set({ notice: '本地后端尚未连接，无法删除补充材料。' })
       return
     }
-    void api
+    await api
       .deleteMaterial(taskId, materialId)
       .then(() =>
         set(state => ({
@@ -4894,7 +4894,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         })
       })
   },
-  bindLocalToolPath: (dependencyId, selection, knownPath) => {
+  bindLocalToolPath: async (dependencyId, selection, knownPath) => {
     if (!api || get().backend.mode !== 'real') {
       set({ notice: '连接真实本机后端后才能绑定本机依赖路径。' })
       return
@@ -4904,7 +4904,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       : selection === 'file'
         ? pickLocalToolFileWithNativeDialog()
         : pickLocalToolDirectoryWithNativeDialog()
-    void pick
+    await pick
       .then(path => {
         if (!path) return
         const alreadyBound = Boolean(
@@ -4936,12 +4936,12 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         })
       })
   },
-  unbindLocalToolPath: dependencyId => {
+  unbindLocalToolPath: async dependencyId => {
     if (!api || get().backend.mode !== 'real') {
       set({ notice: '连接真实本机后端后才能解除本机依赖绑定。' })
       return
     }
-    void api
+    await api
       .unbindLocalTool(dependencyId)
       .then(() => {
         set({
@@ -5025,12 +5025,12 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       })
       .catch(error => set({ notice: errorMessage(error) }))
   },
-  bindRuntimeRequirement: (requirementId, instanceId, capabilityId) => {
+  bindRuntimeRequirement: async (requirementId, instanceId, capabilityId) => {
     if (!api || get().backend.mode !== 'real') {
       set({ notice: '演示模式不会修改运行时绑定。' })
       return
     }
-    void api
+    await api
       .bindRuntimePackage({
         requirement_id: requirementId,
         instance_id: instanceId,
@@ -5046,12 +5046,12 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       })
       .catch(error => set({ notice: errorMessage(error) }))
   },
-  unbindRuntimeRequirement: requirementId => {
+  unbindRuntimeRequirement: async requirementId => {
     if (!api || get().backend.mode !== 'real') {
       set({ notice: '演示模式不会修改运行时绑定。' })
       return
     }
-    void api
+    await api
       .unbindRuntimeRequirement(requirementId)
       .then(() => {
         set({
@@ -5196,7 +5196,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         : {}),
     })
   },
-  savePerformance: settings => {
+  savePerformance: async settings => {
     const normalized: PerformanceSettings = {
       ...settings,
       overrides: settings.experienceMode === 'guided' ? {} : { ...settings.overrides },
@@ -5212,7 +5212,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       return
     }
     set({ notice: '正在保存性能与资源配置…' })
-    void api
+    await api
       .savePerformance(serializePerformance(normalized))
       .then(async saved => {
         const system = await api!.system()
@@ -5226,7 +5226,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       })
       .catch(error => set({ notice: errorMessage(error) }))
   },
-  saveProvider: input => {
+  saveProvider: async input => {
     if (!api || !registry || get().backend.mode !== 'real') {
       set({ notice: '只有已连接的真实本地后端会持久化 Provider。' })
       return
@@ -5266,7 +5266,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         },
       },
     }
-    void api
+    await api
       .saveProviders(next)
       .then(async saved => {
         let persistedRegistry = saved
@@ -5444,7 +5444,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         })),
       )
   },
-  saveProviderSecret: (providerId, secret) => {
+  saveProviderSecret: async (providerId, secret) => {
     if (!api || get().backend.mode !== 'real') {
       set({ notice: '演示模式不会保存密钥。' })
       return
@@ -5453,7 +5453,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       set({ notice: '密钥不能为空。' })
       return
     }
-    void api
+    await api
       .saveProviderSecret(providerId, secret)
       .then(async () => {
         registry = await api!.providers()
@@ -5486,7 +5486,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       })
       .catch(error => set({ notice: errorMessage(error) }))
   },
-  bindRole: (roleId, modelId) => {
+  bindRole: async (roleId, modelId) => {
     const role = get().roles.find(item => item.id === roleId)
     if (!role) return
     if (!modelId) {
@@ -5501,7 +5501,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
       }
       const nextRoles = { ...registry.roles }
       delete nextRoles[roleId]
-      void api
+      await api
         .saveProviders({ ...registry, roles: nextRoles })
         .then(saved => {
           registry = saved
@@ -5547,7 +5547,7 @@ export const useStudioStore = create<StudioStore>()((set, get) => ({
         },
       },
     }
-    void api
+    await api
       .saveProviders(next)
       .then(saved => {
         registry = saved

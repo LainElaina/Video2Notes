@@ -537,6 +537,8 @@ export function ReaderPage() {
                 <button
                   type="button"
                   role="tab"
+                  id={`evidence-tab-${value}`}
+                  aria-controls="evidence-list-panel"
                   aria-selected={evidenceFilter === value}
                   key={value}
                   onClick={() => setEvidenceFilter(value)}
@@ -568,7 +570,12 @@ export function ReaderPage() {
                 </dl>
               </div>
             )}
-            <div className="evidence-list">
+            <div
+              className="evidence-list"
+              role="tabpanel"
+              id="evidence-list-panel"
+              aria-labelledby={`evidence-tab-${evidenceFilter}`}
+            >
               {evidenceList.slice(0, 8).map(item => (
                 <button
                   type="button"

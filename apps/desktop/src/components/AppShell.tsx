@@ -21,7 +21,7 @@ import { preferredScrollBehavior } from '../motion'
 import { useStudioStore } from '../store'
 import { useUiPreferences, type ThemePreset, type Locale } from '../stores/uiPreferences'
 import { useI18n } from '../i18n'
-import { localizeUserMessage } from '../userMessages'
+import { localizeUserMessage, userMessageTone } from '../userMessages'
 import { MotionPresence } from './MotionPresence'
 
 const navItems: Array<{
@@ -441,9 +441,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   const professionalReader = view === 'reader' && workspaceMode === 'professional'
   const contextShouldShow = !contextCollapsed && !professionalReader
   const [narrowLayout, setNarrowLayout] = useState(false)
+  const [noticeInteracting, setNoticeInteracting] = useState(false)
   const pageSurfaceRef = useRef<HTMLDivElement>(null)
   const contextExpandRef = useRef<HTMLButtonElement>(null)
   const contextOverlayOpen = narrowLayout && contextShouldShow
+  const noticeTone = notice ? userMessageTone(notice) : 'neutral'
+
+  // Non-error notices dismiss themselves; the countdown pauses while the bar
+  // is hovered or focused and restarts when a new notice replaces the old one.
+  useEffect(() => {
+    if (!notice || noticeTone === 'error' || noticeInteracting) return
+    const timer = window.setTimeout(clearNotice, 4_500)
+    return () => window.clearTimeout(timer)
+  }, [clearNotice, notice, noticeInteracting, noticeTone])
 
   // Below 1120px the context panel leaves the grid and becomes a slide-over.
   // The slide-over starts dismissed so it never blocks the workspace on load;
@@ -575,7 +585,18 @@ export function AppShell({ children }: { children: ReactNode }) {
           className="motion-presence-notice"
           exitMs={120}
         >
-          <div className="notice-bar" role="status">
+          <div
+            className="notice-bar"
+            role="status"
+            onMouseEnter={() => setNoticeInteracting(true)}
+            onMouseLeave={() => setNoticeInteracting(false)}
+            onFocus={() => setNoticeInteracting(true)}
+            onBlur={event => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setNoticeInteracting(false)
+              }
+            }}
+          >
             <CircleDot size={14} aria-hidden="true" />
             <span>{localizedNotice}</span>
             <button type="button" onClick={clearNotice} aria-label={t('nav.notice.close')}>

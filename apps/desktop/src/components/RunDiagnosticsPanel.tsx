@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   FileDown,
   FileWarning,
+  LoaderCircle,
   RotateCcw,
   RouteOff,
 } from 'lucide-react'
@@ -15,6 +16,7 @@ interface RunDiagnosticsPanelProps {
   onRetry: () => void
   onCreateNew: () => void
   onDownloadArtifact: (artifact: StageOutputArtifact) => void
+  retryPending?: boolean
 }
 
 const unique = (values: readonly string[]): string[] =>
@@ -36,6 +38,7 @@ export function RunDiagnosticsPanel({
   onRetry,
   onCreateNew,
   onDownloadArtifact,
+  retryPending = false,
 }: RunDiagnosticsPanelProps) {
   const { text } = useI18n()
   const terminal = task.status === 'failed' || task.status === 'cancelled'
@@ -224,11 +227,23 @@ export function RunDiagnosticsPanel({
             )}
           </div>
           {recovery.canRetry ? (
-            <button className="button button-primary" type="button" onClick={onRetry}>
-              <RotateCcw size={15} aria-hidden="true" />
-              {recovery.strategy === 'demo_restart'
-                ? text('重新开始演示', 'Restart demo')
-                : text('按原配置新建重试', 'Create retry with same settings')}
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={onRetry}
+              disabled={retryPending}
+              aria-busy={retryPending || undefined}
+            >
+              {retryPending ? (
+                <LoaderCircle className="spin" size={15} aria-hidden="true" />
+              ) : (
+                <RotateCcw size={15} aria-hidden="true" />
+              )}
+              {retryPending
+                ? text('正在重试…', 'Retrying…')
+                : recovery.strategy === 'demo_restart'
+                  ? text('重新开始演示', 'Restart demo')
+                  : text('按原配置新建重试', 'Create retry with same settings')}
             </button>
           ) : (
             <button className="button button-secondary" type="button" onClick={onCreateNew}>

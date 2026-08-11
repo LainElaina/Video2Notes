@@ -23,6 +23,7 @@ import type {
 } from '../domain'
 import { useI18n } from '../i18n'
 import { useStudioStore } from '../store'
+import { usePendingActions } from './usePendingActions'
 
 const sourceLabels: Record<LocalToolSource, { zh: string; en: string }> = {
   binding: { zh: '手动绑定', en: 'Manual binding' },
@@ -51,6 +52,8 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
   const unbindPath = useStudioStore(state => state.unbindLocalToolPath)
   const { locale, t, text } = useI18n()
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const { isPending, track } = usePendingActions()
+  const mutationPending = isPending(`local-tool:${tool.dependencyId}`)
   const localized = <T extends { zh: string; en: string }>(copy: T) =>
     locale === 'zh-CN' ? copy.zh : copy.en
   const displayName = locale === 'zh-CN' ? tool.displayNameZh : tool.displayName
@@ -69,7 +72,10 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
   }
 
   return (
-    <article className={`local-tool-card status-${tool.status} ${tool.bound ? 'is-bound' : ''}`}>
+    <article
+      className={`local-tool-card status-${tool.status} ${tool.bound ? 'is-bound' : ''}`}
+      aria-busy={mutationPending || undefined}
+    >
       <header>
         <span className="local-tool-icon">
           {tool.compatible ? <Check size={16} aria-hidden="true" /> : <TriangleAlert size={16} aria-hidden="true" />}
@@ -131,8 +137,12 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
               <button
                 type="button"
                 key={`${candidate.source}:${candidate.path}`}
-                disabled={!canMutate || !candidate.compatible}
-                onClick={() => bindPath(tool.dependencyId, choosePrimary, candidate.path)}
+                disabled={!canMutate || !candidate.compatible || mutationPending}
+                onClick={() =>
+                  track(`local-tool:${tool.dependencyId}`, () =>
+                    bindPath(tool.dependencyId, choosePrimary, candidate.path),
+                  )
+                }
                 title={candidate.path}
               >
                 <code className="truncate-start">{candidate.path}</code>
@@ -148,8 +158,12 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
           <button
             className="button button-secondary"
             type="button"
-            disabled={!canMutate}
-            onClick={() => bindPath(tool.dependencyId, choosePrimary, tool.path)}
+            disabled={!canMutate || mutationPending}
+            onClick={() =>
+              track(`local-tool:${tool.dependencyId}`, () =>
+                bindPath(tool.dependencyId, choosePrimary, tool.path),
+              )
+            }
           >
             <Link2 size={13} aria-hidden="true" />
             {text('固定使用此路径', 'Use this path')}
@@ -158,8 +172,12 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
         <button
           className="button button-secondary"
           type="button"
-          disabled={!canMutate}
-          onClick={() => bindPath(tool.dependencyId, 'file')}
+          disabled={!canMutate || mutationPending}
+          onClick={() =>
+            track(`local-tool:${tool.dependencyId}`, () =>
+              bindPath(tool.dependencyId, 'file'),
+            )
+          }
         >
           {tool.bound ? <Pencil size={13} aria-hidden="true" /> : <FileCog size={13} aria-hidden="true" />}
           {tool.bound ? t('runtime.changePath') : text('选择程序', 'Choose program')}
@@ -167,8 +185,12 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
         <button
           className="button button-secondary"
           type="button"
-          disabled={!canMutate}
-          onClick={() => bindPath(tool.dependencyId, 'directory')}
+          disabled={!canMutate || mutationPending}
+          onClick={() =>
+            track(`local-tool:${tool.dependencyId}`, () =>
+              bindPath(tool.dependencyId, 'directory'),
+            )
+          }
         >
           <FolderOpen size={13} aria-hidden="true" />
           {text('选择目录', 'Choose folder')}
@@ -177,8 +199,12 @@ function LocalToolCard({ tool, canMutate }: { tool: LocalToolDefinition; canMuta
           <button
             className="button button-quiet"
             type="button"
-            disabled={!canMutate}
-            onClick={() => unbindPath(tool.dependencyId)}
+            disabled={!canMutate || mutationPending}
+            onClick={() =>
+              track(`local-tool:${tool.dependencyId}`, () =>
+                unbindPath(tool.dependencyId),
+              )
+            }
             title={text('只解除登记，不删除原程序。', 'Remove only the binding; never delete the program.')}
           >
             <Unlink size={13} aria-hidden="true" />

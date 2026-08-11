@@ -151,7 +151,6 @@ export function ReportRevisionDrawer({
       <button
         type="button"
         className="workbench-scrim"
-        aria-label={text('关闭报告重生成面板', 'Close report regeneration panel')}
         aria-hidden="true"
         tabIndex={-1}
         onClick={onClose}

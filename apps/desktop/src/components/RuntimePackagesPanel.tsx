@@ -37,6 +37,7 @@ import { useI18n } from '../i18n'
 import { LocalDependenciesPanel } from './LocalDependenciesPanel'
 import { MotionPresence } from './MotionPresence'
 import { VisualAsset } from './VisualAsset'
+import { usePendingActions } from './usePendingActions'
 
 interface RuntimePackagesPanelProps {
   experienceMode: ExperienceMode
@@ -273,6 +274,7 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
   const unbind = useStudioStore(state => state.unbindRuntimeRequirement)
   const remove = useStudioStore(state => state.removeRuntimePackage)
   const forget = useStudioStore(state => state.forgetRuntimePackage)
+  const { isPending, track } = usePendingActions()
   const sourceLabel = (source: RuntimePackageSource) =>
     locale === 'zh-CN' ? sourceCopy[source].label : sourceCopy[source].labelEn
   const sourceDetail = (source: RuntimePackageSource) =>
@@ -675,8 +677,9 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
                       instance.ready &&
                       instance.capabilities.includes(requirement.capabilityId),
                   )
+                  const bindingPending = isPending(`runtime:bind:${requirement.id}`)
                   return (
-                    <div className="runtime-binding-row" key={requirement.id}>
+                    <div className="runtime-binding-row" key={requirement.id} aria-busy={bindingPending || undefined}>
                       <span className="runtime-binding-kind">
                         {requirement.essential ? <ShieldCheck size={15} aria-hidden="true" /> : <CircleDot size={15} aria-hidden="true" />}
                       </span>
@@ -685,14 +688,14 @@ export function RuntimePackagesPanel({ experienceMode }: RuntimePackagesPanelPro
                         <span className="sr-only">{text(`为${requirement.label}选择运行时`, `Choose a runtime for ${requirement.labelEn}`)}</span>
                         <select
                           value={binding?.instanceId ?? ''}
-                          disabled={!canMutate}
+                          disabled={!canMutate || bindingPending}
                           onChange={event => {
                             const instanceId = event.target.value
-                            if (instanceId) {
-                              bind(requirement.id, instanceId, requirement.capabilityId)
-                            } else {
-                              unbind(requirement.id)
-                            }
+                            track(`runtime:bind:${requirement.id}`, () =>
+                              instanceId
+                                ? bind(requirement.id, instanceId, requirement.capabilityId)
+                                : unbind(requirement.id),
+                            )
                           }}
                         >
                           <option value="">{text('未绑定', 'Not bound')}</option>
