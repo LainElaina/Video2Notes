@@ -205,7 +205,7 @@ export function RunPage() {
                 {task.processingScope === 'audio_only' ? text('仅音频', 'Audio only') : text('完整音画', 'Audio + video')}
               </span>
             </div>
-            <h2>{task.source.title}</h2>
+            <h2 title={task.source.title}>{task.source.title}</h2>
             <p>
               {task.source.quality} · {task.source.audio} · {task.source.authLabel}
             </p>

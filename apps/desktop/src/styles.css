@@ -1772,6 +1772,12 @@ button:disabled {
   gap: 12px;
 }
 
+/* The text wrapper must be allowed to shrink, otherwise the nowrap h2
+   keeps its content width and overlaps the progress column when narrow. */
+.run-summary-title > div {
+  min-width: 0;
+}
+
 .run-summary-kicker {
   display: flex;
   align-items: center;
